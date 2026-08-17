@@ -1,0 +1,9 @@
+venv/
+__pycache__/
+*.pyc
+
+# WhatsApp session data — this is equivalent to a login token for the linked
+# WhatsApp account. Never commit it.
+Service/session/
+
+.env

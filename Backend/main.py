@@ -29,6 +29,8 @@ if sys.platform == "win32":
     sys.stderr.reconfigure(encoding="utf-8", errors="replace")
 
 from Controller.area_filter_controller import router as area_filter_router
+from Controller.display_settings_controller import router as display_settings_router
+from Controller.property_controller import router as property_router
 from Controller.whatsapp_controller import router as whatsapp_router
 from Middleware.logging_config import configure_logging
 from Middleware import step_logger
@@ -47,6 +49,8 @@ async def lifespan(_app: FastAPI):
 app = FastAPI(title="Real Estate WhatsApp Ingestion API", lifespan=lifespan)
 app.include_router(whatsapp_router, prefix="/api")
 app.include_router(area_filter_router, prefix="/api")
+app.include_router(display_settings_router, prefix="/api")
+app.include_router(property_router, prefix="/api")
 
 
 @app.get("/")

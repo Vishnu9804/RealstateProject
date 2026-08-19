@@ -57,7 +57,7 @@ def print_incoming_message(message: WhatsAppChatMessage) -> None:
     print(f"Phone     : {message.sender_phone}", flush=True)
     print(f"Username  : {message.sender_name}", flush=True)
     print(f"Saved As  : {message.sender_saved_name}", flush=True)
-    print(f"Time      : {message.received_at.strftime('%Y-%m-%d %H:%M:%S')}", flush=True)
+    print(f"Time      : {message.received_at.strftime('%Y-%m-%d %H:%M:%S')} UTC", flush=True)
     print("-" * 60, flush=True)
     print(message.text, flush=True)
     print("=" * 60 + "\n", flush=True)

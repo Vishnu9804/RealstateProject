@@ -19,6 +19,9 @@ class Settings(BaseSettings):
 
     gemini_api_key: str = ""
     database_url: str = ""
+    # Has a working default so `.env` only needs the two secrets above —
+    # override with a GEMINI_MODEL env var if a different model is wanted.
+    gemini_model: str = "gemini-2.5-flash"
 
 
 @lru_cache

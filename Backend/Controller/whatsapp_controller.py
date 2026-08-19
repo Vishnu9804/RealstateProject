@@ -72,11 +72,3 @@ def get_qualified_messages(limit: int = 100) -> list[WhatsAppChatMessage]:
     """Messages that passed the area-keyword filter — see
     /api/area-filter/keywords to configure which areas qualify a message."""
     return whatsapp_service.get_qualified_messages(limit=limit)
-
-
-@router.get("/batches/pending-llm", response_model=list[list[WhatsAppChatMessage]])
-def get_pending_llm_batches() -> list[list[WhatsAppChatMessage]]:
-    """Batches the buffering stage has flushed (10 messages gathered, or 1
-    hour elapsed) and that are ready for LLM structuring. Diagnostic for
-    now — the LLM step (next) will consume these directly instead."""
-    return whatsapp_service.get_pending_llm_batches()

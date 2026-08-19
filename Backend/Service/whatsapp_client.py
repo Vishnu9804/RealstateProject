@@ -20,7 +20,7 @@ import io
 import os
 import threading
 import time
-from datetime import datetime
+from datetime import datetime, timezone
 from typing import Callable, Dict, List, Optional, Set
 
 import segno
@@ -287,17 +287,22 @@ class WhatsAppClient:
     @staticmethod
     def _safe_timestamp(raw_timestamp: int) -> datetime:
         """Converts Info.Timestamp (documented as Unix milliseconds) to a
-        datetime. Never raises: a bad/unexpected value must never stop a
-        captured message from being shown, so this falls back to "now"
-        instead of losing the message."""
+        UTC-aware datetime. Always UTC, never naive/local-clock: this value
+        later gets converted to IST for display (Service/
+        timestamp_formatting.py), which only works correctly if it's
+        unambiguous about which timezone it started in — naive local time
+        would silently be wrong on any server not already running in IST.
+        Never raises: a bad/unexpected value must never stop a captured
+        message from being shown, so this falls back to "now" instead of
+        losing the message."""
         if raw_timestamp:
             try:
-                return datetime.fromtimestamp(raw_timestamp / 1000)
+                return datetime.fromtimestamp(raw_timestamp / 1000, tz=timezone.utc)
             except (OSError, OverflowError, ValueError):
                 step_logger.warn(
                     f"Could not parse message timestamp ({raw_timestamp}); using current time instead."
                 )
-        return datetime.now()
+        return datetime.now(timezone.utc)
 
     # --- group selection ---------------------------------------------------
 

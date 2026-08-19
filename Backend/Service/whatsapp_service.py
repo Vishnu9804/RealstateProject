@@ -18,9 +18,11 @@ from Model.personal_chat import WhatsAppPersonalChat
 from Model.whatsapp_message import WhatsAppChatMessage
 from Model.whatsapp_status import WhatsAppStatus
 from Service import area_filter_service
+from Service.message_buffer_service import MessageBufferService
 from Service.whatsapp_client import WhatsAppClient
 
 _MAX_STORED_MESSAGES = 500
+_MAX_STORED_BATCHES = 50
 
 _status: WhatsAppStatus = WhatsAppStatus.STARTING
 _joined_groups: List[WhatsAppGroup] = []
@@ -30,12 +32,20 @@ _captured_messages: List[WhatsAppChatMessage] = []
 _qualified_messages: List[WhatsAppChatMessage] = []
 _latest_qr_png: Optional[bytes] = None
 _client: Optional[WhatsAppClient] = None
+_message_buffer: Optional[MessageBufferService] = None
+
+# Temporary holding area for flushed batches until the LLM structuring
+# stage (next step) exists to actually consume them. Lets this step be
+# verified end-to-end on its own; the LLM step will replace this with a
+# real call instead of just storing the batch.
+_pending_llm_batches: List[List[WhatsAppChatMessage]] = []
 
 
 def start_agent_in_background() -> None:
     """Starts the WhatsApp client on a background thread so it never blocks
     the FastAPI/Uvicorn event loop. Runs for the lifetime of the process."""
-    global _client
+    global _client, _message_buffer
+    _message_buffer = MessageBufferService(on_batch_ready=_handle_batch_ready)
     _client = WhatsAppClient(
         on_groups_ready=_handle_groups_ready,
         on_group_selection_made=_handle_group_selection_made,
@@ -68,6 +78,8 @@ def get_status() -> dict:
         "monitored_personal_chat_count": len(_monitored_personal_chats),
         "captured_message_count": len(_captured_messages),
         "qualified_message_count": len(_qualified_messages),
+        "buffered_message_count": _message_buffer.pending_count() if _message_buffer else 0,
+        "pending_llm_batch_count": len(_pending_llm_batches),
     }
 
 
@@ -92,6 +104,14 @@ def get_qualified_messages(limit: int = 100) -> List[WhatsAppChatMessage]:
     area_filter_service.py) — the subset that actually feeds the rest of
     the property pipeline (buffering -> LLM -> ...)."""
     return list(_qualified_messages[-limit:])
+
+
+def get_pending_llm_batches() -> List[List[WhatsAppChatMessage]]:
+    """Batches flushed by the buffering stage, in the exact groupings the
+    LLM structuring stage (next step) will process one prompt per batch.
+    Temporary/diagnostic — the LLM step replaces this list with an actual
+    call to Gemini."""
+    return list(_pending_llm_batches)
 
 
 def get_qr_code() -> Optional[bytes]:
@@ -148,6 +168,15 @@ def _handle_message(message: WhatsAppChatMessage) -> None:
         if len(_qualified_messages) > _MAX_STORED_MESSAGES:
             del _qualified_messages[: len(_qualified_messages) - _MAX_STORED_MESSAGES]
         step_logger.success("-> Qualified (matched an area keyword): forwarded to the property pipeline")
+        if _message_buffer is not None:
+            _message_buffer.add_message(message)
     else:
         step_logger.info("-> Filtered out: no configured area keyword mentioned")
+
+
+def _handle_batch_ready(batch: List[WhatsAppChatMessage]) -> None:
+    _pending_llm_batches.append(batch)
+    if len(_pending_llm_batches) > _MAX_STORED_BATCHES:
+        del _pending_llm_batches[: len(_pending_llm_batches) - _MAX_STORED_BATCHES]
+    step_logger.step(f"Buffer flushed: batch of {len(batch)} qualified message(s) ready for LLM structuring")
 

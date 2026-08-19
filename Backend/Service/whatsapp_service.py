@@ -17,6 +17,7 @@ from Model.group import WhatsAppGroup
 from Model.personal_chat import WhatsAppPersonalChat
 from Model.whatsapp_message import WhatsAppChatMessage
 from Model.whatsapp_status import WhatsAppStatus
+from Service import area_filter_service
 from Service.whatsapp_client import WhatsAppClient
 
 _MAX_STORED_MESSAGES = 500
@@ -26,6 +27,7 @@ _joined_groups: List[WhatsAppGroup] = []
 _monitored_groups: List[WhatsAppGroup] = []
 _monitored_personal_chats: List[WhatsAppPersonalChat] = []
 _captured_messages: List[WhatsAppChatMessage] = []
+_qualified_messages: List[WhatsAppChatMessage] = []
 _latest_qr_png: Optional[bytes] = None
 _client: Optional[WhatsAppClient] = None
 
@@ -65,6 +67,7 @@ def get_status() -> dict:
         "monitored_group_count": len(_monitored_groups),
         "monitored_personal_chat_count": len(_monitored_personal_chats),
         "captured_message_count": len(_captured_messages),
+        "qualified_message_count": len(_qualified_messages),
     }
 
 
@@ -82,6 +85,13 @@ def get_monitored_personal_chats() -> List[WhatsAppPersonalChat]:
 
 def get_messages(limit: int = 100) -> List[WhatsAppChatMessage]:
     return list(_captured_messages[-limit:])
+
+
+def get_qualified_messages(limit: int = 100) -> List[WhatsAppChatMessage]:
+    """Messages that passed the area-keyword filter (Service/
+    area_filter_service.py) — the subset that actually feeds the rest of
+    the property pipeline (buffering -> LLM -> ...)."""
+    return list(_qualified_messages[-limit:])
 
 
 def get_qr_code() -> Optional[bytes]:
@@ -132,3 +142,12 @@ def _handle_message(message: WhatsAppChatMessage) -> None:
     if len(_captured_messages) > _MAX_STORED_MESSAGES:
         del _captured_messages[: len(_captured_messages) - _MAX_STORED_MESSAGES]
     step_logger.print_incoming_message(message)
+
+    if area_filter_service.is_qualified(message.text):
+        _qualified_messages.append(message)
+        if len(_qualified_messages) > _MAX_STORED_MESSAGES:
+            del _qualified_messages[: len(_qualified_messages) - _MAX_STORED_MESSAGES]
+        step_logger.success("-> Qualified (matched an area keyword): forwarded to the property pipeline")
+    else:
+        step_logger.info("-> Filtered out: no configured area keyword mentioned")
+

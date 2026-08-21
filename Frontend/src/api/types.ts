@@ -19,6 +19,30 @@ export interface WhatsAppStatusResponse {
   needs_review_property_count: number;
 }
 
+export interface WhatsAppGroup {
+  jid: string;
+  name: string;
+  member_count: number;
+}
+
+export interface WhatsAppPersonalChat {
+  jid: string;
+  phone_number: string;
+}
+
+export interface MonitoringSelectionResponse {
+  monitored_groups: WhatsAppGroup[];
+  monitored_personal_chats: WhatsAppPersonalChat[];
+}
+
+export interface AreaFilterSettings {
+  keywords: string[];
+}
+
+export interface DisplaySettings {
+  use_24_hour_format: boolean;
+}
+
 export interface PropertyRecord {
   source_message_id: string;
   property_type: string | null;

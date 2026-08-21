@@ -87,6 +87,12 @@ def _build_prompt(batch: List[WhatsAppChatMessage]) -> str:
         "For EACH message below, return exactly one JSON object, in the same order, "
         "with \"source_message_id\" matching the message's id exactly.",
         "",
+        "Keep society_name (a specific named building/project/society, e.g. \"Black "
+        "Residency\") and area_name (the general locality, e.g. \"Althan\") strictly "
+        "separate — do not put a locality in society_name or a building name in "
+        "area_name. Only fill carpet_area_sqft if an explicit square-footage number "
+        "is stated in the message; never estimate it from the BHK.",
+        "",
         "Never invent details that are not present in the message text. If a field "
         "is not mentioned, use null rather than guessing.",
         "",
@@ -153,8 +159,10 @@ def _merge_with_message_data(
                 source_message_id=message.message_id,
                 property_type=extraction.property_type,
                 bhk=extraction.bhk,
+                society_name=extraction.society_name,
                 area_name=extraction.area_name,
                 address=extraction.address,
+                carpet_area_sqft=extraction.carpet_area_sqft,
                 price_text=extraction.price_text,
                 price_amount_inr=extraction.price_amount_inr,
                 contact_name=extraction.contact_name,

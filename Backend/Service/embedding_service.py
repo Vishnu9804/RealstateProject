@@ -50,10 +50,18 @@ def build_embedding_text(prop: StructuredProperty) -> str:
     not the raw WhatsApp message. Broker chatter, greetings, and emojis in
     the raw text are noise for duplicate detection; embedding only the
     identifying fields, in a fixed order, keeps the comparison focused on
-    what actually makes two listings the same property."""
+    what actually makes two listings the same property.
+
+    This whole-property vector is used only for candidate RETRIEVAL (see
+    Service/property_vector_store.py) — narrowing down which existing
+    properties are worth a detailed look. The final duplicate/new decision
+    is made field-by-field instead (Service/duplicate_detection_service.py),
+    using the per-field vectors from FIELD_EMBEDDING_NAMES below, not this
+    combined one."""
     parts = [
         prop.property_type,
         prop.bhk,
+        prop.society_name,
         prop.area_name,
         prop.address,
         prop.price_text,
@@ -62,6 +70,12 @@ def build_embedding_text(prop: StructuredProperty) -> str:
         prop.description,
     ]
     return " | ".join(part for part in parts if part)
+
+
+# The semantic (free-text) fields the duplicate-detection stage scores
+# individually. Kept here, next to the model that produces their vectors,
+# rather than in duplicate_detection_service.py.
+FIELD_EMBEDDING_NAMES = ("society_name", "address", "area_name")
 
 
 def embed_text(text: str) -> List[float]:
@@ -75,3 +89,11 @@ def embed_text(text: str) -> List[float]:
 
 def embed_property(prop: StructuredProperty) -> List[float]:
     return embed_text(build_embedding_text(prop))
+
+
+def embed_property_fields(prop: StructuredProperty) -> dict:
+    """One embedding per semantic field (society_name/address/area_name),
+    computed once here and cached on EmbeddedProperty — so a later
+    field-level duplicate comparison never re-embeds the "existing" side of
+    the comparison, only ever the incoming property's fields."""
+    return {name: embed_text(value) for name in FIELD_EMBEDDING_NAMES if (value := getattr(prop, name))}

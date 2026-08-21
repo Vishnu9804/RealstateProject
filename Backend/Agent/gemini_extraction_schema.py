@@ -20,9 +20,23 @@ class GeminiPropertyExtraction(BaseModel):
         default=None, description='e.g. "Flat", "Row House", "Shop", "Office", "Land/Plot", "Bungalow", "Warehouse"'
     )
     bhk: Optional[str] = Field(default=None, description='Bedroom configuration as written, e.g. "2 BHK", "1 RK".')
-    area_name: Optional[str] = Field(default=None, description="The specific locality/area mentioned.")
+    society_name: Optional[str] = Field(
+        default=None,
+        description='The specific building/project/society/complex name, e.g. "Black Residency", "Sunrise '
+        'Heights" — NOT the general locality. Only set this if a specific named building/project is mentioned.',
+    )
+    area_name: Optional[str] = Field(
+        default=None, description='The general locality/area mentioned, e.g. "Althan" — not a building name.'
+    )
     address: Optional[str] = Field(
-        default=None, description="Any more specific address/landmark details beyond the area name."
+        default=None,
+        description="Any more specific address/landmark details beyond the area name and society name "
+        "(e.g. street, road, or landmark).",
+    )
+    carpet_area_sqft: Optional[float] = Field(
+        default=None,
+        description="The property's area in square feet as a plain number, only if explicitly stated "
+        '(e.g. "1200 sqft" -> 1200.0). Never guess or estimate from BHK.',
     )
     price_text: Optional[str] = Field(
         default=None, description='Price as written/normalized for readability, e.g. "45 Lakh", "1.2 Cr".'

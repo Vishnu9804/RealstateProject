@@ -30,6 +30,7 @@ if sys.platform == "win32":
 
 from Controller.area_filter_controller import router as area_filter_router
 from Controller.display_settings_controller import router as display_settings_router
+from Controller.duplicate_detection_controller import router as duplicate_detection_router
 from Controller.property_controller import router as property_router
 from Controller.whatsapp_controller import router as whatsapp_router
 from Middleware.logging_config import configure_logging
@@ -50,6 +51,7 @@ app = FastAPI(title="Real Estate WhatsApp Ingestion API", lifespan=lifespan)
 app.include_router(whatsapp_router, prefix="/api")
 app.include_router(area_filter_router, prefix="/api")
 app.include_router(display_settings_router, prefix="/api")
+app.include_router(duplicate_detection_router, prefix="/api")
 app.include_router(property_router, prefix="/api")
 
 

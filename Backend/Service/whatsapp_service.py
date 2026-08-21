@@ -73,6 +73,8 @@ def get_status() -> dict:
         "qualified_message_count": len(_qualified_messages),
         "buffered_message_count": _message_buffer.pending_count() if _message_buffer else 0,
         "structured_property_count": property_pipeline_service.get_property_count(),
+        "duplicate_property_count": property_pipeline_service.get_duplicate_count(),
+        "needs_review_property_count": property_pipeline_service.get_uncertain_count(),
     }
 
 

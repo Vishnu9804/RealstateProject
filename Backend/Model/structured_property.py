@@ -17,8 +17,11 @@ class StructuredProperty(BaseModel):
     # --- extracted by the LLM from the message text ---
     property_type: Optional[str] = None
     bhk: Optional[str] = None
+    society_name: Optional[str] = None  # building/project/society name, e.g. "Black Residency" — distinct
+    # from area_name (the broader locality, e.g. "Althan") and address (other address details).
     area_name: Optional[str] = None
     address: Optional[str] = None
+    carpet_area_sqft: Optional[float] = None
     price_text: Optional[str] = None
     price_amount_inr: Optional[float] = None
     contact_name: Optional[str] = None
@@ -33,3 +36,7 @@ class StructuredProperty(BaseModel):
     sender_phone: str
     message_text: str
     message_timestamp: datetime
+
+    # --- set by the duplicate-detection stage, not the LLM ---
+    review_status: Literal["accepted", "needs_review"] = "accepted"
+    review_notes: Optional[str] = None

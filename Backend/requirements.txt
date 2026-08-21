@@ -21,6 +21,7 @@ httptools==0.8.0
 httpx==0.28.1
 huggingface-hub==1.28.0
 idna==3.18
+iniconfig==2.3.0
 jinja2==3.1.6
 joblib==1.5.3
 linkpreview==0.12.1
@@ -35,6 +36,7 @@ numpy==2.5.2
 packaging==26.3
 phonenumbers==9.0.36
 pillow==12.3.0
+pluggy==1.6.0
 protobuf==7.35.1
 pyasn1==0.6.4
 pyasn1-modules==0.4.2
@@ -43,6 +45,7 @@ pydantic==2.13.4
 pydantic_core==2.46.4
 pydantic-settings==2.15.0
 pygments==2.21.0
+pytest==9.1.1
 python-dotenv==1.2.2
 python-magic-bin==0.4.14
 PyYAML==6.0.3

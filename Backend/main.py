@@ -13,6 +13,7 @@ import sys
 from contextlib import asynccontextmanager
 
 from fastapi import FastAPI
+from fastapi.middleware.cors import CORSMiddleware
 
 if sys.platform == "win32":
     # The default Windows console codepage (cp1252) can't render the
@@ -62,6 +63,20 @@ async def lifespan(_app: FastAPI):
 
 
 app = FastAPI(title="Real Estate WhatsApp Ingestion API", lifespan=lifespan)
+
+# The frontend (Frontend/, Vite dev server) runs on a different origin than
+# this API, so without CORS the browser blocks every request from it — a
+# failure curl/pytest would never catch, only a real browser would. An
+# explicit localhost allow-list, not "*": this is dev-only for now, and the
+# production frontend origin gets added here once it's hosted (Step 12).
+app.add_middleware(
+    CORSMiddleware,
+    allow_origins=["http://localhost:5173", "http://127.0.0.1:5173"],
+    allow_credentials=False,
+    allow_methods=["*"],
+    allow_headers=["*"],
+)
+
 app.include_router(whatsapp_router, prefix="/api")
 app.include_router(area_filter_router, prefix="/api")
 app.include_router(display_settings_router, prefix="/api")

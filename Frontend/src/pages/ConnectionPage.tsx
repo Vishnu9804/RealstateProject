@@ -1,17 +1,13 @@
 import { useEffect, useMemo, useRef, useState } from "react";
-import { ApiError } from "../api/client";
 import { whatsappApi } from "../api/whatsappApi";
 import type { WhatsAppGroup, WhatsAppPersonalChat, WhatsAppStatusResponse } from "../api/types";
 import { usePolling } from "../hooks/usePolling";
+import { friendlyError } from "../lib/apiError";
 import { describeWhatsAppStatus, TONE_COLORS } from "../lib/whatsappStatus";
 
 const STATUS_POLL_INTERVAL_MS = 3000;
 const QR_POLL_INTERVAL_MS = 3000;
 const GROUPS_POLL_INTERVAL_MS = 10000;
-
-function friendlyError(err: unknown): string {
-  return err instanceof ApiError ? `${err.status}: ${err.message}` : "Could not reach the backend.";
-}
 
 export default function ConnectionPage() {
   const [status, setStatus] = useState<WhatsAppStatusResponse | null>(null);

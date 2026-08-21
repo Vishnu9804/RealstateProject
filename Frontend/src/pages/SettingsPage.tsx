@@ -1,11 +1,7 @@
 import { useEffect, useState } from "react";
-import { ApiError } from "../api/client";
 import { settingsApi } from "../api/settingsApi";
+import { friendlyError } from "../lib/apiError";
 import { TONE_COLORS } from "../lib/whatsappStatus";
-
-function friendlyError(err: unknown): string {
-  return err instanceof ApiError ? `${err.status}: ${err.message}` : "Could not reach the backend.";
-}
 
 export default function SettingsPage() {
   return (

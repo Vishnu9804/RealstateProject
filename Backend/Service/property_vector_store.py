@@ -1,14 +1,19 @@
-"""Placeholder for the future Postgres+pgvector properties table (the
-database step). In-memory for now, but its functions — add_property,
-find_top_candidates, get_all_properties, get_property_count — are exactly
-what the database step will implement against pgvector instead of a plain
-Python list. Nothing that calls this module (duplicate_detection_service.py,
-property_pipeline_service.py) needs to change when that swap happens.
+"""Storage abstraction for accepted/under-review properties — the one
+place duplicate_detection_service.py and property_pipeline_service.py go
+to store and search properties. They never know or care which backend is
+actually active underneath:
 
-This is also, deliberately, the ONLY place accepted (or under-review)
-properties are held — the same list this module searches for similarity is
-the same list the API reads for display. There is no second, separate
-"already-stored" copy to keep in sync.
+  - DATABASE_URL unset (the default, until the final "connect the
+    database" step): falls back to the in-memory brute-force
+    implementation this module has had since Step 6/7 — the exact same
+    code, unchanged, already covered by tests/test_duplicate_detection.py.
+  - DATABASE_URL set: delegates to Database/property_repository.py
+    (Postgres + pgvector).
+
+This is also, deliberately, the ONLY place accepted/under-review properties
+are held — the same data this module searches for similarity is the same
+data the API reads for display. There is no second, separate copy to keep
+in sync, in either mode.
 """
 
 from __future__ import annotations
@@ -17,14 +22,20 @@ from typing import List, Tuple
 
 import numpy as np
 
+from Database import property_repository
+from Database.session import is_database_configured
 from Model.embedded_property import EmbeddedProperty
 
 _MAX_STORED_PROPERTIES = 1000
 
+# In-memory fallback only — untouched whenever a database is configured.
 _properties: List[EmbeddedProperty] = []
 
 
 def add_property(prop: EmbeddedProperty) -> None:
+    if is_database_configured():
+        property_repository.add_property(prop)
+        return
     _properties.append(prop)
     if len(_properties) > _MAX_STORED_PROPERTIES:
         del _properties[: len(_properties) - _MAX_STORED_PROPERTIES]
@@ -32,16 +43,13 @@ def add_property(prop: EmbeddedProperty) -> None:
 
 def find_top_candidates(vector: List[float], k: int) -> List[Tuple[EmbeddedProperty, float]]:
     """Returns up to `k` existing properties ranked by whole-property
-    embedding similarity, highest first — RETRIEVAL only. Brute-force at
-    this in-memory scale; the database step replaces this with an indexed
-    pgvector `ORDER BY embedding <=> query LIMIT k` query, which is the
-    whole reason storing normalized vectors matters (see
-    embedding_service.py: normalized vectors turn cosine similarity into a
-    plain dot product, identical math on both sides of that swap).
-
-    The final duplicate/new decision is NOT made here — see
+    embedding similarity, highest first — RETRIEVAL only. The final
+    duplicate/new decision is made field-by-field in
     Service/duplicate_detection_service.py, which re-ranks these candidates
-    by a field-level score instead of trusting this ordering directly."""
+    rather than trusting this ordering directly."""
+    if is_database_configured():
+        return property_repository.find_top_candidates(vector, k)
+
     if not _properties:
         return []
     query = np.array(vector)
@@ -51,8 +59,12 @@ def find_top_candidates(vector: List[float], k: int) -> List[Tuple[EmbeddedPrope
 
 
 def get_all_properties(limit: int = 100) -> List[EmbeddedProperty]:
+    if is_database_configured():
+        return property_repository.get_all_properties(limit)
     return list(_properties[-limit:])
 
 
 def get_property_count() -> int:
+    if is_database_configured():
+        return property_repository.get_property_count()
     return len(_properties)

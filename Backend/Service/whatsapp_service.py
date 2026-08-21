@@ -1,10 +1,11 @@
 """Orchestrates the WhatsApp client (whatsapp_client.py) and holds the
 in-memory state the Controller layer reads from.
 
-No database yet by design (see project instructions) — captured messages
-live in a capped in-memory list purely as proof that live messages are being
-received correctly. Swapping this for real persistence later only touches
-this file.
+Raw/qualified WhatsApp messages captured here stay in-memory, capped lists
+purely as proof that live messages are being received and filtered
+correctly — they were never meant to be the durable record. Structured
+properties are the durable record, and (once DATABASE_URL is set) they
+persist for real — see Service/property_vector_store.py.
 """
 
 from __future__ import annotations
@@ -12,6 +13,7 @@ from __future__ import annotations
 import threading
 from typing import List, Optional
 
+from Database.session import is_database_configured
 from Middleware import step_logger
 from Model.group import WhatsAppGroup
 from Model.personal_chat import WhatsAppPersonalChat
@@ -66,6 +68,7 @@ def _run_client(client: WhatsAppClient) -> None:
 def get_status() -> dict:
     return {
         "status": _status,
+        "database_configured": is_database_configured(),
         "joined_group_count": len(_joined_groups),
         "monitored_group_count": len(_monitored_groups),
         "monitored_personal_chat_count": len(_monitored_personal_chats),

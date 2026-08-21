@@ -50,13 +50,26 @@ from typing import Callable, Dict, List, Optional, Tuple
 
 import numpy as np
 
+from Database import settings_repository
+from Database.session import is_database_configured
 from Model.duplicate_check_result import DuplicateCheckResult
 from Model.duplicate_detection_settings import DuplicateDetectionSettings, NumericFieldThresholds
 from Model.duplicate_verdict import DuplicateVerdict
 from Model.embedded_property import EmbeddedProperty
 from Service import embedding_service, property_vector_store
 
+_SETTINGS_KEY = "duplicate_detection_settings"
+
 _settings = DuplicateDetectionSettings()
+
+
+def load_from_database() -> None:
+    if not is_database_configured():
+        return
+    stored = settings_repository.get_value(_SETTINGS_KEY)
+    if stored is not None:
+        global _settings
+        _settings = DuplicateDetectionSettings.model_validate(stored)
 
 
 def get_settings() -> DuplicateDetectionSettings:
@@ -66,6 +79,8 @@ def get_settings() -> DuplicateDetectionSettings:
 def set_settings(settings: DuplicateDetectionSettings) -> None:
     global _settings
     _settings = settings
+    if is_database_configured():
+        settings_repository.set_value(_SETTINGS_KEY, settings.model_dump())
 
 
 def check_duplicate(new_property: EmbeddedProperty) -> DuplicateCheckResult:

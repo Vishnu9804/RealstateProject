@@ -33,15 +33,29 @@ from Controller.display_settings_controller import router as display_settings_ro
 from Controller.duplicate_detection_controller import router as duplicate_detection_router
 from Controller.property_controller import router as property_router
 from Controller.whatsapp_controller import router as whatsapp_router
+from Database.session import init_db, is_database_configured
 from Middleware.logging_config import configure_logging
 from Middleware import step_logger
-from Service import whatsapp_service
+from Service import area_filter_service, display_settings_service, duplicate_detection_service, whatsapp_service
 
 configure_logging()
 
 
 @asynccontextmanager
 async def lifespan(_app: FastAPI):
+    if is_database_configured():
+        step_logger.step("DATABASE_URL is set — initializing the database and loading saved settings...")
+        init_db()
+        area_filter_service.load_from_database()
+        display_settings_service.load_from_database()
+        duplicate_detection_service.load_from_database()
+        step_logger.success("Database ready — properties and settings will persist across restarts.")
+    else:
+        step_logger.info(
+            "DATABASE_URL is not set — running with in-memory storage only. Nothing is lost while the "
+            "server stays up, but properties and settings reset on restart until a database is connected."
+        )
+
     step_logger.step("FastAPI server is up. Launching WhatsApp client in the background...")
     whatsapp_service.start_agent_in_background()
     yield

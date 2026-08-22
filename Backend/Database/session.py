@@ -26,13 +26,30 @@ def is_database_configured() -> bool:
     return bool(get_settings().database_url)
 
 
+def _normalize_database_url(raw_url: str) -> str:
+    """Neon (and most managed Postgres providers — Supabase, Render,
+    Railway, Heroku) hand out a bare `postgresql://` or `postgres://`
+    connection string. SQLAlchemy's default driver for that scheme is
+    psycopg2, which isn't installed here — this project uses psycopg (v3)
+    instead (see requirements.txt). Rewriting the scheme means the
+    connection string can be pasted in exactly as the provider gives it,
+    with no manual editing required."""
+    if raw_url.startswith("postgresql+"):
+        return raw_url
+    if raw_url.startswith("postgresql://"):
+        return "postgresql+psycopg://" + raw_url[len("postgresql://") :]
+    if raw_url.startswith("postgres://"):
+        return "postgresql+psycopg://" + raw_url[len("postgres://") :]
+    return raw_url
+
+
 def _get_engine():
     global _engine, _session_factory
     if _engine is None:
         database_url = get_settings().database_url
         if not database_url:
             raise RuntimeError("DATABASE_URL is not set — add it to Backend/.env to use the database.")
-        _engine = create_engine(database_url, pool_pre_ping=True)
+        _engine = create_engine(_normalize_database_url(database_url), pool_pre_ping=True)
         _session_factory = sessionmaker(bind=_engine, expire_on_commit=False)
     return _engine
 

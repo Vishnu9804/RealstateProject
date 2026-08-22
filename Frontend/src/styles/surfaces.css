@@ -1,0 +1,239 @@
+/* =======================================================================
+   SURFACES — panels, cards and anything that "floats".
+   ======================================================================= */
+
+.shell {
+  position: relative;
+  z-index: 1;
+  min-height: 100vh;
+  display: flex;
+  flex-direction: column;
+}
+
+.shell__main {
+  flex: 1;
+  width: 100%;
+  max-width: var(--shell-max);
+  margin: 0 auto;
+  padding: calc(var(--header-h) + 34px) var(--gutter) 96px;
+  /* One shared perspective for the whole page means every card tilts about
+     the same viewer position — tilt them in isolation and the scene falls
+     apart into unrelated toys. */
+  perspective: var(--perspective);
+  perspective-origin: 50% 40%;
+}
+
+/* ---- the panel primitive --------------------------------------------- */
+.panel {
+  position: relative;
+  background: var(--surface);
+  border: 1px solid var(--rim);
+  border-radius: var(--r-lg);
+  box-shadow: var(--elev-2);
+  transition:
+    transform var(--t-base) var(--ease-out),
+    box-shadow var(--t-base) var(--ease-out),
+    border-color var(--t-base) var(--ease-out),
+    background-color var(--t-base) var(--ease-out);
+}
+
+/* A specular sheen along the top-left bevel, angled toward the pointer-lit
+   scene. Kept as a pseudo-element so it never interferes with content. */
+.panel::before {
+  content: "";
+  position: absolute;
+  inset: 0;
+  border-radius: inherit;
+  padding: 1px;
+  background: linear-gradient(150deg, var(--rim-strong), transparent 34%, transparent 66%, var(--rim));
+  -webkit-mask: linear-gradient(#000 0 0) content-box, linear-gradient(#000 0 0);
+  -webkit-mask-composite: xor;
+  mask: linear-gradient(#000 0 0) content-box, linear-gradient(#000 0 0);
+  mask-composite: exclude;
+  pointer-events: none;
+  opacity: 0.9;
+}
+
+.panel--raised { box-shadow: var(--elev-3); }
+.panel--pad { padding: clamp(18px, 2.4vw, 28px); }
+
+/* Interactive panels physically approach the viewer on hover. */
+.panel--interactive { cursor: pointer; }
+.panel--interactive:hover {
+  transform: perspective(1000px) translate3d(0, var(--lift-2), 26px);
+  box-shadow: var(--elev-4);
+  border-color: var(--rim-strong);
+  background: var(--surface-strong);
+}
+.panel--interactive:active { transform: perspective(1000px) translate3d(0, -2px, 8px) scale(0.995); }
+
+/* Selection = closest plane of all, plus the accent rim so it reads as
+   "held forward and lit", not merely "coloured in". */
+.panel--selected {
+  border-color: color-mix(in oklab, var(--accent) 55%, transparent);
+  box-shadow: var(--elev-4), var(--glow-accent);
+  background: var(--surface-strong);
+  transform: perspective(1000px) translate3d(0, var(--lift-2), 30px);
+}
+
+/* Tilt is applied inline by useTilt as CSS vars, so the transform stays in
+   one place and composes with the hover lift above. */
+.tilt {
+  transform:
+    perspective(var(--perspective))
+    rotateX(var(--rx, 0deg))
+    rotateY(var(--ry, 0deg))
+    translate3d(0, var(--ty, 0px), var(--tz, 0px));
+}
+.tilt__glare {
+  position: absolute;
+  inset: 0;
+  border-radius: inherit;
+  pointer-events: none;
+  opacity: var(--glare, 0);
+  background: radial-gradient(340px circle at var(--gx, 50%) var(--gy, 50%),
+      color-mix(in oklab, #fff 28%, transparent), transparent 60%);
+  transition: opacity var(--t-base) var(--ease-out);
+  mix-blend-mode: overlay;
+}
+
+/* ---- section headers -------------------------------------------------- */
+.section-head {
+  display: flex;
+  align-items: flex-end;
+  justify-content: space-between;
+  gap: 20px;
+  flex-wrap: wrap;
+  margin-bottom: 22px;
+}
+.section-head__eyebrow {
+  display: inline-flex;
+  align-items: center;
+  gap: 8px;
+  font-size: 11.5px;
+  font-weight: 640;
+  letter-spacing: 0.14em;
+  text-transform: uppercase;
+  color: var(--ink-3);
+  margin-bottom: 10px;
+}
+.section-head__eyebrow::before {
+  content: "";
+  width: 22px; height: 2px;
+  border-radius: 2px;
+  background: var(--accent-gradient);
+}
+.section-head__sub {
+  margin-top: 8px;
+  color: var(--ink-3);
+  max-width: 62ch;
+  font-size: 14px;
+}
+
+.page-title {
+  background: linear-gradient(180deg, var(--ink) 30%, color-mix(in oklab, var(--ink) 62%, transparent));
+  -webkit-background-clip: text;
+  background-clip: text;
+  color: transparent;
+}
+
+/* ---- stat tile -------------------------------------------------------- */
+.stat {
+  position: relative;
+  padding: 16px 18px;
+  border-radius: var(--r-md);
+  background: var(--plane-0);
+  border: 1px solid var(--rim);
+  box-shadow: var(--elev-1);
+  overflow: hidden;
+  transition: transform var(--t-base) var(--ease-out), box-shadow var(--t-base) var(--ease-out),
+    background-color var(--t-base) var(--ease-out), border-color var(--t-base) var(--ease-out);
+}
+.stat:hover {
+  transform: perspective(900px) translate3d(0, var(--lift-1), 18px);
+  box-shadow: var(--elev-3);
+  background: var(--plane-1);
+  border-color: var(--rim-strong);
+}
+.stat__label {
+  display: flex;
+  align-items: center;
+  gap: 7px;
+  font-size: 11.5px;
+  letter-spacing: 0.08em;
+  text-transform: uppercase;
+  color: var(--ink-3);
+  font-weight: 600;
+}
+.stat__value {
+  margin-top: 6px;
+  font-size: clamp(22px, 2.6vw, 30px);
+  font-weight: 680;
+  letter-spacing: -0.03em;
+  font-variant-numeric: tabular-nums;
+  line-height: 1.1;
+}
+.stat__spark {
+  position: absolute;
+  right: -10px;
+  bottom: -12px;
+  width: 96px;
+  height: 62px;
+  opacity: 0.22;
+  color: var(--accent);
+}
+.stat--accent { border-color: color-mix(in oklab, var(--accent) 36%, transparent); }
+.stat--accent .stat__value { color: var(--accent); }
+.stat--warn { border-color: color-mix(in oklab, var(--warn) 40%, transparent); }
+.stat--warn .stat__value { color: var(--warn); }
+.stat--ok .stat__value { color: var(--ok); }
+
+.stat-grid {
+  display: grid;
+  grid-template-columns: repeat(auto-fit, minmax(168px, 1fr));
+  gap: 14px;
+}
+
+/* ---- empty state ------------------------------------------------------ */
+.empty {
+  display: flex;
+  flex-direction: column;
+  align-items: center;
+  text-align: center;
+  gap: 14px;
+  padding: 56px 28px;
+  color: var(--ink-3);
+}
+.empty__art {
+  width: 118px;
+  height: 118px;
+  display: grid;
+  place-items: center;
+  border-radius: 26px;
+  background: var(--plane-1);
+  border: 1px solid var(--rim);
+  box-shadow: var(--elev-3);
+  color: var(--accent);
+  animation: float-y 5.5s var(--ease-in-out) infinite;
+}
+.empty__title { color: var(--ink); font-size: 18px; font-weight: 640; }
+.empty__body { max-width: 46ch; font-size: 14px; }
+
+/* ---- skeleton --------------------------------------------------------- */
+.skel {
+  border-radius: var(--r-xs);
+  background:
+    linear-gradient(90deg, var(--plane-0) 0%, var(--plane-2) 42%, var(--plane-0) 84%);
+  background-size: 220% 100%;
+  animation: shimmer 1.5s linear infinite;
+}
+.skel--text { height: 12px; }
+.skel--line { height: 44px; border-radius: var(--r-sm); }
+
+/* ---- divider ---------------------------------------------------------- */
+.rule {
+  height: 1px;
+  border: 0;
+  margin: 26px 0;
+  background: linear-gradient(90deg, transparent, var(--rim-strong) 22%, var(--rim-strong) 78%, transparent);
+}

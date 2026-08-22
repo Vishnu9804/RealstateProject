@@ -1,20 +1,64 @@
 import { useEffect, useMemo, useRef, useState } from "react";
 import { whatsappApi } from "../api/whatsappApi";
-import type { WhatsAppGroup, WhatsAppPersonalChat, WhatsAppStatusResponse } from "../api/types";
+import type { WhatsAppGroup, WhatsAppPersonalChat } from "../api/types";
 import { usePolling } from "../hooks/usePolling";
+import { useDebounced, useUnsavedGuard } from "../hooks/useUi";
 import { friendlyError } from "../lib/apiError";
-import { describeWhatsAppStatus, TONE_COLORS } from "../lib/whatsappStatus";
+import type { StatusTone } from "../lib/whatsappStatus";
+import { canSelectMonitoring, describeWhatsAppStatus, PIPELINE_STEPS, pipelineStage, statusTone } from "../lib/whatsappStatus";
+import { useAppStatus } from "../state/StatusProvider";
+import { useToast } from "../components/ui/Toast";
+import {
+  Badge,
+  Button,
+  Check,
+  EmptyState,
+  Highlight,
+  Note,
+  Panel,
+  SearchInput,
+  SkeletonRows,
+  Stat,
+} from "../components/ui/Primitives";
+import {
+  IconAlert,
+  IconCheck,
+  IconDatabase,
+  IconInbox,
+  IconInfo,
+  IconLayers,
+  IconMessage,
+  IconPhone,
+  IconPower,
+  IconQr,
+  IconRefresh,
+  IconUsers,
+  IconZap,
+} from "../components/ui/Icons";
 
-const STATUS_POLL_INTERVAL_MS = 3000;
+/** The badge palette has no neutral slot; an unrecognized status is still
+ *  information worth showing, so it borrows the informational tone rather
+ *  than disappearing. */
+function badgeTone(tone: StatusTone): "ok" | "warn" | "bad" | "info" {
+  const mapped = statusTone(tone);
+  return mapped === "neutral" ? "info" : mapped;
+}
+
 const QR_POLL_INTERVAL_MS = 3000;
 const GROUPS_POLL_INTERVAL_MS = 10000;
 
+/** WhatsApp JIDs are country code + number, digits only. Catching a bad
+ *  entry here — while the user can still see what they typed — beats a
+ *  silent no-match hours later when the messages never arrive. */
+const VALID_NUMBER = /^\d{8,15}$/;
+
 export default function ConnectionPage() {
-  const [status, setStatus] = useState<WhatsAppStatusResponse | null>(null);
-  const [statusError, setStatusError] = useState<string | null>(null);
+  const { status, error: statusError, initialLoading, failures, refresh } = useAppStatus();
+  const toast = useToast();
 
   const [groups, setGroups] = useState<WhatsAppGroup[] | null>(null);
   const [groupFilter, setGroupFilter] = useState("");
+  const debouncedFilter = useDebounced(groupFilter, 140);
   const [selectedGroupJids, setSelectedGroupJids] = useState<Set<string>>(new Set());
   const [monitoredGroups, setMonitoredGroups] = useState<WhatsAppGroup[]>([]);
   const [monitoredPersonalChats, setMonitoredPersonalChats] = useState<WhatsAppPersonalChat[]>([]);
@@ -30,22 +74,14 @@ export default function ConnectionPage() {
   const [qrLoadFailed, setQrLoadFailed] = useState(false);
 
   const [submitting, setSubmitting] = useState(false);
-  const [submitError, setSubmitError] = useState<string | null>(null);
-  const [submitSuccess, setSubmitSuccess] = useState(false);
 
-  // --- status: polled continuously, drives everything else on this page ---
-  usePolling(async () => {
-    try {
-      const data = await whatsappApi.getStatus();
-      setStatus(data);
-      setStatusError(null);
-    } catch (err) {
-      setStatusError(friendlyError(err));
-    }
-  }, STATUS_POLL_INTERVAL_MS);
+  const waitingForQr = status?.status === "waiting_for_qr_scan";
+  const groupsRelevant = canSelectMonitoring(status?.status);
+  const display = status ? describeWhatsAppStatus(status.status) : null;
+  const stage = pipelineStage(status?.status);
+  const backendDown = failures >= 2 && statusError !== null;
 
   // --- QR code: only polled while a scan is actually being waited on ---
-  const waitingForQr = status?.status === "waiting_for_qr_scan";
   usePolling(
     () => {
       setQrTick((t) => t + 1);
@@ -56,9 +92,6 @@ export default function ConnectionPage() {
   );
 
   // --- groups + current selection: only meaningful once pairing is done ---
-  const groupsRelevant =
-    status !== null && status.status !== "starting" && status.status !== "waiting_for_qr_scan" && status.status !== "pairing";
-
   useEffect(() => {
     if (!groupsRelevant) return;
     let cancelled = false;
@@ -99,10 +132,33 @@ export default function ConnectionPage() {
 
   const filteredGroups = useMemo(() => {
     if (!groups) return [];
-    const query = groupFilter.trim().toLowerCase();
+    const query = debouncedFilter.trim().toLowerCase();
     if (!query) return groups;
     return groups.filter((g) => g.name.toLowerCase().includes(query));
-  }, [groups, groupFilter]);
+  }, [groups, debouncedFilter]);
+
+  const parsedNumbers = useMemo(
+    () =>
+      personalNumbersInput
+        .split(/[,\n]/)
+        .map((n) => n.trim())
+        .filter(Boolean),
+    [personalNumbersInput],
+  );
+  const invalidNumbers = useMemo(() => parsedNumbers.filter((n) => !VALID_NUMBER.test(n)), [parsedNumbers]);
+
+  /* Dirty tracking exists so the Save button can answer "is there anything
+     to save?" honestly. Before, it was always enabled — you could never
+     tell whether what is on screen matches what the backend has. */
+  const dirty = useMemo(() => {
+    const savedGroups = new Set(monitoredGroups.map((g) => g.jid));
+    if (savedGroups.size !== selectedGroupJids.size) return true;
+    for (const jid of selectedGroupJids) if (!savedGroups.has(jid)) return true;
+    const savedNumbers = monitoredPersonalChats.map((c) => c.phone_number).join(",");
+    return savedNumbers !== parsedNumbers.join(",");
+  }, [monitoredGroups, monitoredPersonalChats, selectedGroupJids, parsedNumbers]);
+
+  useUnsavedGuard(dirty);
 
   function toggleGroup(jid: string) {
     setSelectedGroupJids((prev) => {
@@ -122,130 +178,320 @@ export default function ConnectionPage() {
     setSelectedGroupJids((prev) => new Set([...prev].filter((jid) => !filteredJids.has(jid))));
   }
 
+  function revert() {
+    setSelectedGroupJids(new Set(monitoredGroups.map((g) => g.jid)));
+    setPersonalNumbersInput(monitoredPersonalChats.map((c) => c.phone_number).join(", "));
+    toast.push({ tone: "info", title: "Changes discarded", message: "Back to what the backend currently monitors." });
+  }
+
   async function handleSubmit() {
     setSubmitting(true);
-    setSubmitError(null);
-    setSubmitSuccess(false);
-    const personalNumbers = personalNumbersInput
-      .split(/[,\n]/)
-      .map((n) => n.trim())
-      .filter(Boolean);
     try {
-      const result = await whatsappApi.submitMonitoringSelection(Array.from(selectedGroupJids), personalNumbers);
+      const result = await whatsappApi.submitMonitoringSelection(Array.from(selectedGroupJids), parsedNumbers);
       setMonitoredGroups(result.monitored_groups);
       setMonitoredPersonalChats(result.monitored_personal_chats);
-      setSubmitSuccess(true);
+      setPersonalNumbersInput(result.monitored_personal_chats.map((c) => c.phone_number).join(", "));
+      toast.push({
+        tone: "ok",
+        title: "Monitoring updated",
+        message: `Watching ${result.monitored_groups.length} group(s) and ${result.monitored_personal_chats.length} number(s).`,
+      });
+      refresh();
     } catch (err) {
-      setSubmitError(friendlyError(err));
+      toast.push({ tone: "bad", title: "Could not save selection", message: friendlyError(err) });
     } finally {
       setSubmitting(false);
     }
   }
 
-  const statusDisplay = status ? describeWhatsAppStatus(status.status) : null;
+  const allFilteredSelected =
+    filteredGroups.length > 0 && filteredGroups.every((group) => selectedGroupJids.has(group.jid));
 
   return (
-    <div style={{ maxWidth: 720 }}>
-      <h1>WhatsApp Connection</h1>
+    <div className="stack stack-6">
+      <header className="section-head">
+        <div>
+          <div className="section-head__eyebrow">Step 1 — Connection</div>
+          <h1 className="page-title">WhatsApp connection</h1>
+          <p className="section-head__sub">
+            Link this machine to WhatsApp, then choose which groups and personal chats feed the property pipeline.
+            Everything here can be changed later without restarting the backend.
+          </p>
+        </div>
+        <Button variant="ghost" icon={<IconRefresh size={15} />} onClick={refresh}>
+          Refresh
+        </Button>
+      </header>
 
-      {statusError && (
-        <p style={{ color: TONE_COLORS.error }}>
-          Backend unreachable: {statusError}. Is <code>uvicorn main:app --reload --port 8000</code> running?
-        </p>
+      {backendDown && (
+        <Note tone="bad" icon={<IconAlert size={17} />}>
+          <strong>Backend unreachable.</strong> {statusError} — check that{" "}
+          <code>uvicorn main:app --reload --port 8000</code> is running, then this page will recover on its own.
+        </Note>
       )}
 
-      {statusDisplay && (
-        <p style={{ color: TONE_COLORS[statusDisplay.tone], fontWeight: 600, fontSize: 16 }}>{statusDisplay.label}</p>
-      )}
+      <div className="two-col">
+        {/* ---- live state + pipeline ---- */}
+        <Panel tilt raised className="stack stack-5">
+          <div className="row-between">
+            <div>
+              <div className="section-head__eyebrow" style={{ marginBottom: 6 }}>
+                Live state
+              </div>
+              {initialLoading ? (
+                <div className="skel skel--text" style={{ width: 180, height: 22 }} />
+              ) : (
+                <h2>{display?.label ?? "Unknown"}</h2>
+              )}
+              {display?.hint && <p className="muted small" style={{ marginTop: 6 }}>{display.hint}</p>}
+            </div>
+            {display && <Badge tone={badgeTone(display.tone)} live>{status?.status}</Badge>}
+          </div>
 
-      {waitingForQr && (
-        <div style={{ margin: "16px 0" }}>
-          {!qrLoadFailed ? (
-            <img
-              src={whatsappApi.getQrCodeUrl(qrTick)}
-              alt="WhatsApp pairing QR code"
-              onError={() => setQrLoadFailed(true)}
-              style={{ width: 280, height: 280, border: "1px solid #ddd", borderRadius: 8 }}
-            />
-          ) : (
-            <p style={{ color: "#666" }}>Waiting for the QR code to be generated…</p>
+          <div className="steps">
+            {PIPELINE_STEPS.map((step, index) => {
+              const state = index < stage ? "done" : index === stage ? "active" : "todo";
+              return (
+                <div key={step.key} className={`step step--${state}`}>
+                  <div className="step__rail">
+                    <span className="step__dot">
+                      {state === "done" ? <IconCheck size={14} strokeWidth={3} /> : index + 1}
+                    </span>
+                  </div>
+                  <div>
+                    <div className="step__label">{step.label}</div>
+                    <div className="step__note">{step.note}</div>
+                  </div>
+                </div>
+              );
+            })}
+          </div>
+
+          {status && !status.database_configured && (
+            <Note tone="warn" icon={<IconDatabase size={17} />}>
+              <strong>No database configured.</strong> Messages are being captured, but nothing is being stored — set{" "}
+              <code>DATABASE_URL</code> in the backend environment to keep them.
+            </Note>
           )}
-          <p style={{ color: "#666", maxWidth: 400 }}>
-            Open WhatsApp on your phone → Settings → Linked Devices → Link a Device, then scan this code.
-          </p>
-        </div>
+        </Panel>
+
+        {/* ---- QR or summary ---- */}
+        <Panel className="stack stack-4" delay={90}>
+          <div className="section-head__eyebrow" style={{ marginBottom: 0 }}>
+            {waitingForQr ? "Pair this device" : "At a glance"}
+          </div>
+
+          {waitingForQr ? (
+            <div className="stack stack-4" style={{ alignItems: "center" }}>
+              {!qrLoadFailed ? (
+                <div className="qr">
+                  <img src={whatsappApi.getQrCodeUrl(qrTick)} alt="WhatsApp pairing QR code" onError={() => setQrLoadFailed(true)} />
+                  <span className="qr__corner qr__corner--tl" />
+                  <span className="qr__corner qr__corner--tr" />
+                  <span className="qr__corner qr__corner--bl" />
+                  <span className="qr__corner qr__corner--br" />
+                </div>
+              ) : (
+                <div className="qr-skeleton">
+                  <span className="spinner" style={{ width: 22, height: 22 }} />
+                  <span>Waiting for WhatsApp to generate a code…</span>
+                </div>
+              )}
+              <ol className="stack stack-2 small muted" style={{ margin: 0, paddingLeft: 18 }}>
+                <li>Open WhatsApp on your phone.</li>
+                <li>
+                  Go to <strong>Settings → Linked devices</strong>.
+                </li>
+                <li>
+                  Tap <strong>Link a device</strong> and scan the code.
+                </li>
+              </ol>
+              <p className="faint small" style={{ textAlign: "center" }}>
+                The code refreshes automatically every few seconds — you never need to reload the page.
+              </p>
+            </div>
+          ) : initialLoading ? (
+            <SkeletonRows rows={4} />
+          ) : status ? (
+            <div className="stat-grid">
+              <Stat label="Groups joined" value={status.joined_group_count} icon={<IconUsers size={13} />} delay={0} />
+              <Stat label="Monitored" value={status.monitored_group_count + status.monitored_personal_chat_count} icon={<IconLayers size={13} />} tone="accent" delay={60} />
+              <Stat label="Messages seen" value={status.captured_message_count} icon={<IconMessage size={13} />} delay={120} />
+              <Stat label="Qualified" value={status.qualified_message_count} icon={<IconZap size={13} />} tone="ok" delay={180} hint="Messages that matched an area keyword and reached the pipeline" />
+              <Stat label="Structured" value={status.structured_property_count} icon={<IconDatabase size={13} />} delay={240} />
+              <Stat label="Need review" value={status.needs_review_property_count} icon={<IconAlert size={13} />} tone={status.needs_review_property_count > 0 ? "warn" : undefined} delay={300} />
+            </div>
+          ) : null}
+        </Panel>
+      </div>
+
+      {/* ---- monitoring selection ---- */}
+      {groupsRelevant && (
+        <Panel className="stack stack-5" delay={140}>
+          <div className="row-between">
+            <div>
+              <div className="section-head__eyebrow" style={{ marginBottom: 6 }}>
+                Sources
+              </div>
+              <h2>What should be monitored?</h2>
+              <p className="section-head__sub" style={{ marginTop: 6 }}>
+                Currently watching <strong>{monitoredGroups.length}</strong> group{monitoredGroups.length === 1 ? "" : "s"} and{" "}
+                <strong>{monitoredPersonalChats.length}</strong> personal number
+                {monitoredPersonalChats.length === 1 ? "" : "s"}.
+              </p>
+            </div>
+            {dirty && (
+              <Badge tone="warn" live title="You have changes that have not been sent to the backend yet">
+                Unsaved changes
+              </Badge>
+            )}
+          </div>
+
+          <div className="two-col">
+            {/* groups */}
+            <div className="stack stack-3">
+              <div className="row-between">
+                <h3>
+                  Groups{" "}
+                  <span className="faint small">
+                    {groups ? `(${filteredGroups.length} of ${groups.length})` : ""}
+                  </span>
+                </h3>
+                <span className="badge badge--info">{selectedGroupJids.size} selected</span>
+              </div>
+
+              <SearchInput
+                value={groupFilter}
+                onChange={setGroupFilter}
+                placeholder="Filter groups by name…"
+                ariaLabel="Filter groups by name"
+              />
+
+              <div className="row-flex">
+                <Button size="sm" onClick={selectAllFiltered} disabled={filteredGroups.length === 0 || allFilteredSelected}>
+                  Select {groupFilter ? "filtered" : "all"}
+                </Button>
+                <Button size="sm" variant="ghost" onClick={clearAllFiltered} disabled={selectedGroupJids.size === 0}>
+                  Clear {groupFilter ? "filtered" : "all"}
+                </Button>
+              </div>
+
+              {groups === null ? (
+                <SkeletonRows rows={5} />
+              ) : filteredGroups.length === 0 ? (
+                <EmptyState
+                  icon={<IconUsers size={34} />}
+                  title={groups.length === 0 ? "No groups found" : "Nothing matches that filter"}
+                  body={
+                    groups.length === 0
+                      ? "This WhatsApp account is not in any groups yet, or they are still loading."
+                      : "Try a shorter search term — filtering only looks at the group name."
+                  }
+                />
+              ) : (
+                <div className="scroll-list">
+                  {filteredGroups.map((group) => (
+                    <Check key={group.jid} checked={selectedGroupJids.has(group.jid)} onChange={() => toggleGroup(group.jid)}>
+                      <span className="cell-truncate" style={{ maxWidth: "100%" }} title={group.name}>
+                        <Highlight text={group.name} query={debouncedFilter} />
+                      </span>
+                      <span className="faint small">{group.member_count} members</span>
+                    </Check>
+                  ))}
+                </div>
+              )}
+            </div>
+
+            {/* personal numbers */}
+            <div className="stack stack-3">
+              <h3>Personal chats</h3>
+              <p className="faint small">
+                Phone numbers with country code, digits only, separated by commas or new lines — e.g.{" "}
+                <code>919876543210</code>.
+              </p>
+              <textarea
+                className="textarea"
+                value={personalNumbersInput}
+                onChange={(e) => setPersonalNumbersInput(e.target.value)}
+                rows={4}
+                aria-label="Personal phone numbers to monitor"
+                placeholder="919876543210, 919812345678"
+              />
+
+              {parsedNumbers.length > 0 && (
+                <div className="row-flex" style={{ gap: 7 }}>
+                  {parsedNumbers.map((number, index) => (
+                    <span
+                      key={`${number}-${index}`}
+                      className={`badge ${VALID_NUMBER.test(number) ? "badge--info" : "badge--bad"}`}
+                      title={VALID_NUMBER.test(number) ? undefined : "Digits only, 8–15 characters, including country code"}
+                    >
+                      <IconPhone size={11} />
+                      {number}
+                    </span>
+                  ))}
+                </div>
+              )}
+
+              {invalidNumbers.length > 0 && (
+                <Note tone="warn" icon={<IconAlert size={16} />}>
+                  {invalidNumbers.length} entr{invalidNumbers.length === 1 ? "y does" : "ies do"} not look like a phone
+                  number. Use digits only, including the country code and no <code>+</code> or spaces.
+                </Note>
+              )}
+
+              {parsedNumbers.length === 0 && (
+                <Note tone="info" icon={<IconInfo size={16} />}>
+                  Leave this empty to monitor groups only.
+                </Note>
+              )}
+            </div>
+          </div>
+
+          <div className="row-flex">
+            <Button variant="primary" onClick={handleSubmit} busy={submitting} disabled={!dirty} icon={<IconPower size={16} />}>
+              {submitting ? "Saving…" : dirty ? "Save monitoring selection" : "Everything is saved"}
+            </Button>
+            {dirty && (
+              <Button variant="ghost" onClick={revert} disabled={submitting}>
+                Discard changes
+              </Button>
+            )}
+            {selectedGroupJids.size === 0 && parsedNumbers.length === 0 && (
+              <span className="small" style={{ color: "var(--warn)" }}>
+                Nothing selected — saving this will stop all capture.
+              </span>
+            )}
+          </div>
+        </Panel>
       )}
 
-      {groupsRelevant && groups !== null && (
-        <div style={{ marginTop: 24 }}>
-          <h2>Select what to monitor</h2>
-          <p style={{ color: "#666" }}>
-            Currently monitoring {monitoredGroups.length} group(s) and {monitoredPersonalChats.length} personal
-            number(s). Change the selection below and save — this can be updated any time without restarting the
-            backend.
-          </p>
-
-          <h3>Groups ({groups.length} found)</h3>
-          <input
-            type="text"
-            placeholder="Filter groups by name…"
-            value={groupFilter}
-            onChange={(e) => setGroupFilter(e.target.value)}
-            style={{ padding: 6, width: "100%", maxWidth: 360, marginBottom: 8 }}
+      {!groupsRelevant && !waitingForQr && !initialLoading && (
+        <Panel delay={140}>
+          <EmptyState
+            icon={<IconQr size={36} />}
+            title="Waiting on the connection"
+            body="Group and chat selection unlocks as soon as this device is linked to WhatsApp. Nothing to do here yet."
           />
-          <div style={{ marginBottom: 8 }}>
-            <button type="button" onClick={selectAllFiltered} style={{ marginRight: 8 }}>
-              Select all {groupFilter ? "filtered" : ""}
-            </button>
-            <button type="button" onClick={clearAllFiltered}>
-              Clear {groupFilter ? "filtered" : "all"}
-            </button>
-          </div>
-          <div
-            style={{
-              border: "1px solid #ddd",
-              borderRadius: 6,
-              maxHeight: 280,
-              overflowY: "auto",
-              padding: 8,
-              background: "#fff",
-            }}
-          >
-            {filteredGroups.length === 0 && <p style={{ color: "#666", margin: 4 }}>No groups match that filter.</p>}
-            {filteredGroups.map((group) => (
-              <label key={group.jid} style={{ display: "flex", alignItems: "center", gap: 8, padding: "4px 0" }}>
-                <input
-                  type="checkbox"
-                  checked={selectedGroupJids.has(group.jid)}
-                  onChange={() => toggleGroup(group.jid)}
-                />
-                <span>
-                  {group.name} <span style={{ color: "#999" }}>({group.member_count} members)</span>
-                </span>
-              </label>
-            ))}
-          </div>
-          <p style={{ color: "#666", fontSize: 13 }}>{selectedGroupJids.size} group(s) selected.</p>
+        </Panel>
+      )}
 
-          <h3>Personal chats</h3>
-          <p style={{ color: "#666" }}>
-            Phone numbers with country code, digits only, separated by commas or new lines (e.g. 919876543210).
-          </p>
-          <textarea
-            value={personalNumbersInput}
-            onChange={(e) => setPersonalNumbersInput(e.target.value)}
-            rows={3}
-            style={{ width: "100%", maxWidth: 480, padding: 8, fontFamily: "inherit" }}
-          />
-
-          <div style={{ marginTop: 16 }}>
-            <button type="button" onClick={handleSubmit} disabled={submitting}>
-              {submitting ? "Saving…" : "Save monitoring selection"}
-            </button>
-            {submitSuccess && <span style={{ color: TONE_COLORS.success, marginLeft: 12 }}>Saved.</span>}
-            {submitError && <span style={{ color: TONE_COLORS.error, marginLeft: 12 }}>{submitError}</span>}
+      {initialLoading && (
+        <Panel delay={140}>
+          <div className="stack stack-3">
+            <div className="row-flex faint small">
+              <span className="spinner" /> Contacting the backend…
+            </div>
+            <SkeletonRows rows={3} />
           </div>
-        </div>
+        </Panel>
+      )}
+
+      {!initialLoading && status && status.captured_message_count === 0 && groupsRelevant && (
+        <Note tone="info" icon={<IconInbox size={17} />}>
+          No messages captured yet. Once a monitored chat receives a message mentioning one of your area keywords, it
+          will appear on the Properties page within a few seconds.
+        </Note>
       )}
     </div>
   );

@@ -1,0 +1,414 @@
+/* =======================================================================
+   CONTROLS — everything the user actually touches.
+
+   Depth rule for interaction, applied consistently everywhere:
+     rest     → plane 1, resting shadow
+     hover    → rises toward the viewer, shadow spreads, rim brightens
+     active   → pressed *into* the page (negative Z + tight shadow)
+     focus    → accent halo (see :focus-visible in base.css)
+     disabled → drops flat to the page and loses its shadow entirely
+   ======================================================================= */
+
+.btn {
+  position: relative;
+  display: inline-flex;
+  align-items: center;
+  justify-content: center;
+  gap: 8px;
+  padding: 0 18px;
+  height: 42px;
+  border-radius: var(--r-sm);
+  border: 1px solid var(--rim);
+  background: var(--plane-2);
+  color: var(--ink);
+  font-size: 14px;
+  font-weight: 580;
+  letter-spacing: -0.006em;
+  cursor: pointer;
+  white-space: nowrap;
+  overflow: hidden;
+  box-shadow: var(--elev-1);
+  transition:
+    transform var(--t-fast) var(--ease-out),
+    box-shadow var(--t-base) var(--ease-out),
+    background-color var(--t-fast) var(--ease-out),
+    border-color var(--t-fast) var(--ease-out),
+    opacity var(--t-fast) linear;
+}
+
+/* A light sweep crossing the face on hover — the cue that this surface is
+   glossy and angled, not painted flat. */
+.btn::after {
+  content: "";
+  position: absolute;
+  top: 0;
+  bottom: 0;
+  width: 42%;
+  background: linear-gradient(90deg, transparent, rgba(255, 255, 255, 0.34), transparent);
+  opacity: 0;
+  pointer-events: none;
+}
+.btn:hover:not(:disabled)::after { animation: sweep 700ms var(--ease-out); }
+
+.btn:hover:not(:disabled) {
+  transform: perspective(700px) translate3d(0, var(--lift-1), 14px);
+  box-shadow: var(--elev-3);
+  border-color: var(--rim-strong);
+  background: var(--plane-3);
+}
+.btn:active:not(:disabled) {
+  transform: perspective(700px) translate3d(0, 1px, -6px) scale(0.985);
+  box-shadow: var(--elev-0);
+  transition-duration: 60ms;
+}
+.btn:disabled {
+  cursor: not-allowed;
+  opacity: 0.45;
+  box-shadow: none;
+  transform: none;
+}
+
+.btn--primary {
+  border-color: transparent;
+  background: var(--accent-gradient);
+  background-size: 170% 170%;
+  color: #fff;
+  box-shadow: var(--elev-2), 0 10px 30px -10px var(--accent-glow);
+  transition:
+    transform var(--t-fast) var(--ease-out),
+    box-shadow var(--t-base) var(--ease-out),
+    background-position var(--t-slow) var(--ease-out);
+}
+.btn--primary:hover:not(:disabled) {
+  background-position: 100% 0;
+  box-shadow: var(--elev-4), 0 20px 46px -12px var(--accent-glow);
+  border-color: transparent;
+}
+
+.btn--ghost {
+  background: transparent;
+  border-color: transparent;
+  box-shadow: none;
+  color: var(--ink-2);
+}
+.btn--ghost:hover:not(:disabled) {
+  background: var(--plane-1);
+  border-color: var(--rim);
+  color: var(--ink);
+  box-shadow: var(--elev-2);
+}
+
+.btn--sm { height: 34px; padding: 0 13px; font-size: 13px; border-radius: var(--r-xs); }
+.btn--icon { width: 42px; padding: 0; }
+.btn--icon.btn--sm { width: 34px; }
+
+/* ---- fields ----------------------------------------------------------- */
+.field { display: flex; flex-direction: column; gap: 7px; }
+.field__hint { font-size: 12.5px; color: var(--ink-4); }
+
+/* Inputs sit *below* the surface (inset shadow) — a well, not a slab. It is
+   the one place the depth deliberately reverses, which is how a real control
+   panel separates "put something in here" from "press this". */
+.input,
+.textarea,
+.select {
+  width: 100%;
+  padding: 0 14px;
+  height: 42px;
+  border-radius: var(--r-sm);
+  border: 1px solid var(--rim);
+  background: var(--plane-0);
+  color: var(--ink);
+  box-shadow: inset 0 2px 6px rgba(0, 0, 0, 0.22), 0 1px 0 var(--rim-top);
+  transition:
+    border-color var(--t-fast) var(--ease-out),
+    box-shadow var(--t-base) var(--ease-out),
+    background-color var(--t-fast) var(--ease-out);
+}
+:root[data-theme="light"] .input,
+:root[data-theme="light"] .textarea,
+:root[data-theme="light"] .select {
+  box-shadow: inset 0 2px 5px rgba(30, 40, 90, 0.07), 0 1px 0 var(--rim-top);
+}
+
+.textarea { height: auto; padding: 11px 14px; resize: vertical; min-height: 84px; line-height: 1.5; }
+
+.input::placeholder,
+.textarea::placeholder { color: var(--ink-4); }
+
+.input:hover, .textarea:hover, .select:hover { border-color: var(--rim-strong); background: var(--plane-1); }
+.input:focus, .textarea:focus, .select:focus {
+  outline: none;
+  border-color: color-mix(in oklab, var(--accent) 62%, transparent);
+  box-shadow: inset 0 2px 6px rgba(0, 0, 0, 0.2), 0 0 0 3px var(--accent-soft), 0 10px 28px -12px var(--accent-glow);
+  background: var(--plane-1);
+}
+
+.input-wrap { position: relative; display: flex; align-items: center; width: 100%; }
+.input-wrap .input { padding-left: 40px; padding-right: 40px; }
+.input-wrap__icon {
+  position: absolute;
+  left: 13px;
+  display: grid;
+  place-items: center;
+  color: var(--ink-4);
+  pointer-events: none;
+  transition: color var(--t-fast) var(--ease-out);
+}
+.input-wrap:focus-within .input-wrap__icon { color: var(--accent); }
+.input-wrap__clear {
+  position: absolute;
+  right: 8px;
+  height: 26px;
+  width: 26px;
+  display: grid;
+  place-items: center;
+  border: 0;
+  border-radius: var(--r-pill);
+  background: var(--plane-2);
+  color: var(--ink-3);
+  cursor: pointer;
+  transition: transform var(--t-fast) var(--ease-spring), background-color var(--t-fast) var(--ease-out), color var(--t-fast) var(--ease-out);
+}
+.input-wrap__clear:hover { background: var(--plane-3); color: var(--ink); transform: scale(1.14); }
+
+/* ---- checkbox: a switch plate that lifts when engaged ----------------- */
+.check {
+  position: relative;
+  display: flex;
+  align-items: center;
+  gap: 11px;
+  padding: 9px 12px;
+  border-radius: var(--r-sm);
+  border: 1px solid transparent;
+  cursor: pointer;
+  user-select: none;
+  transition:
+    transform var(--t-fast) var(--ease-out),
+    background-color var(--t-fast) var(--ease-out),
+    border-color var(--t-fast) var(--ease-out),
+    box-shadow var(--t-base) var(--ease-out);
+}
+.check:hover {
+  background: var(--plane-1);
+  border-color: var(--rim);
+  transform: perspective(800px) translate3d(0, -2px, 12px);
+  box-shadow: var(--elev-2);
+}
+.check--on {
+  background: var(--accent-soft);
+  border-color: color-mix(in oklab, var(--accent) 42%, transparent);
+  box-shadow: var(--elev-2), 0 0 0 1px var(--accent-soft);
+  transform: perspective(800px) translate3d(0, -2px, 14px);
+}
+.check__box {
+  flex: none;
+  width: 20px;
+  height: 20px;
+  border-radius: 6px;
+  border: 1.5px solid var(--rim-strong);
+  background: var(--plane-0);
+  display: grid;
+  place-items: center;
+  color: #fff;
+  box-shadow: inset 0 1px 3px rgba(0, 0, 0, 0.3);
+  transition: background-color var(--t-base) var(--ease-out),
+    border-color var(--t-base) var(--ease-out), box-shadow var(--t-base) var(--ease-out),
+    transform var(--t-base) var(--ease-spring);
+}
+.check--on .check__box {
+  background: var(--accent-gradient);
+  border-color: transparent;
+  box-shadow: 0 4px 12px -3px var(--accent-glow);
+  transform: scale(1.06);
+}
+.check__box svg { opacity: 0; transform: scale(0.4) rotate(-25deg); transition: opacity var(--t-base) linear, transform var(--t-base) var(--ease-spring); }
+.check--on .check__box svg { opacity: 1; transform: scale(1) rotate(0); }
+.check__text { min-width: 0; font-size: 14px; }
+.check input { position: absolute; opacity: 0; width: 0; height: 0; }
+.check:focus-within { box-shadow: 0 0 0 2px var(--bg-deep), 0 0 0 4px var(--accent); }
+
+/* ---- segmented control ------------------------------------------------ */
+.segmented {
+  position: relative;
+  display: inline-flex;
+  padding: 4px;
+  gap: 2px;
+  border-radius: var(--r-sm);
+  background: var(--plane-0);
+  border: 1px solid var(--rim);
+  box-shadow: inset 0 2px 6px rgba(0, 0, 0, 0.2);
+}
+/* The thumb glides between options with a slight overshoot, so switching
+   feels like a physical toggle snapping over rather than a class swap. */
+.segmented__thumb {
+  position: absolute;
+  top: 4px;
+  bottom: 4px;
+  border-radius: 9px;
+  background: var(--plane-3);
+  box-shadow: var(--elev-2);
+  border: 1px solid var(--rim-strong);
+  transition: transform var(--t-base) var(--ease-spring), width var(--t-base) var(--ease-spring);
+  pointer-events: none;
+}
+.segmented__opt {
+  position: relative;
+  z-index: 1;
+  border: 0;
+  background: transparent;
+  padding: 0 15px;
+  height: 34px;
+  border-radius: 9px;
+  font-size: 13.5px;
+  font-weight: 560;
+  color: var(--ink-3);
+  cursor: pointer;
+  white-space: nowrap;
+  transition: color var(--t-fast) var(--ease-out), transform var(--t-fast) var(--ease-out);
+}
+.segmented__opt:hover { color: var(--ink-2); }
+.segmented__opt[aria-checked="true"] { color: var(--ink); }
+.segmented__opt:active { transform: scale(0.96); }
+
+/* ---- badge / chip ----------------------------------------------------- */
+.badge {
+  display: inline-flex;
+  align-items: center;
+  gap: 6px;
+  padding: 3px 10px 3px 9px;
+  border-radius: var(--r-pill);
+  font-size: 11.5px;
+  font-weight: 640;
+  white-space: nowrap;
+  border: 1px solid var(--rim);
+  background: var(--plane-1);
+  box-shadow: var(--elev-0);
+}
+.badge__dot {
+  width: 6px;
+  height: 6px;
+  border-radius: 50%;
+  background: currentColor;
+  box-shadow: 0 0 8px currentColor;
+  flex: none;
+}
+.badge--ok   { color: var(--ok);   border-color: color-mix(in oklab, var(--ok) 34%, transparent);   background: color-mix(in oklab, var(--ok) 12%, transparent); }
+.badge--warn { color: var(--warn); border-color: color-mix(in oklab, var(--warn) 38%, transparent); background: color-mix(in oklab, var(--warn) 13%, transparent); }
+.badge--bad  { color: var(--bad);  border-color: color-mix(in oklab, var(--bad) 36%, transparent);  background: color-mix(in oklab, var(--bad) 12%, transparent); }
+.badge--info { color: var(--info); border-color: color-mix(in oklab, var(--info) 34%, transparent); background: color-mix(in oklab, var(--info) 12%, transparent); }
+.badge--live .badge__dot { animation: breathe 1.8s var(--ease-in-out) infinite; }
+
+.chip {
+  display: inline-flex;
+  align-items: center;
+  gap: 8px;
+  padding: 6px 8px 6px 14px;
+  border-radius: var(--r-pill);
+  background: var(--plane-2);
+  border: 1px solid var(--rim);
+  box-shadow: var(--elev-1);
+  font-size: 13.5px;
+  font-weight: 540;
+  transition: transform var(--t-base) var(--ease-spring), box-shadow var(--t-base) var(--ease-out), background-color var(--t-fast) var(--ease-out);
+  animation: pop-in var(--t-base) var(--ease-spring) both;
+}
+.chip:hover {
+  transform: perspective(800px) translate3d(0, var(--lift-1), 16px);
+  box-shadow: var(--elev-3);
+  background: var(--plane-3);
+}
+.chip__x {
+  width: 20px;
+  height: 20px;
+  display: grid;
+  place-items: center;
+  border: 0;
+  border-radius: 50%;
+  background: transparent;
+  color: var(--ink-3);
+  cursor: pointer;
+  transition: transform var(--t-base) var(--ease-spring), background-color var(--t-fast) var(--ease-out), color var(--t-fast) var(--ease-out);
+}
+.chip__x:hover {
+  background: color-mix(in oklab, var(--bad) 22%, transparent);
+  color: var(--bad);
+  transform: rotate(90deg) scale(1.12);
+}
+
+/* ---- spinner ---------------------------------------------------------- */
+.spinner {
+  width: 16px;
+  height: 16px;
+  border-radius: 50%;
+  border: 2px solid color-mix(in oklab, currentColor 25%, transparent);
+  border-top-color: currentColor;
+  animation: spin 640ms linear infinite;
+  flex: none;
+}
+
+/* ---- tooltip ---------------------------------------------------------- */
+.tip { position: relative; display: inline-flex; }
+.tip__bubble {
+  position: absolute;
+  bottom: calc(100% + 10px);
+  left: 50%;
+  transform: perspective(800px) translate3d(-50%, 6px, -40px) scale(0.94);
+  padding: 7px 11px;
+  border-radius: var(--r-xs);
+  background: var(--plane-3);
+  backdrop-filter: blur(20px);
+  -webkit-backdrop-filter: blur(20px);
+  border: 1px solid var(--rim-strong);
+  box-shadow: var(--elev-4);
+  font-size: 12.5px;
+  font-weight: 500;
+  color: var(--ink);
+  white-space: nowrap;
+  opacity: 0;
+  pointer-events: none;
+  z-index: 60;
+  transition: opacity var(--t-base) var(--ease-out), transform var(--t-base) var(--ease-spring);
+}
+.tip:hover .tip__bubble,
+.tip:focus-within .tip__bubble { opacity: 1; transform: perspective(800px) translate3d(-50%, 0, 0) scale(1); }
+
+/* ---- inline message --------------------------------------------------- */
+.note {
+  display: flex;
+  align-items: flex-start;
+  gap: 11px;
+  padding: 13px 16px;
+  border-radius: var(--r-md);
+  border: 1px solid var(--rim);
+  background: var(--plane-1);
+  box-shadow: var(--elev-1);
+  font-size: 13.5px;
+  color: var(--ink-2);
+  animation: rise-in var(--t-base) var(--ease-out) both;
+}
+.note__icon { flex: none; margin-top: 1px; }
+.note--warn { border-color: color-mix(in oklab, var(--warn) 34%, transparent); background: color-mix(in oklab, var(--warn) 9%, var(--plane-1)); }
+.note--warn .note__icon { color: var(--warn); }
+.note--bad  { border-color: color-mix(in oklab, var(--bad) 34%, transparent);  background: color-mix(in oklab, var(--bad) 9%, var(--plane-1)); }
+.note--bad .note__icon { color: var(--bad); }
+.note--ok   { border-color: color-mix(in oklab, var(--ok) 32%, transparent);   background: color-mix(in oklab, var(--ok) 9%, var(--plane-1)); }
+.note--ok .note__icon { color: var(--ok); }
+.note--info .note__icon { color: var(--info); }
+
+kbd {
+  display: inline-grid;
+  place-items: center;
+  min-width: 21px;
+  height: 21px;
+  padding: 0 6px;
+  border-radius: 6px;
+  background: var(--plane-2);
+  border: 1px solid var(--rim-strong);
+  border-bottom-width: 2px;
+  box-shadow: 0 1px 0 var(--rim);
+  font-family: var(--font-sans);
+  font-size: 11px;
+  font-weight: 620;
+  color: var(--ink-2);
+}

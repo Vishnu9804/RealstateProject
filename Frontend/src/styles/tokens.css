@@ -1,0 +1,167 @@
+/**
+ * Design tokens — the single source of truth for the whole UI's colour,
+ * depth, motion and spacing language.
+ *
+ * The depth model is the important part. Every surface in this app sits on
+ * a named plane (`--elev-*`), and each plane is described by three stacked
+ * shadows: a wide ambient occlusion shadow (the surface's "distance" from
+ * the page), a tighter key-light shadow (its edge), and an inset rim
+ * highlight along the top edge (light catching the bevel). Raising an
+ * element to a higher plane on hover/selection therefore reads as it
+ * physically moving toward the viewer, not just as a colour change.
+ */
+
+:root {
+  /* ---- brand ramp ---- */
+  --violet-400: #a78bfa;
+  --violet-500: #8b5cf6;
+  --violet-600: #7c3aed;
+  --cyan-400: #22d3ee;
+  --cyan-500: #06b6d4;
+  --emerald-400: #34d399;
+  --emerald-500: #10b981;
+  --amber-400: #fbbf24;
+  --amber-500: #f59e0b;
+  --rose-400: #fb7185;
+  --rose-500: #f43f5e;
+
+  --accent: var(--violet-500);
+  --accent-soft: color-mix(in oklab, var(--accent) 18%, transparent);
+  --accent-glow: color-mix(in oklab, var(--accent) 42%, transparent);
+  --accent-gradient: linear-gradient(135deg, var(--violet-400) 0%, var(--violet-600) 45%, var(--cyan-500) 100%);
+
+  /* ---- radii ---- */
+  --r-xs: 8px;
+  --r-sm: 12px;
+  --r-md: 16px;
+  --r-lg: 22px;
+  --r-xl: 30px;
+  --r-pill: 999px;
+
+  /* ---- motion ---- */
+  --ease-out: cubic-bezier(0.16, 1, 0.3, 1);
+  --ease-spring: cubic-bezier(0.34, 1.56, 0.64, 1);
+  --ease-in-out: cubic-bezier(0.65, 0, 0.35, 1);
+  --t-fast: 140ms;
+  --t-base: 260ms;
+  --t-slow: 520ms;
+  --t-lazy: 900ms;
+
+  /* ---- 3D ---- */
+  --perspective: 1400px;
+  --lift-1: -3px;
+  --lift-2: -7px;
+
+  /* ---- layout ---- */
+  --header-h: 68px;
+  --shell-max: 1440px;
+  --gutter: clamp(16px, 3.2vw, 40px);
+
+  --font-sans: "Inter", "Segoe UI Variable", system-ui, -apple-system, "Segoe UI", Roboto, sans-serif;
+  --font-mono: "JetBrains Mono", ui-monospace, "SF Mono", "Cascadia Mono", Consolas, monospace;
+}
+
+/* ============================ DARK (default) ============================ */
+:root,
+:root[data-theme="dark"] {
+  color-scheme: dark;
+
+  --bg-void: #05060d;
+  --bg-deep: #080a15;
+  --bg-mid: #0c0f1d;
+
+  /* Glass planes — translucent so the aurora behind genuinely shows through,
+     which is what sells "the panel floats in front of the background". */
+  --plane-0: rgba(255, 255, 255, 0.024);
+  --plane-1: rgba(255, 255, 255, 0.042);
+  --plane-2: rgba(255, 255, 255, 0.062);
+  --plane-3: rgba(255, 255, 255, 0.086);
+
+  --rim: rgba(255, 255, 255, 0.10);
+  --rim-strong: rgba(255, 255, 255, 0.20);
+  --rim-top: rgba(255, 255, 255, 0.28);
+
+  --ink: #f2f4fb;
+  --ink-2: #b9c0d6;
+  --ink-3: #838ba6;
+  --ink-4: #5c6382;
+
+  --shadow-ambient: rgba(2, 3, 10, 0.55);
+  --shadow-key: rgba(2, 3, 10, 0.42);
+
+  --ok: var(--emerald-400);
+  --warn: var(--amber-400);
+  --bad: var(--rose-400);
+  --info: var(--cyan-400);
+
+  --grid-line: rgba(140, 160, 255, 0.055);
+  --scrim: rgba(4, 5, 12, 0.72);
+
+  /* Panels are translucent but no longer blur what sits behind them, so they
+     need enough body of their own to stay legible over the aurora. */
+  --surface: rgba(19, 22, 40, 0.72);
+  --surface-strong: rgba(23, 26, 46, 0.9);
+}
+
+/* ============================== LIGHT ================================== */
+:root[data-theme="light"] {
+  color-scheme: light;
+
+  --bg-void: #eef1f9;
+  --bg-deep: #f4f6fc;
+  --bg-mid: #ffffff;
+
+  --plane-0: rgba(255, 255, 255, 0.55);
+  --plane-1: rgba(255, 255, 255, 0.72);
+  --plane-2: rgba(255, 255, 255, 0.86);
+  --plane-3: rgba(255, 255, 255, 0.96);
+
+  --rim: rgba(16, 22, 54, 0.08);
+  --rim-strong: rgba(16, 22, 54, 0.16);
+  --rim-top: rgba(255, 255, 255, 0.95);
+
+  --ink: #131730;
+  --ink-2: #414a6e;
+  --ink-3: #6b748f;
+  --ink-4: #939bb4;
+
+  --shadow-ambient: rgba(30, 40, 90, 0.16);
+  --shadow-key: rgba(30, 40, 90, 0.13);
+
+  --accent: var(--violet-600);
+  --ok: #059669;
+  --warn: #b45309;
+  --bad: #e11d48;
+  --info: #0891b2;
+
+  --grid-line: rgba(80, 100, 190, 0.07);
+  --scrim: rgba(226, 231, 245, 0.7);
+
+  --surface: rgba(255, 255, 255, 0.8);
+  --surface-strong: rgba(255, 255, 255, 0.95);
+}
+
+/* ---- elevation planes -------------------------------------------------
+   Composed so that raising an element only swaps one variable. */
+:root {
+  --elev-0:
+    0 1px 2px var(--shadow-key),
+    inset 0 1px 0 var(--rim-top);
+  --elev-1:
+    0 2px 4px -1px var(--shadow-key),
+    0 8px 20px -6px var(--shadow-ambient),
+    inset 0 1px 0 var(--rim-top);
+  --elev-2:
+    0 3px 6px -2px var(--shadow-key),
+    0 16px 34px -10px var(--shadow-ambient),
+    inset 0 1px 0 var(--rim-top);
+  --elev-3:
+    0 6px 12px -4px var(--shadow-key),
+    0 28px 56px -16px var(--shadow-ambient),
+    inset 0 1px 0 var(--rim-top);
+  --elev-4:
+    0 10px 20px -6px var(--shadow-key),
+    0 48px 92px -24px var(--shadow-ambient),
+    inset 0 1px 0 var(--rim-top);
+  --glow-accent: 0 0 0 1px var(--accent-soft), 0 12px 40px -8px var(--accent-glow);
+}

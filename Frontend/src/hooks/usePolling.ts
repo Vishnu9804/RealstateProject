@@ -8,6 +8,14 @@ import { useEffect, useRef } from "react";
  * exactly the kind of bug that only shows up after hours of real usage,
  * not during a quick manual test.
  *
+ * Polling also pauses while the tab is hidden and fires once immediately on
+ * return. This dashboard is the kind of thing people leave open in a
+ * background tab all day; without this it would hammer the backend around
+ * the clock for data nobody is looking at, and — because browsers throttle
+ * timers in hidden tabs — the first thing the user would see on coming back
+ * is stale data waiting for the next tick. Refreshing on focus means the
+ * screen is correct by the time they have finished looking at it.
+ *
  * `callback` should handle its own errors (e.g. via try/catch and setting
  * error state) — a thrown/rejected callback here would silently kill the
  * interval instead of just failing one tick.
@@ -20,15 +28,36 @@ export function usePolling(callback: () => void | Promise<void>, intervalMs: num
     if (!enabled) return;
 
     let cancelled = false;
+    let id: ReturnType<typeof setInterval> | undefined;
+
     const tick = () => {
-      if (!cancelled) void callbackRef.current();
+      if (!cancelled && !document.hidden) void callbackRef.current();
     };
 
-    tick();
-    const id = setInterval(tick, intervalMs);
+    const start = () => {
+      if (id !== undefined) return;
+      tick();
+      id = setInterval(tick, intervalMs);
+    };
+
+    const stop = () => {
+      if (id === undefined) return;
+      clearInterval(id);
+      id = undefined;
+    };
+
+    const onVisibilityChange = () => {
+      if (document.hidden) stop();
+      else start();
+    };
+
+    if (!document.hidden) start();
+    document.addEventListener("visibilitychange", onVisibilityChange);
+
     return () => {
       cancelled = true;
-      clearInterval(id);
+      stop();
+      document.removeEventListener("visibilitychange", onVisibilityChange);
     };
   }, [intervalMs, enabled]);
 }

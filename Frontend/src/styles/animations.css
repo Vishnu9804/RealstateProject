@@ -1,0 +1,102 @@
+/* Motion library. Entrances come *toward* the viewer (translateZ / scale up
+   from behind) so arriving content obeys the same depth rules as everything
+   else, and the aurora layers drift on long, prime-ish durations so they
+   never visibly loop in sync. */
+
+@keyframes rise-in {
+  from { opacity: 0; transform: translate3d(0, 18px, -60px) scale(0.97); }
+  to   { opacity: 1; transform: translate3d(0, 0, 0) scale(1); }
+}
+
+@keyframes fade-in {
+  from { opacity: 0; }
+  to   { opacity: 1; }
+}
+
+@keyframes pop-in {
+  0%   { opacity: 0; transform: scale(0.86) translateZ(-40px); }
+  60%  { opacity: 1; transform: scale(1.03) translateZ(0); }
+  100% { opacity: 1; transform: scale(1) translateZ(0); }
+}
+
+@keyframes slide-down {
+  from { opacity: 0; transform: translate3d(0, -14px, -50px); }
+  to   { opacity: 1; transform: translate3d(0, 0, 0); }
+}
+
+@keyframes toast-in {
+  from { opacity: 0; transform: translate3d(0, 26px, -120px) rotateX(28deg); }
+  to   { opacity: 1; transform: translate3d(0, 0, 0) rotateX(0deg); }
+}
+
+@keyframes toast-out {
+  to { opacity: 0; transform: translate3d(0, 12px, -80px) scale(0.94); }
+}
+
+@keyframes expand-row {
+  from { opacity: 0; transform: translateY(-6px); }
+  to   { opacity: 1; transform: translateY(0); }
+}
+
+@keyframes pulse-ring {
+  0%   { box-shadow: 0 0 0 0 var(--accent-glow); }
+  70%  { box-shadow: 0 0 0 12px transparent; }
+  100% { box-shadow: 0 0 0 0 transparent; }
+}
+
+@keyframes breathe {
+  0%, 100% { opacity: 0.55; transform: scale(1); }
+  50%      { opacity: 1; transform: scale(1.06); }
+}
+
+@keyframes spin { to { transform: rotate(360deg); } }
+
+@keyframes shimmer {
+  from { background-position: -180% 0; }
+  to   { background-position: 180% 0; }
+}
+
+@keyframes drift-a {
+  0%   { transform: translate3d(0, 0, 0) scale(1); }
+  33%  { transform: translate3d(6vw, -4vh, 0) scale(1.12); }
+  66%  { transform: translate3d(-3vw, 5vh, 0) scale(0.94); }
+  100% { transform: translate3d(0, 0, 0) scale(1); }
+}
+
+@keyframes drift-b {
+  0%   { transform: translate3d(0, 0, 0) scale(1.05); }
+  40%  { transform: translate3d(-7vw, 6vh, 0) scale(0.92); }
+  75%  { transform: translate3d(4vw, -5vh, 0) scale(1.15); }
+  100% { transform: translate3d(0, 0, 0) scale(1.05); }
+}
+
+@keyframes float-y {
+  0%, 100% { transform: translateY(0); }
+  50%      { transform: translateY(-10px); }
+}
+
+@keyframes sweep {
+  0%   { transform: translateX(-120%) skewX(-18deg); opacity: 0; }
+  40%  { opacity: 0.7; }
+  100% { transform: translateX(220%) skewX(-18deg); opacity: 0; }
+}
+
+@keyframes scan {
+  0%   { transform: translateY(-100%); opacity: 0; }
+  35%  { opacity: 1; }
+  100% { transform: translateY(320%); opacity: 0; }
+}
+
+@keyframes dash-flow {
+  to { stroke-dashoffset: -1000; }
+}
+
+@keyframes ticker {
+  0%   { opacity: 0; transform: translateY(8px) scale(0.9); }
+  100% { opacity: 1; transform: translateY(0) scale(1); }
+}
+
+/* Utility hooks used by components; `--d` staggers a list. */
+.anim-rise { animation: rise-in var(--t-slow) var(--ease-out) both; animation-delay: var(--d, 0ms); }
+.anim-fade { animation: fade-in var(--t-base) var(--ease-out) both; animation-delay: var(--d, 0ms); }
+.anim-pop  { animation: pop-in var(--t-base) var(--ease-spring) both; animation-delay: var(--d, 0ms); }

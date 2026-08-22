@@ -13,6 +13,7 @@ from __future__ import annotations
 import threading
 from typing import List, Optional
 
+from Config.settings import get_settings
 from Database.session import is_database_configured
 from Middleware import step_logger
 from Model.group import WhatsAppGroup
@@ -40,7 +41,10 @@ def start_agent_in_background() -> None:
     """Starts the WhatsApp client on a background thread so it never blocks
     the FastAPI/Uvicorn event loop. Runs for the lifetime of the process."""
     global _client, _message_buffer
-    _message_buffer = MessageBufferService(on_batch_ready=property_pipeline_service.handle_batch_ready)
+    _message_buffer = MessageBufferService(
+        on_batch_ready=property_pipeline_service.handle_batch_ready,
+        batch_window_seconds=get_settings().batch_window_minutes * 60,
+    )
     _client = WhatsAppClient(
         on_groups_ready=_handle_groups_ready,
         on_group_selection_made=_handle_group_selection_made,

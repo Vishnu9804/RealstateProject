@@ -1,12 +1,67 @@
 <!doctype html>
-<html lang="en">
+<html lang="en" data-theme="dark">
   <head>
     <meta charset="UTF-8" />
     <meta name="viewport" content="width=device-width, initial-scale=1.0" />
-    <title>Real Estate WhatsApp Ingestion</title>
+    <meta name="color-scheme" content="dark light" />
+    <meta name="theme-color" content="#05060d" />
+    <meta name="description" content="Structured real-estate listings captured from WhatsApp groups." />
+    <title>Estate Signal — WhatsApp property intake</title>
+
+    <link rel="preconnect" href="https://fonts.googleapis.com" />
+    <link rel="preconnect" href="https://fonts.gstatic.com" crossorigin />
+    <link
+      href="https://fonts.googleapis.com/css2?family=Inter:wght@400;500;600;700&family=JetBrains+Mono:wght@400;500&display=swap"
+      rel="stylesheet"
+    />
+
+    <style>
+      /* Painted before React mounts so the first frame is already the right
+         colour — otherwise the browser shows a white page for one frame and
+         the app appears to flash on every single load. */
+      html { background: #05060d; }
+      html[data-theme="light"] { background: #eef1f9; }
+      #boot {
+        position: fixed;
+        inset: 0;
+        display: grid;
+        place-items: center;
+        gap: 14px;
+        align-content: center;
+        color: #838ba6;
+        font: 500 13px/1.5 system-ui, -apple-system, "Segoe UI", Roboto, sans-serif;
+      }
+      #boot span {
+        width: 26px;
+        height: 26px;
+        border-radius: 50%;
+        border: 2px solid rgba(139, 92, 246, 0.25);
+        border-top-color: #8b5cf6;
+        animation: boot-spin 700ms linear infinite;
+      }
+      @keyframes boot-spin { to { transform: rotate(360deg); } }
+    </style>
+
+    <script>
+      // Applies the saved theme before first paint. Reading it inside React
+      // would be one render too late, and the resulting light-to-dark jump
+      // is the most obvious kind of "unfinished" an app can look.
+      (function () {
+        try {
+          var stored = JSON.parse(localStorage.getItem("ui.theme") || '"dark"');
+          if (stored === "light" || stored === "dark") {
+            document.documentElement.setAttribute("data-theme", stored);
+          }
+        } catch (e) {
+          /* storage blocked — the dark default in the markup already applies */
+        }
+      })();
+    </script>
   </head>
   <body>
-    <div id="root"></div>
+    <div id="root">
+      <div id="boot"><span></span>Starting…</div>
+    </div>
     <script type="module" src="/src/main.tsx"></script>
   </body>
 </html>

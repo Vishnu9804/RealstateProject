@@ -1,14 +1,11 @@
-* {
-  box-sizing: border-box;
-}
-
-body {
-  margin: 0;
-  font-family: system-ui, -apple-system, "Segoe UI", Roboto, sans-serif;
-  background: #f5f6f8;
-  color: #1a1a1a;
-}
-
-a {
-  color: inherit;
-}
+/* Order matters: tokens define the vocabulary, base applies it to the raw
+   document, then each layer builds on the one above it. */
+@import "./styles/tokens.css";
+@import "./styles/base.css";
+@import "./styles/animations.css";
+@import "./styles/scene.css";
+@import "./styles/surfaces.css";
+@import "./styles/controls.css";
+@import "./styles/app.css";
+@import "./styles/filters.css";
+@import "./styles/cursor.css";

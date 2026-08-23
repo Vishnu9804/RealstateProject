@@ -2,7 +2,7 @@
 Check" in the architecture diagram). Pure decision logic: given a new
 property's embeddings, decides whether it's a duplicate of something
 already accepted, genuinely new, or too uncertain to call automatically.
-Does not store anything itself — storage is Service/property_vector_store.py;
+Does not store anything itself — storage is Service/WhatsAppDataFetchingService/property_vector_store.py;
 property_pipeline_service.py wires the two together.
 
 Architecture: retrieval vs. decision are deliberately separate steps.
@@ -25,7 +25,7 @@ different properties if the price, BHK, or area disagree outright. So a
 disagreement in those fields is a hard contradiction that overrides the
 weighted score entirely, in either direction of confidence.
 
-Three outcomes, not two (see Model/duplicate_verdict.py): a wrong
+Three outcomes, not two (see Model/WhatsAppDataFetchingModel/duplicate_verdict.py): a wrong
 HIGH_CONFIDENCE_DUPLICATE silently loses a real property; a wrong
 HIGH_CONFIDENCE_NEW clutters the database with a redundant row. When the
 evidence genuinely doesn't support either call with enough confidence, the
@@ -34,7 +34,7 @@ resolve (see property_pipeline_service.py).
 
 None of this is claimed to be 100% accurate. WhatsApp listings are messy,
 inconsistently worded, and often incomplete; the thresholds below are
-reasoned starting points (see Model/duplicate_detection_settings.py's
+reasoned starting points (see Model/WhatsAppDataFetchingModel/duplicate_detection_settings.py's
 docstrings for exactly which examples they were derived from), not proven
 constants, and are expected to need recalibration against real data.
 
@@ -52,11 +52,11 @@ import numpy as np
 
 from Database import settings_repository
 from Database.session import is_database_configured
-from Model.duplicate_check_result import DuplicateCheckResult
-from Model.duplicate_detection_settings import DuplicateDetectionSettings, NumericFieldThresholds
-from Model.duplicate_verdict import DuplicateVerdict
-from Model.embedded_property import EmbeddedProperty
-from Service import embedding_service, property_vector_store
+from Model.WhatsAppDataFetchingModel.duplicate_check_result import DuplicateCheckResult
+from Model.WhatsAppDataFetchingModel.duplicate_detection_settings import DuplicateDetectionSettings, NumericFieldThresholds
+from Model.WhatsAppDataFetchingModel.duplicate_verdict import DuplicateVerdict
+from Model.WhatsAppDataFetchingModel.embedded_property import EmbeddedProperty
+from Service.WhatsAppDataFetchingService import embedding_service, property_vector_store
 
 _SETTINGS_KEY = "duplicate_detection_settings"
 

@@ -1,14 +1,14 @@
 """HTTP routes for the WhatsApp feature. Thin by design — all logic lives in
-Service/whatsapp_service.py; this module only translates HTTP <-> Service.
+Service/WhatsAppDataFetchingService/whatsapp_service.py; this module only translates HTTP <-> Service.
 """
 
 from fastapi import APIRouter, HTTPException, Response
 
-from Model.group import WhatsAppGroup
-from Model.monitoring_selection import MonitoringSelectionRequest
-from Model.personal_chat import WhatsAppPersonalChat
-from Model.whatsapp_message import WhatsAppChatMessage
-from Service import whatsapp_service
+from Model.WhatsAppDataFetchingModel.group import WhatsAppGroup
+from Model.WhatsAppDataFetchingModel.monitoring_selection import MonitoringSelectionRequest
+from Model.WhatsAppDataFetchingModel.personal_chat import WhatsAppPersonalChat
+from Model.WhatsAppDataFetchingModel.whatsapp_message import WhatsAppChatMessage
+from Service.WhatsAppDataFetchingService import whatsapp_service
 
 router = APIRouter(prefix="/whatsapp", tags=["whatsapp"])
 

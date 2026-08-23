@@ -19,7 +19,7 @@ from __future__ import annotations
 import threading
 from typing import Callable, List, Optional
 
-from Model.whatsapp_message import WhatsAppChatMessage
+from Model.WhatsAppDataFetchingModel.whatsapp_message import WhatsAppChatMessage
 
 DEFAULT_BATCH_SIZE = 10
 DEFAULT_BATCH_WINDOW_SECONDS = 60 * 60  # 1 hour

@@ -1,9 +1,9 @@
 """Owns the "back half" of the property pipeline: receiving flushed message
-batches from the buffering stage (Service/message_buffer_service.py),
+batches from the buffering stage (Service/WhatsAppDataFetchingService/message_buffer_service.py),
 running them through the LLM structuring stage (Agent/
-property_structurer.py), the embedding stage (Service/embedding_service.py),
-and the duplicate-detection stage (Service/duplicate_detection_service.py),
-then storing the result (Service/property_vector_store.py) for the
+property_structurer.py), the embedding stage (Service/WhatsAppDataFetchingService/embedding_service.py),
+and the duplicate-detection stage (Service/WhatsAppDataFetchingService/duplicate_detection_service.py),
+then storing the result (Service/WhatsAppDataFetchingService/property_vector_store.py) for the
 Controller layer to read.
 
 Every structured property is embedded exactly once, right here, right after
@@ -26,14 +26,14 @@ from __future__ import annotations
 
 from typing import List, Optional
 
-from Agent import property_structurer
+from Agent.WhatsAppDataFetchingAgent import property_structurer
 from Middleware import step_logger
-from Model.duplicate_verdict import DuplicateVerdict
-from Model.embedded_property import EmbeddedProperty
-from Model.property_record import PropertyRecord
-from Model.structured_property import StructuredProperty
-from Model.whatsapp_message import WhatsAppChatMessage
-from Service import (
+from Model.WhatsAppDataFetchingModel.duplicate_verdict import DuplicateVerdict
+from Model.WhatsAppDataFetchingModel.embedded_property import EmbeddedProperty
+from Model.WhatsAppDataFetchingModel.property_record import PropertyRecord
+from Model.WhatsAppDataFetchingModel.structured_property import StructuredProperty
+from Model.WhatsAppDataFetchingModel.whatsapp_message import WhatsAppChatMessage
+from Service.WhatsAppDataFetchingService import (
     display_settings_service,
     duplicate_detection_service,
     embedding_service,

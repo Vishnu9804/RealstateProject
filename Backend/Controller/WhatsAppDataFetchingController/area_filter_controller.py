@@ -1,12 +1,12 @@
 """HTTP routes for configuring the area-keyword filter (Stage 1 of the
 property pipeline). Thin by design — matching logic lives in
-Service/area_filter_service.py.
+Service/WhatsAppDataFetchingService/area_filter_service.py.
 """
 
 from fastapi import APIRouter
 
-from Model.area_filter import AreaFilterSettings
-from Service import area_filter_service
+from Model.WhatsAppDataFetchingModel.area_filter import AreaFilterSettings
+from Service.WhatsAppDataFetchingService import area_filter_service
 
 router = APIRouter(prefix="/area-filter", tags=["area-filter"])
 

@@ -1,12 +1,12 @@
 """HTTP routes for structured property data — the output of the LLM
 structuring stage, and eventually the "Excel-like" dashboard data. Thin by
-design; state lives in Service/property_pipeline_service.py.
+design; state lives in Service/WhatsAppDataFetchingService/property_pipeline_service.py.
 """
 
 from fastapi import APIRouter
 
-from Model.property_record import PropertyRecord
-from Service import property_pipeline_service
+from Model.WhatsAppDataFetchingModel.property_record import PropertyRecord
+from Service.WhatsAppDataFetchingService import property_pipeline_service
 
 router = APIRouter(prefix="/properties", tags=["properties"])
 

@@ -1,11 +1,11 @@
 """HTTP routes for tuning the duplicate-detection thresholds. Thin by
-design — decision logic lives in Service/duplicate_detection_service.py.
+design — decision logic lives in Service/WhatsAppDataFetchingService/duplicate_detection_service.py.
 """
 
 from fastapi import APIRouter
 
-from Model.duplicate_detection_settings import DuplicateDetectionSettings
-from Service import duplicate_detection_service
+from Model.WhatsAppDataFetchingModel.duplicate_detection_settings import DuplicateDetectionSettings
+from Service.WhatsAppDataFetchingService import duplicate_detection_service
 
 router = APIRouter(prefix="/duplicate-detection", tags=["duplicate-detection"])
 

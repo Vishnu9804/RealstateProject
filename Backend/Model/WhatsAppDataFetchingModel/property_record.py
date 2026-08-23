@@ -1,4 +1,4 @@
-from Model.structured_property import StructuredProperty
+from Model.WhatsAppDataFetchingModel.structured_property import StructuredProperty
 
 
 class PropertyRecord(StructuredProperty):

@@ -1,5 +1,5 @@
 """Postgres + pgvector implementation of the property store — the
-production backend behind Service/property_vector_store.py once
+production backend behind Service/WhatsAppDataFetchingService/property_vector_store.py once
 DATABASE_URL is set. Same contract as the in-memory version it sits
 alongside: add_property, find_top_candidates, get_all_properties,
 get_property_count. Callers never call this module directly.
@@ -13,7 +13,7 @@ from sqlalchemy import func, select
 
 from Database.models import PropertyRow
 from Database.session import get_session
-from Model.embedded_property import EmbeddedProperty
+from Model.WhatsAppDataFetchingModel.embedded_property import EmbeddedProperty
 
 _COLUMNS = (
     "source_message_id",
@@ -49,7 +49,7 @@ def find_top_candidates(vector: List[float], k: int) -> List[Tuple[EmbeddedPrope
     """Ranks by pgvector's cosine distance (`<=>`), ascending — closest
     first — then converts to a similarity score. Retrieval only: the final
     duplicate/new decision happens field-by-field in
-    Service/duplicate_detection_service.py, never here."""
+    Service/WhatsAppDataFetchingService/duplicate_detection_service.py, never here."""
     with get_session() as session:
         distance = PropertyRow.embedding.cosine_distance(vector)
         stmt = select(PropertyRow, (1 - distance).label("similarity")).order_by(distance).limit(k)

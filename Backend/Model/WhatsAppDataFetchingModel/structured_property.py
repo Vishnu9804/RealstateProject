@@ -6,7 +6,7 @@ from pydantic import BaseModel
 
 class StructuredProperty(BaseModel):
     """A single property listing, structured from a raw WhatsApp message by
-    the LLM stage (Agent/property_structurer.py) and merged with the
+    the LLM stage (Agent/WhatsAppDataFetchingAgent/property_structurer.py) and merged with the
     WhatsApp metadata that was already known for certain (sender/group/
     timestamp) rather than re-derived by the LLM. This is the shape the
     Postgres properties table (later step) will mirror.

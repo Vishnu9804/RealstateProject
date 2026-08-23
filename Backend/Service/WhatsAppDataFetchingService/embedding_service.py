@@ -30,7 +30,7 @@ from typing import List, Optional
 
 from sentence_transformers import SentenceTransformer
 
-from Model.structured_property import StructuredProperty
+from Model.WhatsAppDataFetchingModel.structured_property import StructuredProperty
 
 EMBEDDING_MODEL_NAME = "sentence-transformers/all-MiniLM-L6-v2"
 EMBEDDING_DIMENSIONS = 384
@@ -53,9 +53,9 @@ def build_embedding_text(prop: StructuredProperty) -> str:
     what actually makes two listings the same property.
 
     This whole-property vector is used only for candidate RETRIEVAL (see
-    Service/property_vector_store.py) — narrowing down which existing
+    Service/WhatsAppDataFetchingService/property_vector_store.py) — narrowing down which existing
     properties are worth a detailed look. The final duplicate/new decision
-    is made field-by-field instead (Service/duplicate_detection_service.py),
+    is made field-by-field instead (Service/WhatsAppDataFetchingService/duplicate_detection_service.py),
     using the per-field vectors from FIELD_EMBEDDING_NAMES below, not this
     combined one."""
     parts = [

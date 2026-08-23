@@ -14,7 +14,7 @@ saved contact name, group name, timestamp) is merged in afterwards by this
 module, not re-derived by the LLM — asking an LLM to faithfully copy data it
 didn't need to extract only adds a chance of transcription error for no
 benefit, and timezone/date-format conversion is exact arithmetic an LLM is
-the wrong tool for (see Service/timestamp_formatting.py).
+the wrong tool for (see Service/WhatsAppDataFetchingService/timestamp_formatting.py).
 """
 
 from __future__ import annotations
@@ -26,11 +26,11 @@ from google import genai
 from google.genai import types
 from pydantic import ValidationError
 
-from Agent.gemini_extraction_schema import GeminiPropertyExtraction
+from Agent.WhatsAppDataFetchingAgent.gemini_extraction_schema import GeminiPropertyExtraction
 from Config.settings import get_settings
 from Middleware import step_logger
-from Model.structured_property import StructuredProperty
-from Model.whatsapp_message import WhatsAppChatMessage
+from Model.WhatsAppDataFetchingModel.structured_property import StructuredProperty
+from Model.WhatsAppDataFetchingModel.whatsapp_message import WhatsAppChatMessage
 
 _client: Optional[genai.Client] = None
 

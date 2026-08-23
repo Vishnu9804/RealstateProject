@@ -24,7 +24,7 @@ import numpy as np
 
 from Database import property_repository
 from Database.session import is_database_configured
-from Model.embedded_property import EmbeddedProperty
+from Model.WhatsAppDataFetchingModel.embedded_property import EmbeddedProperty
 
 _MAX_STORED_PROPERTIES = 1000
 
@@ -45,7 +45,7 @@ def find_top_candidates(vector: List[float], k: int) -> List[Tuple[EmbeddedPrope
     """Returns up to `k` existing properties ranked by whole-property
     embedding similarity, highest first — RETRIEVAL only. The final
     duplicate/new decision is made field-by-field in
-    Service/duplicate_detection_service.py, which re-ranks these candidates
+    Service/WhatsAppDataFetchingService/duplicate_detection_service.py, which re-ranks these candidates
     rather than trusting this ordering directly."""
     if is_database_configured():
         return property_repository.find_top_candidates(vector, k)

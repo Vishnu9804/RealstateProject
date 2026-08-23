@@ -12,7 +12,7 @@ class FieldWeights(BaseModel):
     identifier a WhatsApp listing typically gives; property_type carries
     the least because it is coarse (e.g. "Flat" vs "Apartment" may just be
     wording, not a real distinction) and mostly useful as a contradiction
-    check (see Service/duplicate_detection_service.py) rather than a
+    check (see Service/WhatsAppDataFetchingService/duplicate_detection_service.py) rather than a
     fine-grained similarity signal.
     """
 
@@ -81,7 +81,7 @@ class DuplicateDetectionSettings(BaseModel):
 
     # How many existing properties (ranked by whole-property embedding
     # similarity) get a full field-level comparison. Embeddings only ever
-    # narrow the candidate list — see Service/property_vector_store.py.
+    # narrow the candidate list — see Service/WhatsAppDataFetchingService/property_vector_store.py.
     top_k_candidates: int = 10
 
     # A weighted score can only be labeled HIGH_CONFIDENCE_DUPLICATE if at

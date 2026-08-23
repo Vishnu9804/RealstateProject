@@ -5,7 +5,7 @@ Raw/qualified WhatsApp messages captured here stay in-memory, capped lists
 purely as proof that live messages are being received and filtered
 correctly — they were never meant to be the durable record. Structured
 properties are the durable record, and (once DATABASE_URL is set) they
-persist for real — see Service/property_vector_store.py.
+persist for real — see Service/WhatsAppDataFetchingService/property_vector_store.py.
 """
 
 from __future__ import annotations
@@ -16,13 +16,13 @@ from typing import List, Optional
 from Config.settings import get_settings
 from Database.session import is_database_configured
 from Middleware import step_logger
-from Model.group import WhatsAppGroup
-from Model.personal_chat import WhatsAppPersonalChat
-from Model.whatsapp_message import WhatsAppChatMessage
-from Model.whatsapp_status import WhatsAppStatus
-from Service import area_filter_service, property_pipeline_service
-from Service.message_buffer_service import MessageBufferService
-from Service.whatsapp_client import WhatsAppClient
+from Model.WhatsAppDataFetchingModel.group import WhatsAppGroup
+from Model.WhatsAppDataFetchingModel.personal_chat import WhatsAppPersonalChat
+from Model.WhatsAppDataFetchingModel.whatsapp_message import WhatsAppChatMessage
+from Model.WhatsAppDataFetchingModel.whatsapp_status import WhatsAppStatus
+from Service.WhatsAppDataFetchingService import area_filter_service, property_pipeline_service
+from Service.WhatsAppDataFetchingService.message_buffer_service import MessageBufferService
+from Service.WhatsAppDataFetchingService.whatsapp_client import WhatsAppClient
 
 _MAX_STORED_MESSAGES = 500
 

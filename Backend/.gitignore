@@ -4,6 +4,6 @@ __pycache__/
 
 # WhatsApp session data — this is equivalent to a login token for the linked
 # WhatsApp account. Never commit it.
-Service/session/
+Service/WhatsAppDataFetchingService/session/
 
 .env

@@ -1,6 +1,6 @@
 """SQLAlchemy ORM models for the Postgres + pgvector schema.
 
-PropertyRow mirrors EmbeddedProperty (Model/embedded_property.py)
+PropertyRow mirrors EmbeddedProperty (Model/WhatsAppDataFetchingModel/embedded_property.py)
 field-for-field on purpose — kept as a plain 1:1 mapping so converting
 between the two (see the top/bottom of Database/property_repository.py) is
 mechanical, not a design decision of its own.
@@ -21,7 +21,7 @@ from pgvector.sqlalchemy import Vector
 from sqlalchemy import JSON, DateTime, Float, String, Text, func
 from sqlalchemy.orm import DeclarativeBase, Mapped, mapped_column
 
-from Service.embedding_service import EMBEDDING_DIMENSIONS
+from Service.WhatsAppDataFetchingService.embedding_service import EMBEDDING_DIMENSIONS
 
 
 class Base(DeclarativeBase):

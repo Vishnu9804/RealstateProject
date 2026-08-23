@@ -30,10 +30,10 @@ from neonize.proto.Neonize_pb2 import JID
 from neonize.utils import Jid2String, build_jid, extract_text
 
 from Middleware import step_logger
-from Model.group import WhatsAppGroup
-from Model.personal_chat import WhatsAppPersonalChat
-from Model.whatsapp_message import WhatsAppChatMessage
-from Model.whatsapp_status import WhatsAppStatus
+from Model.WhatsAppDataFetchingModel.group import WhatsAppGroup
+from Model.WhatsAppDataFetchingModel.personal_chat import WhatsAppPersonalChat
+from Model.WhatsAppDataFetchingModel.whatsapp_message import WhatsAppChatMessage
+from Model.WhatsAppDataFetchingModel.whatsapp_status import WhatsAppStatus
 
 SESSION_DB_PATH = os.path.join(os.path.dirname(__file__), "session", "whatsapp_session.db")
 
@@ -189,7 +189,7 @@ class WhatsAppClient:
 
     def _handle_logged_out(self, _client: NewClient, _ev: LoggedOutEv) -> None:
         step_logger.error(
-            "Logged out of WhatsApp. Delete the Service/session folder and "
+            "Logged out of WhatsApp. Delete the Service/WhatsAppDataFetchingService/session folder and "
             "restart the server to pair again."
         )
         self._on_status_changed(WhatsAppStatus.LOGGED_OUT)

@@ -2,7 +2,7 @@
 
 Only initializes when Config.settings.database_url is set. Until the final
 "connect the database" step, DATABASE_URL is intentionally empty — every
-module that would otherwise need a database (Service/property_vector_store.py
+module that would otherwise need a database (Service/WhatsAppDataFetchingService/property_vector_store.py
 and the *_settings services) checks `is_database_configured()` and falls
 back to the in-memory behavior they've had since their own step, unchanged.
 Nothing in the app requires a database to exist in order to run.

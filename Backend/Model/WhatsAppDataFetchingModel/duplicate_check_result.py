@@ -2,13 +2,13 @@ from typing import Dict, List, Optional
 
 from pydantic import BaseModel
 
-from Model.duplicate_verdict import DuplicateVerdict
+from Model.WhatsAppDataFetchingModel.duplicate_verdict import DuplicateVerdict
 
 
 class DuplicateCheckResult(BaseModel):
     """Outcome of comparing one property against the best-matching
     candidate among the top-K retrieved by embedding similarity (see
-    Service/duplicate_detection_service.py). Kept fully transparent
+    Service/WhatsAppDataFetchingService/duplicate_detection_service.py). Kept fully transparent
     (`field_scores`, `contradictions`, `reason`) on purpose — both because
     getting this wrong is costly in either direction, and because the
     thresholds driving it are unproven defaults that will need calibrating

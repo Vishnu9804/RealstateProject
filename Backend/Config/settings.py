@@ -26,7 +26,7 @@ class Settings(BaseSettings):
     # users; confirmed against the real API during Step 12 that
     # gemini-3.6-flash is the current replacement.
     gemini_model: str = "gemini-3.6-flash"
-    # How long the buffering stage (Service/message_buffer_service.py)
+    # How long the buffering stage (Service/WhatsAppDataFetchingService/message_buffer_service.py)
     # waits for a batch to reach 10 messages before flushing whatever it
     # has anyway, in MINUTES (e.g. 60 = 1 hour, 3 = 3 minutes — useful for
     # fast local testing without waiting a full hour).

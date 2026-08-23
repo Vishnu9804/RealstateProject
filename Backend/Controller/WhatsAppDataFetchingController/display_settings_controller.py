@@ -1,11 +1,11 @@
 """HTTP routes for the UI-configurable display preferences. Thin by
-design — state lives in Service/display_settings_service.py.
+design — state lives in Service/WhatsAppDataFetchingService/display_settings_service.py.
 """
 
 from fastapi import APIRouter
 
-from Model.display_settings import DisplaySettings
-from Service import display_settings_service
+from Model.WhatsAppDataFetchingModel.display_settings import DisplaySettings
+from Service.WhatsAppDataFetchingService import display_settings_service
 
 router = APIRouter(prefix="/display-settings", tags=["display-settings"])
 

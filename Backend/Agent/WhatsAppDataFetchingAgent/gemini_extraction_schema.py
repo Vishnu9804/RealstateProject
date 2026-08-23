@@ -8,7 +8,7 @@ class GeminiPropertyExtraction(BaseModel):
     message — deliberately limited to fields that actually require
     language understanding to extract. Everything already known for
     certain from WhatsApp itself (sender, group, timestamp) is merged in
-    afterwards by Agent/property_structurer.py, not asked of the LLM.
+    afterwards by Agent/WhatsAppDataFetchingAgent/property_structurer.py, not asked of the LLM.
     """
 
     source_message_id: str = Field(description="Must exactly match the message's id as given in the prompt.")

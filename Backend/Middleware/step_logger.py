@@ -9,7 +9,7 @@ silenced.
 
 from datetime import datetime
 
-from Model.whatsapp_message import WhatsAppChatMessage
+from Model.WhatsAppDataFetchingModel.whatsapp_message import WhatsAppChatMessage
 
 _step_count = 0
 

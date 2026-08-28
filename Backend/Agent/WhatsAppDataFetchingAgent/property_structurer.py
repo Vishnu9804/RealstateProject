@@ -26,11 +26,12 @@ from google import genai
 from google.genai import types
 from pydantic import ValidationError
 
-from Agent.WhatsAppDataFetchingAgent.gemini_extraction_schema import GeminiPropertyExtraction
+from Agent.WhatsAppDataFetchingAgent.gemini_extraction_schema import GeminiPropertyExtraction, GeminiPropertyListing
 from Config.settings import get_settings
 from Middleware import step_logger
 from Model.WhatsAppDataFetchingModel.structured_property import StructuredProperty
 from Model.WhatsAppDataFetchingModel.whatsapp_message import WhatsAppChatMessage
+from Service.WhatsAppDataFetchingService import area_filter_service
 
 _client: Optional[genai.Client] = None
 
@@ -77,15 +78,40 @@ def structure_batch(batch: List[WhatsAppChatMessage]) -> List[StructuredProperty
 
 
 def _build_prompt(batch: List[WhatsAppChatMessage]) -> str:
+    tracked_areas = area_filter_service.get_area_keywords()
+    tracked_areas_list = ", ".join(tracked_areas) if tracked_areas else "(none configured)"
     lines = [
         "You are a real estate data-extraction assistant. Below is a batch of raw "
         "WhatsApp messages from Indian real estate broker/community groups. Each "
-        "message has already been confirmed to mention a tracked area, but not "
-        "every message is necessarily an actual property listing — some may be "
-        "questions, requests, or unrelated remarks that happen to mention the area.",
+        "message has already been confirmed to mention at least one tracked area "
+        "SOMEWHERE in its text, but not every message is necessarily an actual "
+        "property listing — some may be questions, requests, or unrelated remarks "
+        "that happen to mention the area.",
+        "",
+        f"Client-selected tracked areas: {tracked_areas_list}.",
         "",
         "For EACH message below, return exactly one JSON object, in the same order, "
         "with \"source_message_id\" matching the message's id exactly.",
+        "",
+        "IMPORTANT — a single message can advertise MORE THAN ONE property (e.g. a "
+        "broker listing several separate flats, possibly in different areas, in one "
+        "text). Put every distinct property mentioned in that message's "
+        "\"properties\" list, one entry per property — almost always this list has "
+        "exactly one entry, but use more than one only when the message clearly "
+        "describes separate properties (different society/area, different BHK, or "
+        "different price for each). Do NOT split one property's own details across "
+        "multiple entries.",
+        "",
+        "IMPORTANT — AREA FILTER: only include a property in \"properties\" if its "
+        "own area_name is one of the client-selected tracked areas listed above "
+        "(matched by locality, ignoring case). The message as a whole was let "
+        "through because it mentions a tracked area SOMEWHERE, but if the message "
+        "lists several properties in different localities, silently drop every "
+        "property whose own area is NOT in the tracked list — do not include it in "
+        "\"properties\" at all, even though the message qualified. Only set "
+        "is_property_listing to false (with a skip_reason) if NONE of the "
+        "message's properties are in a tracked area, or the message isn't a "
+        "listing at all.",
         "",
         "Keep society_name (a specific named building/project/society, e.g. \"Black "
         "Residency\") and area_name (the general locality, e.g. \"Althan\") strictly "
@@ -148,37 +174,75 @@ def _merge_with_message_data(
             continue
         seen_ids.add(extraction.source_message_id)
 
-        if not extraction.is_property_listing:
+        if not extraction.is_property_listing or not extraction.properties:
             step_logger.info(
                 f"Skipped (not a listing): {extraction.skip_reason or 'no reason given'} — {message.text[:80]!r}"
             )
             continue
 
-        properties.append(
-            StructuredProperty(
-                source_message_id=message.message_id,
-                property_type=extraction.property_type,
-                bhk=extraction.bhk,
-                society_name=extraction.society_name,
-                area_name=extraction.area_name,
-                address=extraction.address,
-                carpet_area_sqft=extraction.carpet_area_sqft,
-                price_text=extraction.price_text,
-                price_amount_inr=extraction.price_amount_inr,
-                contact_name=extraction.contact_name,
-                contact_phone=extraction.contact_phone,
-                description=extraction.description,
-                group_name=message.chat_name,
-                chat_type=message.chat_type,
-                sender_name=message.sender_name,
-                sender_saved_name=message.sender_saved_name,
-                sender_phone=message.sender_phone,
-                message_text=message.text,
-                message_timestamp=message.received_at,
+        if len(extraction.properties) > 1:
+            step_logger.info(
+                f"Message {message.message_id!r} contains {len(extraction.properties)} distinct properties — "
+                "structuring each separately."
             )
-        )
+
+        for listing in extraction.properties:
+            if not _listing_is_in_tracked_area(listing):
+                step_logger.info(
+                    f"Dropped a property from message {message.message_id!r}: its area "
+                    f"({listing.area_name!r}) is not one of the client-selected tracked areas."
+                )
+                continue
+            properties.append(_to_structured_property(listing, message))
 
     for missing_id in set(messages_by_id) - seen_ids:
         step_logger.warn(f"Gemini did not return anything for message id {missing_id!r} — dropped from this batch.")
 
     return properties
+
+
+def _listing_is_in_tracked_area(listing: GeminiPropertyListing) -> bool:
+    """Deterministic safety net behind the prompt's area instruction: a
+    message qualifies for the pipeline if ANY of its text mentions a tracked
+    area (see Service/WhatsAppDataFetchingService/area_filter_service.py and
+    whatsapp_service.py), but with multiple properties per message that is no
+    longer good enough per-property — a message about Althan can still
+    mention an unrelated Vadod property, which must never reach the
+    database. Re-runs the exact same keyword match, scoped to just this
+    listing's own locality fields, so a listing survives only if IT (not
+    just the message) is actually in a client-selected area. Relying on the
+    LLM alone to honor this isn't reliable enough to guarantee it."""
+    haystack = " ".join(
+        filter(None, [listing.area_name, listing.society_name, listing.address, listing.description])
+    )
+    return area_filter_service.is_qualified(haystack)
+
+
+def _to_structured_property(listing: GeminiPropertyListing, message: WhatsAppChatMessage) -> StructuredProperty:
+    """Builds one StructuredProperty from one extracted listing, merged with
+    the WhatsApp metadata shared by every listing pulled from that same
+    message. Two listings from one message become two fully independent
+    StructuredProperty records here — each is embedded and duplicate-checked
+    on its own downstream (see property_pipeline_service.handle_batch_ready),
+    exactly as if they had arrived in separate messages."""
+    return StructuredProperty(
+        source_message_id=message.message_id,
+        property_type=listing.property_type,
+        bhk=listing.bhk,
+        society_name=listing.society_name,
+        area_name=listing.area_name,
+        address=listing.address,
+        carpet_area_sqft=listing.carpet_area_sqft,
+        price_text=listing.price_text,
+        price_amount_inr=listing.price_amount_inr,
+        contact_name=listing.contact_name,
+        contact_phone=listing.contact_phone,
+        description=listing.description,
+        group_name=message.chat_name,
+        chat_type=message.chat_type,
+        sender_name=message.sender_name,
+        sender_saved_name=message.sender_saved_name,
+        sender_phone=message.sender_phone,
+        message_text=message.text,
+        message_timestamp=message.received_at,
+    )

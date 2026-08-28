@@ -1,21 +1,14 @@
-from typing import Optional
+from typing import List, Optional
 
 from pydantic import BaseModel, Field
 
 
-class GeminiPropertyExtraction(BaseModel):
-    """The exact JSON shape Gemini is asked to return for one input
-    message — deliberately limited to fields that actually require
-    language understanding to extract. Everything already known for
-    certain from WhatsApp itself (sender, group, timestamp) is merged in
-    afterwards by Agent/WhatsAppDataFetchingAgent/property_structurer.py, not asked of the LLM.
-    """
+class GeminiPropertyListing(BaseModel):
+    """One distinct property listing extracted from a message. A single
+    message can describe more than one property (e.g. a broker listing
+    several flats in one text), so a message maps to a LIST of these,
+    not to one."""
 
-    source_message_id: str = Field(description="Must exactly match the message's id as given in the prompt.")
-    is_property_listing: bool = Field(
-        description="True only if the message is an actual property listing being offered/advertised, "
-        "not a question, greeting, or unrelated remark."
-    )
     property_type: Optional[str] = Field(
         default=None, description='e.g. "Flat", "Row House", "Shop", "Office", "Land/Plot", "Bungalow", "Warehouse"'
     )
@@ -54,6 +47,34 @@ class GeminiPropertyExtraction(BaseModel):
     )
     description: Optional[str] = Field(
         default=None, description="A short, factual one/two-sentence summary written from the message content only."
+    )
+
+
+class GeminiPropertyExtraction(BaseModel):
+    """The exact JSON shape Gemini is asked to return for one input
+    message — deliberately limited to fields that actually require
+    language understanding to extract. Everything already known for
+    certain from WhatsApp itself (sender, group, timestamp) is merged in
+    afterwards by Agent/WhatsAppDataFetchingAgent/property_structurer.py, not asked of the LLM.
+
+    Kept one object per message (same order, "source_message_id" matching
+    the message id) so a missing/extra response is still easy to detect —
+    but each message can now carry MULTIPLE listings in `properties`,
+    because one WhatsApp message can advertise more than one property.
+    """
+
+    source_message_id: str = Field(description="Must exactly match the message's id as given in the prompt.")
+    is_property_listing: bool = Field(
+        description="True only if the message contains at least one actual property listing being "
+        "offered/advertised, not a question, greeting, or unrelated remark."
+    )
+    properties: List[GeminiPropertyListing] = Field(
+        default_factory=list,
+        description="One entry per DISTINCT property mentioned in the message. Almost always exactly one entry. "
+        "Only include more than one when the message genuinely advertises separate properties — e.g. different "
+        "society/area, different BHK, or different price for each one. Do not split a single property's details "
+        "(like separate rooms/amenities of the same flat) into multiple entries. Empty list if "
+        "is_property_listing is false.",
     )
     skip_reason: Optional[str] = Field(
         default=None, description='Why is_property_listing is false, e.g. "question, not a listing", "greeting".'

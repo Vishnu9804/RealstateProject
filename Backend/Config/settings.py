@@ -31,6 +31,12 @@ class Settings(BaseSettings):
     # has anyway, in MINUTES (e.g. 60 = 1 hour, 3 = 3 minutes — useful for
     # fast local testing without waiting a full hour).
     batch_window_minutes: int = Field(default=60, gt=0)
+    # How long the per-user debounce buffer (Service/WhatsAppInquiryHandlingService/
+    # inquiry_buffer_service.py) waits after a user's LAST message before
+    # flushing their buffered batch to the LLM, in SECONDS. Every new message
+    # from that same number restarts this countdown, so it only fires once
+    # they've actually stopped typing.
+    inquiry_buffer_window_seconds: int = Field(default=10, gt=0)
 
 
 @lru_cache

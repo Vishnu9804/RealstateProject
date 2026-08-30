@@ -34,10 +34,12 @@ from Controller.WhatsAppDataFetchingController.display_settings_controller impor
 from Controller.WhatsAppDataFetchingController.duplicate_detection_controller import router as duplicate_detection_router
 from Controller.WhatsAppDataFetchingController.property_controller import router as property_router
 from Controller.WhatsAppDataFetchingController.whatsapp_controller import router as whatsapp_router
+from Controller.WhatsAppInquiryHandlingController.whatsapp_inquiry_controller import router as whatsapp_inquiry_router
 from Database.session import init_db, is_database_configured
 from Middleware.logging_config import configure_logging
 from Middleware import step_logger
 from Service.WhatsAppDataFetchingService import area_filter_service, display_settings_service, duplicate_detection_service, whatsapp_service
+from Service.WhatsAppInquiryHandlingService import whatsapp_inquiry_service
 
 configure_logging()
 
@@ -59,6 +61,7 @@ async def lifespan(_app: FastAPI):
 
     step_logger.step("FastAPI server is up. Launching WhatsApp client in the background...")
     whatsapp_service.start_agent_in_background()
+    whatsapp_inquiry_service.start_agent_in_background()
     yield
 
 
@@ -82,6 +85,7 @@ app.include_router(area_filter_router, prefix="/api")
 app.include_router(display_settings_router, prefix="/api")
 app.include_router(duplicate_detection_router, prefix="/api")
 app.include_router(property_router, prefix="/api")
+app.include_router(whatsapp_inquiry_router, prefix="/api")
 
 
 @app.get("/")

@@ -16,9 +16,11 @@ import threading
 from typing import List, Optional
 
 from Config.settings import get_settings
+from Database.client_session import is_client_database_configured
 from Middleware import step_logger
 from Model.WhatsAppInquiryHandlingModel.inquiry_message import InquiryChatMessage
 from Model.WhatsAppInquiryHandlingModel.inquiry_status import WhatsAppInquiryStatus
+from Service.WhatsAppInquiryHandlingService import client_store, inquiry_pipeline_service
 from Service.WhatsAppInquiryHandlingService.inquiry_buffer_service import InquiryBufferService
 from Service.WhatsAppInquiryHandlingService.whatsapp_inquiry_client import WhatsAppInquiryClient
 
@@ -37,7 +39,7 @@ def start_agent_in_background() -> None:
     the process."""
     global _client, _buffer
     _buffer = InquiryBufferService(
-        on_batch_ready=_handle_batch_ready,
+        on_batch_ready=inquiry_pipeline_service.handle_batch_ready,
         inactivity_window_seconds=get_settings().inquiry_buffer_window_seconds,
     )
     _client = WhatsAppInquiryClient(
@@ -68,6 +70,10 @@ def get_status() -> dict:
         "captured_message_count": len(_captured_messages),
         "buffered_message_count": _buffer.pending_count() if _buffer else 0,
         "active_buffer_user_count": _buffer.active_user_count() if _buffer else 0,
+        "property_inquiry_count": inquiry_pipeline_service.get_property_inquiry_count(),
+        "non_property_message_count": inquiry_pipeline_service.get_non_property_count(),
+        "client_database_configured": is_client_database_configured(),
+        "client_count": client_store.get_client_count(),
     }
 
 
@@ -103,15 +109,3 @@ def _handle_message(message: InquiryChatMessage) -> None:
     )
     if _buffer is not None:
         _buffer.add_message(message)
-
-
-def _handle_batch_ready(phone: str, messages: List[InquiryChatMessage]) -> None:
-    # Placeholder until Step 3 wires this into LLM classification — for now
-    # this just proves the per-user debounce is isolating and flushing
-    # batches correctly. combined_text is exactly what the classification
-    # prompt will be built from: every message this user sent since their
-    # last flush, in order, with nothing from any other user mixed in.
-    combined_text = " | ".join(m.text for m in messages)
-    step_logger.success(
-        f"[Inquiry] Batch ready for {phone} ({len(messages)} message(s)): {combined_text}"
-    )

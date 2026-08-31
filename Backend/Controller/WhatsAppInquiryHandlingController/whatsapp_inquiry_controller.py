@@ -5,8 +5,9 @@ this module only translates HTTP <-> Service.
 
 from fastapi import APIRouter, HTTPException, Response
 
+from Model.WhatsAppInquiryHandlingModel.client_record import ClientRecord
 from Model.WhatsAppInquiryHandlingModel.inquiry_message import InquiryChatMessage
-from Service.WhatsAppInquiryHandlingService import whatsapp_inquiry_service
+from Service.WhatsAppInquiryHandlingService import client_store, whatsapp_inquiry_service
 
 router = APIRouter(prefix="/whatsapp-inquiry", tags=["whatsapp-inquiry"])
 
@@ -33,3 +34,19 @@ def get_qr_code() -> Response:
 @router.get("/messages", response_model=list[InquiryChatMessage])
 def get_messages(limit: int = 100) -> list[InquiryChatMessage]:
     return whatsapp_inquiry_service.get_messages(limit=limit)
+
+
+@router.get("/clients", response_model=list[ClientRecord])
+def get_clients(limit: int = 100) -> list[ClientRecord]:
+    return client_store.get_all_clients(limit=limit)
+
+
+@router.get("/clients/{phone}", response_model=ClientRecord)
+def get_client(phone: str) -> ClientRecord:
+    """`phone` should be E.164 (e.g. "+919876543210") — the same canonical
+    form every client record is keyed and looked up by (see
+    Service/WhatsAppInquiryHandlingService/phone_utils.py)."""
+    record = client_store.get_client_by_phone(phone)
+    if record is None:
+        raise HTTPException(status_code=404, detail="No client found for that phone number.")
+    return record

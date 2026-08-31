@@ -35,6 +35,7 @@ from Controller.WhatsAppDataFetchingController.duplicate_detection_controller im
 from Controller.WhatsAppDataFetchingController.property_controller import router as property_router
 from Controller.WhatsAppDataFetchingController.whatsapp_controller import router as whatsapp_router
 from Controller.WhatsAppInquiryHandlingController.whatsapp_inquiry_controller import router as whatsapp_inquiry_router
+from Database.client_session import init_client_db, is_client_database_configured
 from Database.session import init_db, is_database_configured
 from Middleware.logging_config import configure_logging
 from Middleware import step_logger
@@ -57,6 +58,16 @@ async def lifespan(_app: FastAPI):
         step_logger.info(
             "DATABASE_URL is not set — running with in-memory storage only. Nothing is lost while the "
             "server stays up, but properties and settings reset on restart until a database is connected."
+        )
+
+    if is_client_database_configured():
+        step_logger.step("CLIENT_DATABASE_URL is set — initializing the client database...")
+        init_client_db()
+        step_logger.success("Client database ready — inquiry-handling client records will persist across restarts.")
+    else:
+        step_logger.info(
+            "CLIENT_DATABASE_URL is not set — whatsappInquiryHandling client records will use in-memory "
+            "storage only until it's configured."
         )
 
     step_logger.step("FastAPI server is up. Launching WhatsApp client in the background...")

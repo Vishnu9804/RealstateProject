@@ -20,6 +20,11 @@ class Settings(BaseSettings):
 
     gemini_api_key: str = ""
     database_url: str = ""
+    # Separate Neon Postgres database for whatsappInquiryHandling's client
+    # records (Database/client_session.py) — deliberately independent from
+    # `database_url` above (the property-listing database used by
+    # whatsappDataFetching), so the two features' data can never collide.
+    client_database_url: str = ""
     # Has a working default so `.env` only needs the two secrets above —
     # override with a GEMINI_MODEL env var if a different model is wanted.
     # gemini-2.5-flash (the original default here) was retired for new

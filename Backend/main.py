@@ -34,6 +34,7 @@ from Controller.WhatsAppDataFetchingController.display_settings_controller impor
 from Controller.WhatsAppDataFetchingController.duplicate_detection_controller import router as duplicate_detection_router
 from Controller.WhatsAppDataFetchingController.property_controller import router as property_router
 from Controller.WhatsAppDataFetchingController.whatsapp_controller import router as whatsapp_router
+from Controller.WhatsAppInquiryHandlingController.inquiry_form_controller import router as inquiry_form_router
 from Controller.WhatsAppInquiryHandlingController.whatsapp_inquiry_controller import router as whatsapp_inquiry_router
 from Database.client_session import init_client_db, is_client_database_configured
 from Database.session import init_db, is_database_configured
@@ -97,6 +98,7 @@ app.include_router(display_settings_router, prefix="/api")
 app.include_router(duplicate_detection_router, prefix="/api")
 app.include_router(property_router, prefix="/api")
 app.include_router(whatsapp_inquiry_router, prefix="/api")
+app.include_router(inquiry_form_router, prefix="/api")
 
 
 @app.get("/")

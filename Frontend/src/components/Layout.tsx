@@ -5,7 +5,7 @@ import Cursor from "./Cursor";
 import CommandPalette, { useCommandPalette } from "./CommandPalette";
 import { ThemeToggle } from "./ui/Theme";
 import { Tip } from "./ui/Primitives";
-import { IconCommand, IconGrid, IconLink, IconSliders, IconZap } from "./ui/Icons";
+import { IconCommand, IconGrid, IconLink, IconSliders, IconUsers, IconZap } from "./ui/Icons";
 import { useAppStatus } from "../state/StatusProvider";
 import { describeWhatsAppStatus, statusTone } from "../lib/whatsappStatus";
 import { useOnline, useScrolled } from "../hooks/useUi";
@@ -13,6 +13,7 @@ import { useOnline, useScrolled } from "../hooks/useUi";
 const NAV = [
   { to: "/", end: true, label: "Connection", icon: IconLink },
   { to: "/dashboard", end: false, label: "Properties", icon: IconGrid },
+  { to: "/inquiries", end: false, label: "Inquiries", icon: IconUsers },
   { to: "/settings", end: false, label: "Settings", icon: IconSliders },
 ];
 

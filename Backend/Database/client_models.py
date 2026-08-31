@@ -47,6 +47,16 @@ class ClientRow(ClientBase):
     # existing-data/update flow instead of the welcome flow.
     status: Mapped[str] = mapped_column(String, nullable=False, default="pending_registration")
 
+    # Set while we're waiting on a specific yes/no reply from this client —
+    # currently only "awaiting_update_confirmation", set by
+    # inquiry_pipeline_service._greet_existing_client(). When set, the next
+    # incoming batch from this phone is interpreted directly as yes/no
+    # (see _handle_update_confirmation_reply) instead of being re-classified
+    # by the LLM — deterministic and far more reliable than an LLM guess for
+    # a closed question we just asked ourselves, and cheaper (requirement
+    # #4: don't send unnecessary context to the LLM).
+    pending_action: Mapped[Optional[str]] = mapped_column(String, nullable=True)
+
     # --- client info ---
     name: Mapped[Optional[str]] = mapped_column(String, nullable=True)
     email: Mapped[Optional[str]] = mapped_column(String, nullable=True)

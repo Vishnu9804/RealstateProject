@@ -15,6 +15,7 @@ class ClientRecord(BaseModel):
 
     phone: str
     status: str = "pending_registration"
+    pending_action: Optional[str] = None
     name: Optional[str] = None
     email: Optional[str] = None
 

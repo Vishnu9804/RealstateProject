@@ -1,0 +1,65 @@
+/* Layout for the public, token-authenticated registration/update form
+   (InquiryFormPage) only — imported directly by that page, not from
+   index.css, since no other route needs it. Everything else on the page
+   (buttons, inputs, panels, notes) reuses the shared component styles
+   already loaded globally by index.css. */
+
+.inquiry-page {
+  min-height: 100dvh;
+  display: flex;
+  align-items: flex-start;
+  justify-content: center;
+  padding: clamp(20px, 6vw, 64px) 16px;
+  background: var(--bg-void);
+}
+
+.inquiry-card {
+  width: 100%;
+  max-width: 480px;
+}
+
+.inquiry-brand {
+  display: flex;
+  align-items: center;
+  gap: 10px;
+  margin-bottom: 22px;
+}
+
+.inquiry-brand__mark {
+  display: grid;
+  place-items: center;
+  width: 38px;
+  height: 38px;
+  border-radius: var(--r-sm);
+  background: var(--accent-gradient);
+  color: white;
+  flex: none;
+}
+
+.inquiry-brand__name {
+  font-weight: 700;
+  font-size: 16px;
+  color: var(--ink);
+}
+
+.inquiry-brand__sub {
+  font-size: 12.5px;
+  color: var(--ink-3);
+}
+
+.inquiry-budget-row {
+  display: grid;
+  grid-template-columns: 1fr 1fr;
+  gap: 12px;
+}
+
+.inquiry-center {
+  text-align: center;
+  padding: 20px 4px;
+}
+
+.inquiry-page .field__label {
+  font-size: 13px;
+  font-weight: 600;
+  color: var(--ink-2);
+}

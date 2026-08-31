@@ -42,6 +42,13 @@ class Settings(BaseSettings):
     # from that same number restarts this countdown, so it only fires once
     # they've actually stopped typing.
     inquiry_buffer_window_seconds: int = Field(default=10, gt=0)
+    # Base URL the registration/update form link (sent over WhatsApp — see
+    # Service/WhatsAppInquiryHandlingService/inquiry_pipeline_service.py)
+    # is built from: "{inquiry_form_base_url}/{token}". Points at the Vite
+    # dev server by default, matching main.py's CORS allow-list — the form
+    # PAGE itself doesn't exist yet (a later step), so links sent today
+    # won't resolve to anything real until then.
+    inquiry_form_base_url: str = "http://localhost:5173/whatsapp-inquiry"
 
 
 @lru_cache

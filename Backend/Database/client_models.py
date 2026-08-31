@@ -37,6 +37,16 @@ class ClientRow(ClientBase):
     # two separate client rows.
     phone: Mapped[str] = mapped_column(String, primary_key=True)
 
+    # "pending_registration" (welcome message + form link sent, no
+    # submission yet) or "registered" (has submitted the form at least
+    # once). Drives the 3-way branch in inquiry_pipeline_service.py: a
+    # brand-new number gets the welcome message exactly once — a second
+    # qualifying message from the same number while still
+    # pending_registration must NOT re-trigger it (duplicate-message
+    # prevention), and only a "registered" client gets the
+    # existing-data/update flow instead of the welcome flow.
+    status: Mapped[str] = mapped_column(String, nullable=False, default="pending_registration")
+
     # --- client info ---
     name: Mapped[Optional[str]] = mapped_column(String, nullable=True)
     email: Mapped[Optional[str]] = mapped_column(String, nullable=True)

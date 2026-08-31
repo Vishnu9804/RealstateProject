@@ -24,7 +24,7 @@ import segno
 from neonize.client import NewClient
 from neonize.events import ConnectedEv, DisconnectedEv, LoggedOutEv, MessageEv, PairStatusEv
 from neonize.proto.Neonize_pb2 import JID
-from neonize.utils import Jid2String, extract_text
+from neonize.utils import Jid2String, build_jid, extract_text
 
 from Middleware import step_logger
 from Model.WhatsAppInquiryHandlingModel.inquiry_message import InquiryChatMessage
@@ -51,6 +51,28 @@ class WhatsAppInquiryClient:
         # sender JID avoids repeating that for the same person.
         self._sender_phone_cache: Dict[str, tuple] = {}
         self._saved_name_cache: Dict[str, str] = {}
+
+    def send_text(self, phone: str, text: str) -> bool:
+        """Sends a plain-text WhatsApp message to `phone` (any parseable
+        form — only digits are used to build the JID). Never raises: a
+        delivery failure is logged and reported back as False so the
+        caller (inquiry_pipeline_service.py) can decide what to do rather
+        than crash the batch-handling thread mid-flow — for a
+        business-critical pipeline, a failed send must be visible in the
+        logs, never a silent crash that also drops everything after it."""
+        if self._client is None:
+            step_logger.error(f"Cannot send WhatsApp message to {phone}: not connected yet.")
+            return False
+        digits = "".join(ch for ch in phone if ch.isdigit())
+        if not digits:
+            step_logger.error(f"Cannot send WhatsApp message: {phone!r} has no digits.")
+            return False
+        try:
+            self._client.send_message(build_jid(digits), text)
+            return True
+        except Exception as exc:  # noqa: BLE001
+            step_logger.error(f"Failed to send WhatsApp message to {phone}: {exc!r}")
+            return False
 
     def start(self) -> None:
         """Connects to WhatsApp. Blocks for the lifetime of the connection."""

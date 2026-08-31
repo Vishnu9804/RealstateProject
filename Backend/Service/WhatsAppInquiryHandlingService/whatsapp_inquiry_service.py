@@ -20,7 +20,7 @@ from Database.client_session import is_client_database_configured
 from Middleware import step_logger
 from Model.WhatsAppInquiryHandlingModel.inquiry_message import InquiryChatMessage
 from Model.WhatsAppInquiryHandlingModel.inquiry_status import WhatsAppInquiryStatus
-from Service.WhatsAppInquiryHandlingService import client_store, inquiry_pipeline_service
+from Service.WhatsAppInquiryHandlingService import client_store, inquiry_pipeline_service, outbound_messenger
 from Service.WhatsAppInquiryHandlingService.inquiry_buffer_service import InquiryBufferService
 from Service.WhatsAppInquiryHandlingService.whatsapp_inquiry_client import WhatsAppInquiryClient
 
@@ -47,6 +47,7 @@ def start_agent_in_background() -> None:
         on_qr_ready=_handle_qr_ready,
         on_status_changed=_handle_status_changed,
     )
+    outbound_messenger.set_client(_client)
     thread = threading.Thread(
         target=_run_client, args=(_client,), name="whatsapp-inquiry-client", daemon=True
     )

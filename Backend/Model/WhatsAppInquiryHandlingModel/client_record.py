@@ -14,6 +14,7 @@ class ClientRecord(BaseModel):
     person's data can never end up split or mixed across two rows."""
 
     phone: str
+    status: str = "pending_registration"
     name: Optional[str] = None
     email: Optional[str] = None
 

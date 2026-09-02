@@ -1,6 +1,9 @@
-"""HTTP routes for configuring the area-keyword filter (Stage 1 of the
-property pipeline). Thin by design — matching logic lives in
-Service/WhatsAppDataFetchingService/area_filter_service.py.
+"""HTTP routes for configuring the client's selected areas (Settings page).
+This list feeds two stages: it's one of the OR-matched signals in the
+Stage 1 property-relevance filter, and it's the set of areas the LLM
+structuring stage (Stage 3) matches each extracted property against to
+decide review_status="outsider" vs. accepted. Thin by design — matching
+logic lives in Service/WhatsAppDataFetchingService/area_filter_service.py.
 """
 
 from fastapi import APIRouter

@@ -20,6 +20,15 @@ duplicate_verdict.py):
     but flagged with review_status="needs_review" and review_notes
     explaining why, so nothing gets lost while still surfacing the
     ambiguity for a human to resolve later.
+
+A property can separately already arrive here with review_status="outsider"
+— the LLM structuring stage (Agent/WhatsAppDataFetchingAgent/
+property_structurer.py) sets that when the property falls outside every
+client-selected area. That flag takes priority over an UNCERTAIN duplicate
+verdict (an outsider property never gets relabelled "needs_review" — it
+stays visible in its own Outsider tab instead), but a HIGH_CONFIDENCE_DUPLICATE
+outsider is still skipped like any other duplicate — being outside the
+service area doesn't make an exact repeat worth storing twice.
 """
 
 from __future__ import annotations
@@ -43,6 +52,7 @@ from Service.WhatsAppDataFetchingService import (
 
 _duplicate_count = 0
 _uncertain_count = 0
+_outsider_count = 0
 
 _NON_API_FIELDS = {"embedding", "field_embeddings", "embedding_model"}
 
@@ -50,21 +60,27 @@ _NON_API_FIELDS = {"embedding", "field_embeddings", "embedding_model"}
 def handle_batch_ready(batch: List[WhatsAppChatMessage]) -> None:
     """Called by the buffering stage whenever a batch is flushed (10
     messages gathered, or 1 hour elapsed). Already runs on its own thread
-    (see message_buffer_service.py), so the blocking Gemini call here never
+    (see message_buffer_service.py), so the blocking GLM call here never
     stalls WhatsApp message capture."""
-    global _duplicate_count, _uncertain_count
+    global _duplicate_count, _uncertain_count, _outsider_count
 
-    step_logger.step(f"Sending batch of {len(batch)} qualified message(s) to Gemini for structuring")
+    step_logger.step(f"Sending batch of {len(batch)} qualified message(s) to GLM for structuring")
     properties = property_structurer.structure_batch(batch)
 
     accepted_count = 0
     uncertain_count_this_batch = 0
     duplicate_count_this_batch = 0
+    outsider_count_this_batch = 0
 
     for prop in properties:
         embedded = _embed(prop)
         if embedded is None:
             continue
+
+        is_outsider = embedded.review_status == "outsider"
+        if is_outsider:
+            outsider_count_this_batch += 1
+            _outsider_count += 1
 
         result = duplicate_detection_service.check_duplicate(embedded)
 
@@ -79,10 +95,16 @@ def handle_batch_ready(batch: List[WhatsAppChatMessage]) -> None:
         if result.verdict == DuplicateVerdict.UNCERTAIN:
             uncertain_count_this_batch += 1
             _uncertain_count += 1
-            embedded.review_status = "needs_review"
-            embedded.review_notes = (
-                f"Possible duplicate of message {result.matched_source_message_id!r}: {result.reason}"
-            )
+            # An outsider flag from the LLM structuring stage takes priority
+            # over "needs_review" — the two are independent judgments (area
+            # relevance vs. possible duplicate), and only one status field
+            # exists to show in the UI, so the property stays in the
+            # Outsider tab rather than being relabelled.
+            if not is_outsider:
+                embedded.review_status = "needs_review"
+                embedded.review_notes = (
+                    f"Possible duplicate of message {result.matched_source_message_id!r}: {result.reason}"
+                )
             step_logger.warn(
                 f"Uncertain match, flagged for review (source message {embedded.source_message_id!r}): "
                 f"{result.reason}"
@@ -95,8 +117,8 @@ def handle_batch_ready(batch: List[WhatsAppChatMessage]) -> None:
 
     step_logger.success(
         f"Batch processed: {accepted_count} propert{'y' if accepted_count == 1 else 'ies'} stored "
-        f"({uncertain_count_this_batch} flagged for review), {duplicate_count_this_batch} duplicate(s) skipped, "
-        f"out of {len(batch)} message(s)"
+        f"({uncertain_count_this_batch} flagged for review, {outsider_count_this_batch} outsider), "
+        f"{duplicate_count_this_batch} duplicate(s) skipped, out of {len(batch)} message(s)"
     )
 
 
@@ -138,3 +160,7 @@ def get_duplicate_count() -> int:
 
 def get_uncertain_count() -> int:
     return _uncertain_count
+
+
+def get_outsider_count() -> int:
+    return _outsider_count

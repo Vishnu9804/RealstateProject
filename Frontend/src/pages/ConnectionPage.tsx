@@ -29,6 +29,7 @@ import {
   IconLayers,
   IconMessage,
   IconPhone,
+  IconPin,
   IconPower,
   IconQr,
   IconRefresh,
@@ -317,9 +318,10 @@ export default function ConnectionPage() {
               <Stat label="Groups joined" value={status.joined_group_count} icon={<IconUsers size={13} />} delay={0} />
               <Stat label="Monitored" value={status.monitored_group_count + status.monitored_personal_chat_count} icon={<IconLayers size={13} />} tone="accent" delay={60} />
               <Stat label="Messages seen" value={status.captured_message_count} icon={<IconMessage size={13} />} delay={120} />
-              <Stat label="Qualified" value={status.qualified_message_count} icon={<IconZap size={13} />} tone="ok" delay={180} hint="Messages that matched an area keyword and reached the pipeline" />
+              <Stat label="Qualified" value={status.qualified_message_count} icon={<IconZap size={13} />} tone="ok" delay={180} hint="Messages that looked property-related and reached the pipeline" />
               <Stat label="Structured" value={status.structured_property_count} icon={<IconDatabase size={13} />} delay={240} />
               <Stat label="Need review" value={status.needs_review_property_count} icon={<IconAlert size={13} />} tone={status.needs_review_property_count > 0 ? "warn" : undefined} delay={300} />
+              <Stat label="Outsider" value={status.outsider_property_count} icon={<IconPin size={13} />} delay={360} hint="Structured properties outside every client-selected area" />
             </div>
           ) : null}
         </Panel>
@@ -489,8 +491,8 @@ export default function ConnectionPage() {
 
       {!initialLoading && status && status.captured_message_count === 0 && groupsRelevant && (
         <Note tone="info" icon={<IconInbox size={17} />}>
-          No messages captured yet. Once a monitored chat receives a message mentioning one of your area keywords, it
-          will appear on the Properties page within a few seconds.
+          No messages captured yet. Once a monitored chat receives a message that looks property-related, it will
+          appear on the Properties page within a few seconds.
         </Note>
       )}
     </div>

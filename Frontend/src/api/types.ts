@@ -17,6 +17,7 @@ export interface WhatsAppStatusResponse {
   structured_property_count: number;
   duplicate_property_count: number;
   needs_review_property_count: number;
+  outsider_property_count: number;
 }
 
 export interface WhatsAppGroup {
@@ -63,7 +64,7 @@ export interface PropertyRecord {
   sender_phone: string;
   message_text: string;
   message_timestamp: string;
-  review_status: "accepted" | "needs_review";
+  review_status: "accepted" | "needs_review" | "outsider";
   review_notes: string | null;
   formatted_timestamp: string;
 }

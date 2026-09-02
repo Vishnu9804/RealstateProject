@@ -189,6 +189,11 @@ export default function DashboardPage() {
     [allProperties],
   );
 
+  const outsiderCount = useMemo(
+    () => allProperties.filter((p) => p.review_status === "outsider").length,
+    [allProperties],
+  );
+
   const localities = useMemo(() => {
     // Case-folded to match how the Area filter groups its options —
     // otherwise this tile claims more localities than that picker lists.
@@ -303,19 +308,19 @@ export default function DashboardPage() {
      "both selected" and "no filter" mean the same thing, so they map onto
      each other exactly. */
   const statusFilter = filters.status;
-  const statusSegment: "all" | "accepted" | "needs_review" =
+  const statusSegment: "all" | "accepted" | "needs_review" | "outsider" =
     statusFilter?.kind === "values" && statusFilter.selected.length === 1
       ? statusFilter.selected[0] === "Needs review"
         ? "needs_review"
-        : "accepted"
+        : statusFilter.selected[0] === "Outsider"
+          ? "outsider"
+          : "accepted"
       : "all";
 
-  function setStatusSegment(value: "all" | "accepted" | "needs_review") {
+  function setStatusSegment(value: "all" | "accepted" | "needs_review" | "outsider") {
     if (value === "all") return setColumnFilter("status", undefined);
-    setColumnFilter("status", {
-      kind: "values",
-      selected: [value === "needs_review" ? "Needs review" : "Accepted"],
-    });
+    const label = value === "needs_review" ? "Needs review" : value === "outsider" ? "Outsider" : "Accepted";
+    setColumnFilter("status", { kind: "values", selected: [label] });
   }
 
   const loading = properties === null && error === null;
@@ -373,6 +378,13 @@ export default function DashboardPage() {
             tone={needsReviewCount > 0 ? "warn" : undefined}
             delay={120}
           />
+          <Stat
+            label="Outsider"
+            value={outsiderCount}
+            icon={<IconPin size={13} />}
+            tone={outsiderCount > 0 ? "accent" : undefined}
+            delay={150}
+          />
           <Stat label="Localities" value={localities} icon={<IconPin size={13} />} delay={180} />
         </div>
       )}
@@ -388,7 +400,7 @@ export default function DashboardPage() {
           />
         </div>
 
-        <Segmented<"all" | "accepted" | "needs_review">
+        <Segmented<"all" | "accepted" | "needs_review" | "outsider">
           ariaLabel="Filter by review status"
           value={statusSegment}
           onChange={setStatusSegment}
@@ -396,6 +408,7 @@ export default function DashboardPage() {
             { value: "all", label: "All" },
             { value: "accepted", label: "Accepted" },
             { value: "needs_review", label: `Review${needsReviewCount ? ` (${needsReviewCount})` : ""}` },
+            { value: "outsider", label: `Outsider${outsiderCount ? ` (${outsiderCount})` : ""}` },
           ]}
         />
 
@@ -478,7 +491,7 @@ export default function DashboardPage() {
           <EmptyState
             icon={<IconInbox size={38} />}
             title="Nothing captured yet"
-            body="Properties appear here automatically once a monitored chat receives a message that mentions one of your area keywords. Check the Connection page to confirm something is being watched."
+            body="Properties appear here automatically once a monitored chat receives a message that looks property-related. Check the Connection page to confirm something is being watched."
           />
         </Panel>
       )}
@@ -717,6 +730,7 @@ function PropertyTable({
             {properties.map((property) => {
               const isExpanded = expandedId === property.source_message_id;
               const flagged = property.review_status === "needs_review";
+              const outsider = property.review_status === "outsider";
               return (
                 <Fragment key={property.source_message_id}>
                   <tr
@@ -724,6 +738,7 @@ function PropertyTable({
                       "row",
                       isExpanded && "row--open",
                       flagged && "row--flagged",
+                      outsider && "row--outsider",
                       freshIds.has(property.source_message_id) && "row--new",
                     ]
                       .filter(Boolean)
@@ -898,6 +913,12 @@ function PropertyDetail({ property, embedded = false }: { property: PropertyReco
         </Note>
       )}
 
+      {property.review_status === "outsider" && (
+        <Note tone="info" icon={<IconPin size={16} />}>
+          <strong>Outsider:</strong> {property.review_notes ?? "Outside the client's selected areas."}
+        </Note>
+      )}
+
       <div className="detail__grid">
         <div className="detail__block">
           <div className="detail__k">Sender</div>
@@ -961,6 +982,13 @@ function PropertyDetail({ property, embedded = false }: { property: PropertyReco
 }
 
 function ReviewBadge({ status, notes }: { status: PropertyRecord["review_status"]; notes: string | null }) {
+  if (status === "outsider") {
+    return (
+      <Badge tone="info" title={notes ?? undefined}>
+        Outsider
+      </Badge>
+    );
+  }
   const flagged = status === "needs_review";
   return (
     <Badge tone={flagged ? "warn" : "ok"} title={notes ?? undefined}>

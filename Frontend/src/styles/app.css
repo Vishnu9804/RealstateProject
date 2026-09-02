@@ -552,6 +552,7 @@
 }
 .row--open td:first-child { box-shadow: inset 3px 0 0 var(--accent); }
 .row--flagged td:first-child { box-shadow: inset 3px 0 0 var(--warn); }
+.row--outsider td:first-child { box-shadow: inset 3px 0 0 var(--info); }
 .row--new td { animation: row-flash 2.4s var(--ease-out) both; }
 @keyframes row-flash {
   0%   { background: color-mix(in oklab, var(--accent) 26%, transparent); }

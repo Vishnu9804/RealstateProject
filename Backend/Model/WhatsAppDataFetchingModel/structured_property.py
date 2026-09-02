@@ -37,6 +37,8 @@ class StructuredProperty(BaseModel):
     message_text: str
     message_timestamp: datetime
 
-    # --- set by the duplicate-detection stage, not the LLM ---
-    review_status: Literal["accepted", "needs_review"] = "accepted"
+    # --- "accepted"/"needs_review" set by the duplicate-detection stage;
+    # "outsider" set by the LLM structuring stage when the property falls
+    # outside every client-selected area (see property_structurer.py) ---
+    review_status: Literal["accepted", "needs_review", "outsider"] = "accepted"
     review_notes: Optional[str] = None

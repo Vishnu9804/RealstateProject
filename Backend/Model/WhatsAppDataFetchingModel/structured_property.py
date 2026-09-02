@@ -1,7 +1,8 @@
+import uuid
 from datetime import datetime
 from typing import Literal, Optional
 
-from pydantic import BaseModel
+from pydantic import BaseModel, Field
 
 
 class StructuredProperty(BaseModel):
@@ -11,6 +12,17 @@ class StructuredProperty(BaseModel):
     timestamp) rather than re-derived by the LLM. This is the shape the
     Postgres properties table (later step) will mirror.
     """
+
+    # A single WhatsApp message can now yield MORE THAN ONE property (see
+    # property_structurer.py's PART 2), so source_message_id — which
+    # identifies the MESSAGE, not the property — is no longer unique per
+    # record: two/three properties pulled from the same message legitimately
+    # share it. record_id is the one field guaranteed unique per PROPERTY,
+    # generated once here at creation and never regenerated afterwards (the
+    # DB round-trip and the in-memory store both preserve it as-is) — this
+    # is what the frontend must use as its row key/identity, not
+    # source_message_id.
+    record_id: str = Field(default_factory=lambda: uuid.uuid4().hex)
 
     source_message_id: str
 
@@ -22,8 +34,17 @@ class StructuredProperty(BaseModel):
     area_name: Optional[str] = None
     address: Optional[str] = None
     carpet_area_sqft: Optional[float] = None
+    carpet_area_unit: Optional[str] = None  # "sqft" | "vaar" | "vigha" — the unit carpet_area_sqft was written in
     price_text: Optional[str] = None
     price_amount_inr: Optional[float] = None
+    price_per_unit_text: Optional[str] = None
+    price_per_unit_amount_inr: Optional[float] = None
+    # "Sale" vs "Rent", classified by the LLM (see property_structurer.py's
+    # RENT VS SALE CLASSIFICATION rules). Defaults to "Sale" whenever the
+    # message gives no explicit Rent/Sale signal — the safe default per
+    # product decision, so a listing never lands in the Rent bucket without
+    # an explicit signal earning it.
+    listing_type: Literal["Sale", "Rent"] = "Sale"
     contact_name: Optional[str] = None
     contact_phone: Optional[str] = None
     description: Optional[str] = None

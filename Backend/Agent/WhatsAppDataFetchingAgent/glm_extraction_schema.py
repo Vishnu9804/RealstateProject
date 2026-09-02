@@ -1,4 +1,4 @@
-from typing import List, Optional
+from typing import List, Literal, Optional
 
 from pydantic import BaseModel, Field
 
@@ -33,16 +33,62 @@ class GLMPropertyListing(BaseModel):
     )
     carpet_area_sqft: Optional[float] = Field(
         default=None,
-        description="The property's area in square feet as a plain number, only if explicitly stated "
-        '(e.g. "1200 sqft" -> 1200.0). Never guess or estimate from BHK.',
+        description="The property's area as a plain number, only if explicitly stated — extract it regardless "
+        'of which area unit the message uses: square feet ("1200 sqft" -> 1200.0), Vaar/Gaj ("500 vaar" -> '
+        '500.0), or Vigha ("2 vigha" -> 2.0). Copy the bare number exactly as written for whichever unit is '
+        "used — never convert between units, never estimate it from the BHK, and never guess when no area is "
+        "stated.",
+    )
+    carpet_area_unit: Optional[str] = Field(
+        default=None,
+        description='The unit carpet_area_sqft was written in — REQUIRED whenever carpet_area_sqft is set, '
+        'null only when carpet_area_sqft is null. Must be exactly one of: "sqft" (for "sqft", "sq ft", '
+        '"sq.ft", "square feet"), "vaar" (for "vaar", "gaj", "sq yard", "square yard"), "vigha" (for '
+        '"vigha"). Never guess a unit that is not the one actually written for that number.',
     )
     price_text: Optional[str] = Field(
-        default=None, description='Price as written/normalized for readability, e.g. "45 Lakh", "1.2 Cr".'
+        default=None,
+        description="The TOTAL price (never a per-unit rate — see price_per_unit_text for that), normalized "
+        'into compact Indian short-scale notation: "cr" for crore, "L" for lakh, "k" for thousand, e.g. '
+        '"1,25,00,000₹" or "1.25 crore" -> "1.25cr"; "45 Lakh" or "Rs.45,00,000/-" -> "45L"; "15000/month" '
+        '-> "15k". Strip currency symbols (₹, Rs., INR), commas, and Indian digit grouping — output only '
+        "the compact form. Never guess a price that is not written.",
     )
     price_amount_inr: Optional[float] = Field(
         default=None,
-        description='Price converted to a plain INR number only if unambiguous (e.g. "45 Lakh" -> 4500000). '
-        "Never guess.",
+        description='The TOTAL price converted to a plain INR number only if unambiguous (e.g. "45 Lakh" -> '
+        "4500000). Never guess.",
+    )
+    price_per_unit_text: Optional[str] = Field(
+        default=None,
+        description="A PER-UNIT rate — never the total price — only if the message states one explicitly, e.g. "
+        '"1L/sq ft", "1L per sq ft", "85000/vaar", "1.2cr/vigha", "2500 per sqft". Normalize it the same way as '
+        'price_text (compact "cr"/"L"/"k" notation, unit suffix kept as written, e.g. "1,25,000/vaar" -> '
+        '"1.25L/vaar", "2500/sqft" stays "2500/sqft"). Do not fill this from a total price — only from wording '
+        "that explicitly names a rate per sq ft / per vaar / per vigha / per unit. Null if no per-unit rate is "
+        "stated.",
+    )
+    price_per_unit_amount_inr: Optional[float] = Field(
+        default=None,
+        description="The PER-UNIT rate above converted to a plain INR number only if unambiguous (e.g. "
+        '"1L/vaar" -> 100000). Never guess, and never derive this by dividing a total price by an area '
+        "yourself — that division is done deterministically after extraction, not by you. Leave null unless "
+        "the message itself states a per-unit rate.",
+    )
+    listing_type_reason: Optional[str] = Field(
+        default=None,
+        description="REQUIRED, written BEFORE listing_type (reason first, verdict second — see RENT VS SALE "
+        "CLASSIFICATION). Quote or paraphrase the exact Rent or Sale wording found IN THIS MESSAGE for THIS "
+        "property, e.g. \"message says 'bhade pe dena hai'\" or \"message says 'bechna hai'\". If the message "
+        "gives no explicit Rent/Sale wording at all, write \"no explicit signal\" instead of inventing one.",
+    )
+    listing_type: Literal["Sale", "Rent"] = Field(
+        default="Sale",
+        description="Whether this property is being offered/sought for SALE or for RENT — decided FROM "
+        "listing_type_reason above, never independently of it. Set to \"Rent\" only when the reason cites an "
+        "actual explicit Rent signal; \"Sale\" otherwise, including whenever the reason says there was no "
+        "explicit signal. See the RENT VS SALE CLASSIFICATION rules in the prompt. Defaults to \"Sale\" (fail "
+        "open) if the model omits the field.",
     )
     contact_name: Optional[str] = Field(
         default=None, description="A person's name given IN THE MESSAGE TEXT as the contact for this property."

@@ -32,6 +32,13 @@ class PropertyRow(Base):
     __tablename__ = "properties"
 
     id: Mapped[int] = mapped_column(primary_key=True, autoincrement=True)
+    # Nullable because it's retrofitted onto a table that may already have
+    # rows (see Database/session.py's init_db) — every row written from now
+    # on always has one (StructuredProperty.record_id has a default
+    # factory), but a pre-existing row read back with NULL here is handled
+    # by property_repository._to_pydantic falling back to this row's own
+    # `id`, which is unique by construction.
+    record_id: Mapped[Optional[str]] = mapped_column(String, nullable=True)
     source_message_id: Mapped[str] = mapped_column(String, nullable=False)
 
     # --- extracted by the LLM from the message text ---
@@ -41,8 +48,16 @@ class PropertyRow(Base):
     area_name: Mapped[Optional[str]] = mapped_column(String, nullable=True)
     address: Mapped[Optional[str]] = mapped_column(Text, nullable=True)
     carpet_area_sqft: Mapped[Optional[float]] = mapped_column(Float, nullable=True)
+    carpet_area_unit: Mapped[Optional[str]] = mapped_column(String, nullable=True)
     price_text: Mapped[Optional[str]] = mapped_column(String, nullable=True)
     price_amount_inr: Mapped[Optional[float]] = mapped_column(Float, nullable=True)
+    price_per_unit_text: Mapped[Optional[str]] = mapped_column(String, nullable=True)
+    price_per_unit_amount_inr: Mapped[Optional[float]] = mapped_column(Float, nullable=True)
+    # "Sale" or "Rent" — see StructuredProperty.listing_type. Defaulted at
+    # both the ORM and DB level so a pre-existing row (retrofitted via
+    # Database/session.py's init_db) and any insert that omits it still
+    # land on "Sale", never NULL.
+    listing_type: Mapped[str] = mapped_column(String, nullable=False, default="Sale", server_default="Sale")
     contact_name: Mapped[Optional[str]] = mapped_column(String, nullable=True)
     contact_phone: Mapped[Optional[str]] = mapped_column(String, nullable=True)
     description: Mapped[Optional[str]] = mapped_column(Text, nullable=True)

@@ -4,7 +4,7 @@ import type { PropertyRecord } from "../api/types";
 import { usePolling } from "../hooks/usePolling";
 import { useDebounced, usePersistentState } from "../hooks/useUi";
 import { friendlyError } from "../lib/apiError";
-import { formatCarpetArea, formatPrice, relativeTime } from "../lib/formatters";
+import { formatCarpetArea, formatPrice, formatPricePerUnit, relativeTime } from "../lib/formatters";
 import {
   compileFilters,
   countActiveFilters,
@@ -66,7 +66,7 @@ const FETCH_LIMIT = 500;
 const PAGE_SIZE = 20;
 
 type ViewMode = "table" | "cards";
-type SortKey = "time" | "price" | "area" | "society" | "locality";
+type SortKey = "time" | "price" | "priceUnit" | "area" | "society" | "locality";
 type SortDir = "asc" | "desc";
 
 interface Column {
@@ -88,8 +88,10 @@ const COLUMNS: Column[] = [
   { key: "address", label: "Address" },
   { key: "bhk", label: "BHK", filterKey: "bhk" },
   { key: "type", label: "Type", filterKey: "type" },
+  { key: "listingType", label: "Sale/Rent", filterKey: "listingType" },
   { key: "carpet", label: "Carpet area", sort: "area", numeric: true, filterKey: "carpet" },
   { key: "price", label: "Price", sort: "price", numeric: true, filterKey: "price" },
+  { key: "priceUnit", label: "Price/unit", sort: "priceUnit", numeric: true, filterKey: "priceUnit" },
   { key: "contact", label: "Contact" },
   { key: "source", label: "Source", filterKey: "source" },
   { key: "time", label: "Received (IST)", sort: "time" },
@@ -101,6 +103,7 @@ const COLUMNS: Column[] = [
 const SORT_LABELS: Record<SortKey, { asc: string; desc: string }> = {
   time: { asc: "Oldest first", desc: "Newest first" },
   price: { asc: "Low → High", desc: "High → Low" },
+  priceUnit: { asc: "Low → High", desc: "High → Low" },
   area: { asc: "Small → Large", desc: "Large → Small" },
   society: { asc: "A → Z", desc: "Z → A" },
   locality: { asc: "A → Z", desc: "Z → A" },
@@ -144,7 +147,7 @@ export default function DashboardPage() {
         setLastUpdated(new Date());
         setError(null);
 
-        const incoming = new Set(data.map((p) => p.source_message_id));
+        const incoming = new Set(data.map((p) => p.record_id));
         if (seenIds.current) {
           const added = new Set([...incoming].filter((id) => !seenIds.current!.has(id)));
           if (added.size > 0) {
@@ -236,6 +239,8 @@ export default function DashboardPage() {
       switch (sortKey) {
         case "price":
           return compareNullable(a.price_amount_inr, b.price_amount_inr, direction);
+        case "priceUnit":
+          return compareNullable(a.price_per_unit_amount_inr, b.price_per_unit_amount_inr, direction);
         case "area":
           return compareNullable(a.carpet_area_sqft, b.carpet_area_sqft, direction);
         case "society":
@@ -728,18 +733,18 @@ function PropertyTable({
           </thead>
           <tbody>
             {properties.map((property) => {
-              const isExpanded = expandedId === property.source_message_id;
+              const isExpanded = expandedId === property.record_id;
               const flagged = property.review_status === "needs_review";
               const outsider = property.review_status === "outsider";
               return (
-                <Fragment key={property.source_message_id}>
+                <Fragment key={property.record_id}>
                   <tr
                     className={[
                       "row",
                       isExpanded && "row--open",
                       flagged && "row--flagged",
                       outsider && "row--outsider",
-                      freshIds.has(property.source_message_id) && "row--new",
+                      freshIds.has(property.record_id) && "row--new",
                     ]
                       .filter(Boolean)
                       .join(" ")}
@@ -749,11 +754,11 @@ function PropertyTable({
                     tabIndex={0}
                     role="button"
                     aria-expanded={isExpanded}
-                    onClick={() => setExpandedId(isExpanded ? null : property.source_message_id)}
+                    onClick={() => setExpandedId(isExpanded ? null : property.record_id)}
                     onKeyDown={(event) => {
                       if (event.key === "Enter" || event.key === " ") {
                         event.preventDefault();
-                        setExpandedId(isExpanded ? null : property.source_message_id);
+                        setExpandedId(isExpanded ? null : property.record_id);
                       }
                     }}
                   >
@@ -771,8 +776,11 @@ function PropertyTable({
                     </td>
                     <td>{property.bhk ?? "—"}</td>
                     <td>{property.property_type ?? "—"}</td>
+                    <td>
+                      <Badge tone={property.listing_type === "Rent" ? "info" : "ok"}>{property.listing_type}</Badge>
+                    </td>
                     <td className="cell-num" style={{ textAlign: "right" }}>
-                      {formatCarpetArea(property.carpet_area_sqft)}
+                      {formatCarpetArea(property.carpet_area_sqft, property.carpet_area_unit)}
                     </td>
                     <td
                       className="cell-num cell-strong"
@@ -782,6 +790,13 @@ function PropertyTable({
                       title={property.price_text ?? undefined}
                     >
                       {formatPrice(property.price_text, property.price_amount_inr)}
+                    </td>
+                    <td
+                      className="cell-num"
+                      style={{ textAlign: "right" }}
+                      title={property.price_per_unit_text ?? undefined}
+                    >
+                      {formatPricePerUnit(property.price_per_unit_text, property.price_per_unit_amount_inr)}
                     </td>
                     <td className="cell-truncate">
                       <Highlight text={property.contact_name ?? "—"} query={query} />
@@ -824,16 +839,16 @@ function PropertyCards({ properties, query, expandedId, setExpandedId, freshIds 
   return (
     <div className="card-grid">
       {properties.map((property, index) => {
-        const isExpanded = expandedId === property.source_message_id;
+        const isExpanded = expandedId === property.record_id;
         return (
           <Panel
-            key={property.source_message_id}
+            key={property.record_id}
             interactive
             selected={isExpanded}
             pad={false}
             delay={Math.min(index * 35, 420)}
-            className={`pcard${freshIds.has(property.source_message_id) ? " anim-pop" : ""}`}
-            onClick={() => setExpandedId(isExpanded ? null : property.source_message_id)}
+            className={`pcard${freshIds.has(property.record_id) ? " anim-pop" : ""}`}
+            onClick={() => setExpandedId(isExpanded ? null : property.record_id)}
           >
             <div className="pcard__top">
               <div style={{ minWidth: 0 }}>
@@ -850,6 +865,11 @@ function PropertyCards({ properties, query, expandedId, setExpandedId, freshIds 
             <div className="pcard__price" title={property.price_text ?? undefined}>
               {formatPrice(property.price_text, property.price_amount_inr)}
             </div>
+            {(property.price_per_unit_text !== null || property.price_per_unit_amount_inr !== null) && (
+              <div className="faint small" title={property.price_per_unit_text ?? undefined}>
+                {formatPricePerUnit(property.price_per_unit_text, property.price_per_unit_amount_inr)} / unit
+              </div>
+            )}
 
             <div className="pcard__facts">
               {property.bhk && (
@@ -864,10 +884,14 @@ function PropertyCards({ properties, query, expandedId, setExpandedId, freshIds 
                   {property.property_type}
                 </span>
               )}
+              <span className="fact">
+                <IconTag size={12} />
+                {property.listing_type}
+              </span>
               {property.carpet_area_sqft !== null && (
                 <span className="fact">
                   <IconRuler size={12} />
-                  {formatCarpetArea(property.carpet_area_sqft)}
+                  {formatCarpetArea(property.carpet_area_sqft, property.carpet_area_unit)}
                 </span>
               )}
               {property.area_name && (
@@ -948,6 +972,20 @@ function PropertyDetail({ property, embedded = false }: { property: PropertyReco
             {property.price_amount_inr !== null && (
               <div className="faint small" style={{ marginTop: 4 }}>
                 Read as {formatPrice(null, property.price_amount_inr)}
+              </div>
+            )}
+          </div>
+        )}
+
+        {(property.price_per_unit_text || property.price_per_unit_amount_inr !== null) && (
+          <div className="detail__block">
+            <div className="detail__k">Price per unit</div>
+            <div className="detail__v">
+              {property.price_per_unit_text ?? formatPricePerUnit(null, property.price_per_unit_amount_inr)}
+            </div>
+            {property.price_per_unit_amount_inr !== null && (
+              <div className="faint small" style={{ marginTop: 4 }}>
+                Read as {formatPricePerUnit(null, property.price_per_unit_amount_inr)}
               </div>
             )}
           </div>

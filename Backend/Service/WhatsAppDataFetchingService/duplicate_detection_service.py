@@ -197,7 +197,11 @@ def _score_candidate(
     )
     field_scores["carpet_area_sqft"] = area_score
     if area_conflict:
-        contradictions.append(f"carpet area ({new_property.carpet_area_sqft!r} vs {existing.carpet_area_sqft!r} sqft)")
+        new_unit = new_property.carpet_area_unit or "sqft"
+        existing_unit = existing.carpet_area_unit or "sqft"
+        contradictions.append(
+            f"carpet area ({new_property.carpet_area_sqft!r} {new_unit} vs {existing.carpet_area_sqft!r} {existing_unit})"
+        )
 
     price_score, price_conflict = _price_field_score(new_property, existing, settings.price_thresholds)
     field_scores["price"] = price_score

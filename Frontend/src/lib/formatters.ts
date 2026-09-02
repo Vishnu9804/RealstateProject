@@ -79,12 +79,35 @@ export function formatPrice(priceText: string | null, priceAmountInr: number | n
   return "—";
 }
 
-/** Plain digits — "2400 sqft", not "2,400 sqft". At four digits the grouping
- *  separator adds noise without aiding comprehension, and it collides with
- *  the comma-separated look of the compact price beside it. */
-export function formatCarpetArea(sqft: number | null): string {
-  if (sqft === null) return "—";
-  return `${Math.round(sqft)} sqft`;
+/**
+ * The opposite priority from formatPrice: for a per-unit rate, the unit
+ * ("/vaar", "/sq ft", ...) is not optional context, it's the entire point —
+ * "1.25L" alone doesn't say per what. The normalized text carries that
+ * suffix and wins whenever it's present; the bare numeric amount is only a
+ * fallback for the rare case a rate was parsed with no accompanying text.
+ * "—" means neither was extracted.
+ */
+export function formatPricePerUnit(priceText: string | null, priceAmountInr: number | null): string {
+  if (priceText) return priceText;
+  if (priceAmountInr !== null) return formatCompactInr(priceAmountInr);
+  return "—";
+}
+
+/**
+ * Plain digits plus whichever unit the message actually used — "155 vaar",
+ * "3856 sqft", "2 vigha" — never converted between units. The number is
+ * only ever comparable to another number in the *same* unit, so showing
+ * the unit isn't decoration, it's the difference between a plot and a flat
+ * reading as the same size by accident.
+ *
+ * Falls back to "sqft" when unit is missing but a number is present: every
+ * carpet_area_sqft value stored before carpet_area_unit existed came from
+ * a sqft-only extractor, so that's the correct label for old rows, not a
+ * guess.
+ */
+export function formatCarpetArea(area: number | null, unit: string | null): string {
+  if (area === null) return "—";
+  return `${Math.round(area)} ${unit ?? "sqft"}`;
 }
 
 export function parseSqft(raw: string): number | null {

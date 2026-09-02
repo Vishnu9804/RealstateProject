@@ -23,8 +23,12 @@ _COLUMNS = (
     "area_name",
     "address",
     "carpet_area_sqft",
+    "carpet_area_unit",
     "price_text",
     "price_amount_inr",
+    "price_per_unit_text",
+    "price_per_unit_amount_inr",
+    "listing_type",
     "contact_name",
     "contact_phone",
     "description",
@@ -74,6 +78,7 @@ def _to_row(prop: EmbeddedProperty) -> PropertyRow:
     data = {name: getattr(prop, name) for name in _COLUMNS}
     return PropertyRow(
         **data,
+        record_id=prop.record_id,
         embedding=prop.embedding,
         field_embeddings=prop.field_embeddings,
         embedding_model=prop.embedding_model,
@@ -84,6 +89,12 @@ def _to_pydantic(row: PropertyRow) -> EmbeddedProperty:
     data = {name: getattr(row, name) for name in _COLUMNS}
     return EmbeddedProperty(
         **data,
+        # A row written before record_id existed has none stored — fall
+        # back to this row's own primary key, which is unique by
+        # construction, rather than leaving every legacy row with the same
+        # blank identity (StructuredProperty.record_id is a required str,
+        # so it can never be left as the column's raw None here).
+        record_id=row.record_id or f"legacy-{row.id}",
         embedding=list(row.embedding),
         field_embeddings=dict(row.field_embeddings or {}),
         embedding_model=row.embedding_model,

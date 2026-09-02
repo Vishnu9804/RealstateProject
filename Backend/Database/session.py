@@ -76,7 +76,14 @@ def init_db() -> None:
     """Enables the pgvector extension and creates any tables that don't
     already exist. Safe to call on every startup — a no-op once the schema
     is in place. Only called when is_database_configured() is True (see
-    main.py's lifespan)."""
+    main.py's lifespan).
+
+    create_all only creates whole tables that are missing — it never adds a
+    column to a `properties` table that already exists from a previous
+    deploy. The ALTER TABLE statements below are the lightweight stand-in
+    for a real migration tool (this project has none): each one is
+    idempotent (IF NOT EXISTS) and nullable, so it's safe to run on every
+    startup and never touches existing rows/columns."""
     from sqlalchemy import text
 
     from Database.models import Base
@@ -85,3 +92,13 @@ def init_db() -> None:
     with engine.begin() as connection:
         connection.execute(text("CREATE EXTENSION IF NOT EXISTS vector"))
     Base.metadata.create_all(engine)
+    with engine.begin() as connection:
+        connection.execute(text("ALTER TABLE properties ADD COLUMN IF NOT EXISTS price_per_unit_text VARCHAR"))
+        connection.execute(
+            text("ALTER TABLE properties ADD COLUMN IF NOT EXISTS price_per_unit_amount_inr FLOAT")
+        )
+        connection.execute(text("ALTER TABLE properties ADD COLUMN IF NOT EXISTS carpet_area_unit VARCHAR"))
+        connection.execute(text("ALTER TABLE properties ADD COLUMN IF NOT EXISTS record_id VARCHAR"))
+        connection.execute(
+            text("ALTER TABLE properties ADD COLUMN IF NOT EXISTS listing_type VARCHAR NOT NULL DEFAULT 'Sale'")
+        )

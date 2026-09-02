@@ -45,6 +45,7 @@ export interface DisplaySettings {
 }
 
 export interface PropertyRecord {
+  record_id: string;
   source_message_id: string;
   property_type: string | null;
   bhk: string | null;
@@ -52,8 +53,12 @@ export interface PropertyRecord {
   area_name: string | null;
   address: string | null;
   carpet_area_sqft: number | null;
+  carpet_area_unit: string | null;
   price_text: string | null;
   price_amount_inr: number | null;
+  price_per_unit_text: string | null;
+  price_per_unit_amount_inr: number | null;
+  listing_type: "Sale" | "Rent";
   contact_name: string | null;
   contact_phone: string | null;
   description: string | null;

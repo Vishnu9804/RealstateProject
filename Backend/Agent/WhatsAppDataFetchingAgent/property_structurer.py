@@ -246,14 +246,102 @@ def _build_system_prompt() -> str:
             "property, in PART 3 below (in_service_area) — that field is where an "
             "out-of-area property gets flagged, never by omitting it from \"properties\".",
             "",
+            "BULK LISTINGS — a broker frequently sends a single message that bullet-lists ten "
+            "or more separate, unrelated properties at once (a mix of plots/flats/bungalows in "
+            "several different, unrelated localities, each its own bullet/line with its own "
+            "size and price). This is normal, not an edge case: one bullet/line = one property, "
+            "always, no matter how many other bullets are in the same message. Extract every "
+            "single one, keep each one's own details (society/area/address/size/price) "
+            "strictly separate from every other bullet's, and treat every one as fully "
+            "independent of its neighbors in the list — two bullets being adjacent, similarly "
+            "formatted, or sharing a price unit (e.g. both \"per Vaar\") does not make them "
+            "related. Never merge two bullets into one property, and never split one bullet's "
+            "own size/price/location details into more than one property entry.",
+            "",
             "Keep society_name (a specific named building/project/society, e.g. \"Black "
             "Residency\") and area_name (the general locality, e.g. \"Althan\") strictly "
             "separate — do not put a locality in society_name or a building name in "
-            "area_name. Only fill carpet_area_sqft if an explicit square-footage number is "
-            "stated in the message; never estimate it from the BHK.",
+            "area_name. Only fill carpet_area_sqft if an explicit area number is stated in "
+            "the message; never estimate it from the BHK.",
+            "",
+            "AREA UNIT — carpet_area_sqft takes the area number regardless of which unit it "
+            "is written in: square feet (\"1200 sqft\", \"1200 sq ft\"), Vaar/Gaj (\"500 "
+            "vaar\", \"500 gaj\"), or Vigha (\"2 vigha\"). Copy the bare number as written for "
+            "whichever of these units appears — do NOT convert between units and do NOT "
+            "guess a unit that isn't stated. carpet_area_unit records WHICH of those units it "
+            "was — set it to exactly \"sqft\", \"vaar\", or \"vigha\" every time carpet_area_sqft "
+            "is filled (never leave it null when carpet_area_sqft is set, and never set it when "
+            "carpet_area_sqft is null). The dashboard shows this unit next to the number exactly "
+            "as you set it (e.g. \"155 vaar\"), so getting it right matters as much as the number "
+            "itself.",
+            "",
+            "PRICE FIELDS — there are two independent kinds of price, and they must never be "
+            "confused with each other:",
+            "  - price_text / price_amount_inr is the TOTAL price of the property.",
+            "  - price_per_unit_text / price_per_unit_amount_inr is a PER-UNIT RATE — only "
+            "fill this when the message explicitly states a rate per sq ft / per vaar / per "
+            "vigha / per unit, phrased like \"1L per sq ft\", \"1L/sq ft\", \"85000/vaar\", "
+            "\"2500 per sqft\", \"1.2cr/vigha\". A bare total price (e.g. \"85 Lakh\" with no "
+            "\"per\"/\"/\" unit wording) is NEVER a per-unit rate, even if an area is also "
+            "mentioned elsewhere in the same message — leave price_per_unit_text/"
+            "price_per_unit_amount_inr null in that case. Likewise, do not copy a per-unit "
+            "rate into price_text/price_amount_inr.",
+            "",
+            "PRICE FORMAT — normalize BOTH price_text and price_per_unit_text into compact "
+            "Indian short-scale notation: \"cr\" for crore, \"L\" for lakh, \"k\" for thousand. "
+            "Strip the ₹ symbol, \"Rs.\"/\"INR\", and Indian comma-grouping — e.g. "
+            "\"1,25,00,000₹\" or \"1.25 crore\" becomes \"1.25cr\"; \"Rs.45,00,000/-\" or "
+            "\"45 Lakh\" becomes \"45L\"; \"15,000/month\" becomes \"15k/month\"; a per-unit "
+            "\"1,25,000/vaar\" becomes \"1.25L/vaar\". Keep any \"/vaar\", \"/vigha\", "
+            "\"/sq ft\", \"/month\" unit suffix from the original wording on price_per_unit_text "
+            "(and on price_text only when the message itself qualified the total that way, e.g. "
+            "\"/month\" rent). This formatting must be exact and consistent for every price you "
+            "extract — get it right every time, not just usually.",
             "",
             "Never invent details that are not present in the message text. If a field is "
-            "not mentioned, use null rather than guessing.",
+            "not mentioned, use null rather than guessing. Do not perform any arithmetic "
+            "yourself (no dividing a total by an area, no multiplying a rate by an area) — "
+            "only transcribe and reformat numbers that are actually written in the message; "
+            "any derived value is computed deterministically after extraction, not by you.",
+            "",
+            "RENT VS SALE CLASSIFICATION (listing_type) — every extracted property must be "
+            "classified as exactly one of \"Sale\" or \"Rent\". This is just as important as PART 1's "
+            "is_property_listing call and PART 3's area matching — never skip it or fill it in on "
+            "autopilot. These messages are written in a mix of English, Hindi, and Gujarati (often "
+            "transliterated into Latin script with inconsistent spelling), so recognize the intent "
+            "behind the wording, not just exact keywords:",
+            "  - RENT signals: \"rent\", \"for rent\", \"on rent\", \"rent par\", \"to let\", \"lease\", "
+            "\"bhade\", \"bhade pe\", \"bhade pe dena hai\", \"bhadu\", \"bhada\", \"bhada pr\", \"bahde\", "
+            "\"bhade apvanu che/chhe\", \"bahde apvanu chhe\", and other spelling variants of the same "
+            "Hindi/Gujarati words for \"rent\" (spelling varies a lot writer-to-writer — match the "
+            "sound/intent, not one exact spelling).",
+            "  - SALE signals: \"sale\", \"for sale\", \"to sell\", \"bechna hai\", \"vechvanu che/chhe\", "
+            "\"vechvani che\", \"vecvu che\", and other spelling variants of the same Hindi/Gujarati words "
+            "for \"sell\"/\"for sale\".",
+            "  - REQUIRED FIRST STEP — before deciding listing_type, actually re-read this property's "
+            "own message text specifically looking for the RENT and SALE signal words above. Write what "
+            "you found (or that you found nothing) into listing_type_reason BEFORE writing listing_type "
+            "— exactly the same reason-before-verdict discipline as area_match_reason/in_service_area in "
+            "PART 3. Do not write listing_type first and rationalize a reason afterward.",
+            "  - If the message contains a clear RENT signal for that property, set listing_type to "
+            "\"Rent\" — regardless of property_type (even a Plot/Land can genuinely be offered for "
+            "rent, though this is rare). A RENT signal ALWAYS overrides the \"Sale\" default — never let "
+            "the property being a Flat/Shop/Office/Bungalow (types normally sold) pull you back toward "
+            "\"Sale\" once you've actually found rent wording.",
+            "  - If the message contains a clear SALE signal, or if it mentions BOTH and the SALE "
+            "signal is the one that actually applies to this specific property, set listing_type to "
+            "\"Sale\".",
+            "  - EDGE CASE — property types that are almost always sold outright (Plot/Land, and "
+            "similar) but where the message gives NO explicit Rent/Sale wording at all: default to "
+            "\"Sale\". Do not infer \"Rent\" just because a price is quoted, an area is quoted, or "
+            "monthly-sounding numbers appear — only an actual rent signal as above justifies \"Rent\".",
+            "  - DEFAULT — whenever the message gives no explicit Sale or Rent signal at all for a "
+            "property (of any property_type), set listing_type to \"Sale\". Never leave listing_type "
+            "null and never guess \"Rent\" without a genuine explicit signal — \"Rent\" must always be "
+            "earned by clear wording in the message, while \"Sale\" is the safe default otherwise.",
+            "  - In a multi-property message, judge listing_type separately for each property from "
+            "that property's own wording — the same rule as area matching in PART 3: never borrow one "
+            "property's Sale/Rent signal for a different property in the same message.",
             "",
             "=== PART 3 — SERVICE AREA MATCHING (in_service_area) ===",
             "",
@@ -302,21 +390,42 @@ def _build_system_prompt() -> str:
             "being a part of it — never set TRUE on proximity alone; it must be an actual "
             "match against a line you recalled in STEP A.",
             "",
-            "3. If step 2 finds a match and area_name was null/didn't already name that "
+            "3. CRITICAL — NEVER borrow a different property's location. A real broker message "
+            "very often lists MANY separate, unrelated properties in one text — a batch of plot "
+            "listings all priced \"per Vaar\", say, where most are in one locality and one or "
+            "two are somewhere completely different. Each property's in_service_area decision "
+            "uses ONLY that property's OWN area_name/address as extracted for IT in PART 2 — "
+            "never a different property's area_name/address, even when that other property is "
+            "the very next line in the list, shares the same formatting/pricing style, or sits "
+            "under the same heading. A locality that appears only in a DIFFERENT property's "
+            "line is not evidence for this property — treat it as if it were not in the message "
+            "at all. CONCRETE FAILURE TO AVOID: a message lists a plot in \"Vadod\" and, "
+            "separately, a plot on \"VIP Road\" (which area_knowledge says is part of Vesu). It "
+            "is WRONG to write the Vadod property's area_match_reason as \"listed under VIP "
+            "Road, part of Vesu\" — VIP Road is the OTHER property's address, not Vadod's; "
+            "Vadod itself was correctly recognized as not matching anything in area_knowledge, "
+            "so in_service_area for that Vadod property must be FALSE. Getting the right "
+            "locality for a property and then matching a DIFFERENT locality's result onto it is "
+            "a pure bookkeeping error, not a defensible use of the fail-open default in point 5 "
+            "below — that default is for genuine uncertainty about ONE property's own location, "
+            "never for carrying a correct-but-unrelated verdict over from another property.",
+            "",
+            "4. If point 2 finds a match and area_name was null/didn't already name that "
             "selected area, SET area_name to that selected area's name (e.g. area_name "
             "becomes \"Vesu\") while leaving the original road/landmark text in address so "
             "no detail is lost — do not overwrite address with it, and do not remove it.",
             "",
-            "4. Set in_service_area FALSE only when, after genuinely checking against every "
-            "line of area_knowledge, you're reasonably confident the property is in a Surat "
-            "locality that is distinct from every client-selected area. Missing everyone's "
-            "benefit of the doubt here costs far more than the reverse: a real property in a "
-            "selected area that gets wrongly marked FALSE is a lost client opportunity, while "
-            "one wrongly marked TRUE is just an extra row someone skips past. So if you are "
-            "genuinely unsure whether it belongs to a selected area or not, set in_service_area "
-            "TRUE.",
+            "5. Set in_service_area FALSE only when, after genuinely checking THIS property's "
+            "own area_name/address against every line of area_knowledge, you're reasonably "
+            "confident it is in a Surat locality distinct from every client-selected area. "
+            "Missing everyone's benefit of the doubt here costs far more than the reverse: a "
+            "real property in a selected area that gets wrongly marked FALSE is a lost client "
+            "opportunity, while one wrongly marked TRUE is just an extra row someone skips "
+            "past. So when you are genuinely unsure whether THIS property's OWN location "
+            "belongs to a selected area, set in_service_area TRUE — but this default is never "
+            "a license to reuse a different property's area/verdict (see point 3).",
             "",
-            "5. area_match_reason and in_service_area are REQUIRED for EVERY property, with NO "
+            "6. area_match_reason and in_service_area are REQUIRED for EVERY property, with NO "
             "exceptions — a message with several properties needs a separate STEP B judgment "
             "for each one, even when two properties share a similar or identical location; "
             "never leave either field out for any property, and never let one property's "
@@ -325,9 +434,9 @@ def _build_system_prompt() -> str:
             "must name THAT property's own area_name/address and cite the specific fact from "
             "area_knowledge that decided it (e.g. \"VIP Road (this property's address) is "
             "listed under Vesu in area_knowledge\") — never the bare area name alone, and never "
-            "a different property's location or reasoning copied across.",
+            "a different property's location or reasoning copied across (see point 3).",
             "",
-            "6. If the client has selected no areas at all (list says \"(none configured)\"), "
+            "7. If the client has selected no areas at all (list says \"(none configured)\"), "
             "set in_service_area TRUE for everything and area_knowledge can be null — there is "
             "nothing to recall or filter against.",
             "",
@@ -348,7 +457,10 @@ def _build_system_prompt() -> str:
             "        {\"property_type\": string|null, \"bhk\": string|null, "
             "\"society_name\": string|null, \"area_name\": string|null, "
             "\"address\": string|null, \"carpet_area_sqft\": number|null, "
+            "\"carpet_area_unit\": \"sqft\"|\"vaar\"|\"vigha\"|null, "
             "\"price_text\": string|null, \"price_amount_inr\": number|null, "
+            "\"price_per_unit_text\": string|null, \"price_per_unit_amount_inr\": number|null, "
+            "\"listing_type_reason\": string, \"listing_type\": \"Sale\"|\"Rent\", "
             "\"contact_name\": string|null, \"contact_phone\": string|null, "
             "\"description\": string|null, \"area_match_reason\": string, "
             "\"in_service_area\": true or false}",
@@ -357,9 +469,9 @@ def _build_system_prompt() -> str:
             "  ]",
             "}",
             "",
-            "Field order inside each property object matters: write area_match_reason BEFORE "
-            "in_service_area, exactly as shown above, so the reason is decided before the "
-            "verdict rather than justified after it.",
+            "Field order inside each property object matters: write listing_type_reason BEFORE "
+            "listing_type, and area_match_reason BEFORE in_service_area, exactly as shown above, so "
+            "each reason is decided before its verdict rather than justified after it.",
             "",
             "\"extractions\" must contain exactly one object per input message, in the same "
             "order they were given, with \"source_message_id\" matching each message's id "
@@ -462,7 +574,17 @@ def _merge_with_message_data(
                 f"Property from message {message.message_id!r} (area={listing.area_name!r}) -> {verdict}: "
                 f"{listing.area_match_reason or 'no reason given by GLM'}"
             )
-            properties.append(_to_structured_property(listing, message))
+            # Same auditing rationale as the area_match_reason log above —
+            # this is the only visibility into whether listing_type reflects
+            # genuine per-property reasoning or a silently defaulted/omitted
+            # field (GLMPropertyListing.listing_type fails open to "Sale").
+            step_logger.info(
+                f"Property from message {message.message_id!r} -> listing_type={listing.listing_type!r}: "
+                f"{listing.listing_type_reason or 'no reason given by GLM'}"
+            )
+            properties.append(
+                _to_structured_property(listing, message, single_property_message=len(extraction.properties) == 1)
+            )
 
     for missing_id in set(messages_by_id) - seen_ids:
         step_logger.warn(f"GLM did not return anything for message id {missing_id!r} — dropped from this batch.")
@@ -470,7 +592,9 @@ def _merge_with_message_data(
     return properties
 
 
-def _to_structured_property(listing: GLMPropertyListing, message: WhatsAppChatMessage) -> StructuredProperty:
+def _to_structured_property(
+    listing: GLMPropertyListing, message: WhatsAppChatMessage, single_property_message: bool
+) -> StructuredProperty:
     """Builds one StructuredProperty from one extracted listing, merged with
     the WhatsApp metadata shared by every listing pulled from that same
     message. Two listings from one message become two fully independent
@@ -483,8 +607,14 @@ def _to_structured_property(listing: GLMPropertyListing, message: WhatsAppChatMe
     still stored, just flagged review_status="outsider" with the reason so
     it surfaces in the Outsider tab instead of silently vanishing — losing
     a wanted property is the one thing this pipeline must never do, and a
-    wrongly-flagged outsider is still fully visible and correctable."""
-    return StructuredProperty(
+    wrongly-flagged outsider is still fully visible and correctable.
+
+    single_property_message tells _sanitize_listing_type whether
+    message.text can safely be scanned as evidence for THIS property alone
+    (true only when the message held exactly one property) — see that
+    function's docstring for why a multi-property message can't use the
+    same keyword-search shortcut."""
+    structured = StructuredProperty(
         source_message_id=message.message_id,
         property_type=listing.property_type,
         bhk=listing.bhk,
@@ -492,8 +622,12 @@ def _to_structured_property(listing: GLMPropertyListing, message: WhatsAppChatMe
         area_name=listing.area_name,
         address=listing.address,
         carpet_area_sqft=listing.carpet_area_sqft,
+        carpet_area_unit=listing.carpet_area_unit,
         price_text=listing.price_text,
         price_amount_inr=listing.price_amount_inr,
+        price_per_unit_text=listing.price_per_unit_text,
+        price_per_unit_amount_inr=listing.price_per_unit_amount_inr,
+        listing_type=listing.listing_type,
         contact_name=listing.contact_name,
         contact_phone=listing.contact_phone,
         description=listing.description,
@@ -511,3 +645,193 @@ def _to_structured_property(listing: GLMPropertyListing, message: WhatsAppChatMe
         message_text=message.text,
         message_timestamp=message.received_at,
     )
+    _sanitize_and_parse_prices(structured)
+    _fill_missing_price_or_area(structured)
+    if single_property_message:
+        _sanitize_listing_type(structured)
+    return structured
+
+
+_CRORE = 10_000_000
+_LAKH = 100_000
+_THOUSAND = 1_000
+
+# Catches a per-unit rate the LLM mislabeled as the total price (e.g.
+# price_text ends up holding "1.25L per Vaar" instead of a real total) —
+# despite the PRICE FIELDS prompt rule telling it never to do this, a small
+# fast model still occasionally does, and this pipeline promised 100%
+# accuracy on the total-vs-per-unit distinction, not "usually right".
+_PER_UNIT_HINT_RE = re.compile(
+    r"(?:per\s*(?:sq\.?\s*ft|sqft|vaar|gaj|vigha|yard|unit)|/\s*(?:sq\.?\s*ft|sqft|vaar|gaj|vigha|yard))",
+    re.IGNORECASE,
+)
+
+# Same rationale as _PER_UNIT_HINT_RE above: never trust the LLM's Sale-vs-
+# Rent call as the only line of defense. GLM-4.7-FlashX occasionally leaves
+# listing_type at its "Sale" default even when the message plainly contains
+# an explicit rent word (e.g. "Bhade pe Dena hai") — this deterministic word
+# list catches the unambiguous cases the model misses. Only additive toward
+# "Rent": it never overrides an LLM call of "Rent" back to "Sale", since a
+# stray "sale" substring elsewhere in a message is far less reliable
+# evidence than an explicit rent word is for "Rent".
+_RENT_KEYWORDS = (
+    "rent", "on rent", "for rent", "rent par", "rent pe", "to let", "lease",
+    "bhade", "bhada", "bhadu", "bhado", "bhadey", "bahde", "bahda", "bahdu",
+)
+_SALE_KEYWORDS = (
+    "sale", "for sale", "to sell", "resale",
+    "bechna", "bechvu", "bechvanu", "bechvani",
+    "vechvanu", "vechvani", "vechay", "vecvu", "vechvu",
+)
+_RENT_SIGNAL_RE = re.compile(
+    r"\b(?:" + "|".join(re.escape(word) for word in _RENT_KEYWORDS) + r")\b", re.IGNORECASE
+)
+_SALE_SIGNAL_RE = re.compile(
+    r"\b(?:" + "|".join(re.escape(word) for word in _SALE_KEYWORDS) + r")\b", re.IGNORECASE
+)
+
+
+def _sanitize_listing_type(prop: StructuredProperty) -> None:
+    """Deterministic safety net over the LLM's Sale/Rent classification, run
+    only when the source message held exactly ONE property (see
+    _to_structured_property's single_property_message) — for a multi-
+    property/bulk-listing message, message_text covers every property in
+    it, so a rent word anywhere in the text could belong to a completely
+    different bullet/line and wrongly flip an unrelated Sale property (the
+    same "never borrow a different property's signal" problem the area-
+    matching rules guard against); the LLM's own per-property reasoning is
+    the only safe source of truth there.
+
+    For the single-property case, forces "Rent" whenever the message
+    contains a clear rent keyword and no sale keyword — never the reverse
+    (an LLM call of "Rent" is left untouched, and a message containing both
+    words is left to the LLM's own judgement rather than guessed at here)."""
+    if prop.listing_type == "Rent":
+        return
+    text = prop.message_text or ""
+    if _RENT_SIGNAL_RE.search(text) and not _SALE_SIGNAL_RE.search(text):
+        prop.listing_type = "Rent"
+
+# Finds the first number(+scale) in a price string, ignoring any trailing
+# "per vaar"/"/sqft" wording — used as a deterministic fallback whenever the
+# LLM left an *_amount_inr null but its own *_text is plainly parseable, so
+# the area/rate/total derivation below isn't at the mercy of the LLM
+# remembering to also fill the numeric field every time.
+_PRICE_CLEAN_RE = re.compile(r"[₹,]|rs\.?|inr", re.IGNORECASE)
+_PRICE_NUMBER_RE = re.compile(
+    r"(\d+(?:\.\d+)?)\s*(cr|crore|crores|l|lac|lacs|lakh|lakhs|k|thousand)?", re.IGNORECASE
+)
+_SCALE_MULTIPLIERS = {
+    "cr": _CRORE,
+    "crore": _CRORE,
+    "crores": _CRORE,
+    "l": _LAKH,
+    "lac": _LAKH,
+    "lacs": _LAKH,
+    "lakh": _LAKH,
+    "lakhs": _LAKH,
+    "k": _THOUSAND,
+    "thousand": _THOUSAND,
+}
+
+
+def _parse_price_text_to_inr(text: str) -> Optional[float]:
+    cleaned = _PRICE_CLEAN_RE.sub("", text)
+    match = _PRICE_NUMBER_RE.search(cleaned)
+    if not match:
+        return None
+    value = float(match.group(1))
+    scale = (match.group(2) or "").lower()
+    return value * _SCALE_MULTIPLIERS[scale] if scale else value
+
+
+def _sanitize_and_parse_prices(prop: StructuredProperty) -> None:
+    """Deterministic safety net over the LLM's PRICE FIELDS separation, run
+    right after structuring — never trusts the LLM's total-vs-per-unit split
+    (or its numeric parsing) as the only line of defense:
+
+    1. If price_text itself reads like a per-unit rate ("...per vaar",
+       ".../sq ft"), the LLM mislabeled a rate as the total. Reclassify it
+       as the per-unit rate (unless that field is already filled) and clear
+       price_text/price_amount_inr — a "total" that is actually a rate is
+       strictly worse than leaving Price blank, since a blank total still
+       lets _fill_missing_price_or_area derive the real one from
+       area * rate.
+    2. Whenever an *_amount_inr is null but its matching *_text is present,
+       try to parse a plain number out of the text — the LLM sometimes
+       writes a clean, parseable price string without also filling the
+       numeric field, which would otherwise silently block the area/rate/
+       total derivation from having the two inputs it needs.
+    """
+    if _PER_UNIT_HINT_RE.search(prop.price_text or ""):
+        if not prop.price_per_unit_text:
+            prop.price_per_unit_text = prop.price_text
+        prop.price_text = None
+        prop.price_amount_inr = None
+
+    if prop.price_amount_inr is None and prop.price_text:
+        prop.price_amount_inr = _parse_price_text_to_inr(prop.price_text)
+    if prop.price_per_unit_amount_inr is None and prop.price_per_unit_text:
+        prop.price_per_unit_amount_inr = _parse_price_text_to_inr(prop.price_per_unit_text)
+
+
+def _format_compact_inr(amount: float) -> str:
+    """Mirrors Frontend/src/lib/formatters.ts's formatCompactInr, so a value
+    this module derives (rather than the LLM) reads identically to one the
+    LLM formatted itself or the frontend would format from a raw number —
+    up to two decimals, trailing zeros dropped."""
+    magnitude = abs(amount)
+    if magnitude >= _CRORE:
+        return f"{_trim_number(amount / _CRORE)}cr"
+    if magnitude >= _LAKH:
+        return f"{_trim_number(amount / _LAKH)}L"
+    if magnitude >= _THOUSAND:
+        return f"{_trim_number(amount / _THOUSAND)}k"
+    return _trim_number(amount)
+
+
+def _trim_number(value: float) -> str:
+    rounded = round(value, 2)
+    return f"{rounded:g}"
+
+
+def _fill_missing_price_or_area(prop: StructuredProperty) -> None:
+    """Deterministic post-processing, run after the LLM has structured the
+    property — never inside the LLM prompt itself. carpet_area_sqft,
+    price_amount_inr and price_per_unit_amount_inr are three numbers that
+    are only ever dimensionally consistent within one listing (all in
+    whatever single unit — sqft/vaar/vigha — that listing used), so
+    "total = area * rate" holds exactly as written, with no unit
+    conversion. When exactly one of the three is missing and the other two
+    are present, the third is computed here; when two or more are missing
+    there isn't enough information to derive anything, so every field is
+    left exactly as the LLM returned it (null stays null, shown as "—" in
+    the UI, same as today)."""
+    area = prop.carpet_area_sqft
+    total = prop.price_amount_inr
+    per_unit = prop.price_per_unit_amount_inr
+
+    present = sum(value is not None for value in (area, total, per_unit))
+    if present != 2:
+        return
+
+    if total is None:
+        if per_unit == 0:
+            return
+        total = area * per_unit
+        prop.price_amount_inr = total
+        if not prop.price_text:
+            prop.price_text = _format_compact_inr(total)
+    elif area is None:
+        if per_unit is None or per_unit == 0:
+            return
+        area = total / per_unit
+        prop.carpet_area_sqft = area
+    elif per_unit is None:
+        if area == 0:
+            return
+        per_unit = total / area
+        prop.price_per_unit_amount_inr = per_unit
+        if not prop.price_per_unit_text:
+            suffix = f"/{prop.carpet_area_unit}" if prop.carpet_area_unit else ""
+            prop.price_per_unit_text = f"{_format_compact_inr(per_unit)}{suffix}"

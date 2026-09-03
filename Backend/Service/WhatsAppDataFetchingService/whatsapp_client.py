@@ -37,6 +37,31 @@ from Model.WhatsAppDataFetchingModel.whatsapp_status import WhatsAppStatus
 
 SESSION_DB_PATH = os.path.join(os.path.dirname(__file__), "session", "whatsapp_session.db")
 
+# neonize's own QR channel gives up (prints "Login event: timeout" straight
+# to stdout, bypassing every callback we hook) after nobody scans any of its
+# rotating codes for a while — roughly 2-2.5 minutes has been observed in
+# practice. Nothing in neonize automatically starts a fresh pairing round
+# after that: the underlying connection is left sitting there with a dead,
+# unscannable QR image forever unless something forces it to reconnect. This
+# is comfortably past that observed window so it never races a legitimate
+# in-progress scan.
+_PAIRING_TIMEOUT_SECONDS = 200
+
+
+def _delete_session_files() -> None:
+    """Removes the session db plus its SQLite WAL/SHM sidecar files (present
+    whenever the db was open at the time of the crash/logout). Best-effort:
+    if a file is still locked by another process, log it and move on rather
+    than blocking status reporting on a cleanup that can be redone by
+    restarting."""
+    for suffix in ("", "-wal", "-shm", "-journal"):
+        path = SESSION_DB_PATH + suffix
+        try:
+            if os.path.exists(path):
+                os.remove(path)
+        except OSError as exc:
+            step_logger.warn(f"Could not remove stale session file {path!r}: {exc!r}")
+
 
 class WhatsAppClient:
     def __init__(
@@ -61,6 +86,8 @@ class WhatsAppClient:
         self._latest_groups: List[WhatsAppGroup] = []
         self._client: Optional[NewClient] = None
         self._setup_started = False
+        self._pairing_watchdog: Optional[threading.Timer] = None
+        self._needs_session_cleanup = False
 
         # Resolving a sender's real phone number (from a LID) and their
         # saved-contact name involves a lookup per message; caching by
@@ -102,13 +129,16 @@ class WhatsAppClient:
         step_logger.step("New WhatsApp pairing QR code ready — fetch it via GET /api/whatsapp/qr")
         self._on_status_changed(WhatsAppStatus.WAITING_FOR_QR_SCAN)
         self._on_qr_ready(buffer.getvalue())
+        self._arm_pairing_watchdog()
 
     def _handle_pair_status(self, _client: NewClient, ev: PairStatusEv) -> None:
+        self._disarm_pairing_watchdog()
         step_logger.success(f"Paired with WhatsApp account +{ev.ID.User}")
         self._on_qr_ready(None)  # QR is single-use; stop serving the stale image
         self._on_status_changed(WhatsAppStatus.PAIRING)
 
     def _handle_connected(self, client: NewClient, _ev: ConnectedEv) -> None:
+        self._disarm_pairing_watchdog()
         step_logger.success("Connected to WhatsApp")
 
         if self._setup_started:
@@ -184,15 +214,97 @@ class WhatsAppClient:
             self._on_status_changed(WhatsAppStatus.LISTENING_NOTHING_SELECTED)
 
     def _handle_disconnected(self, _client: NewClient, _ev: DisconnectedEv) -> None:
+        self._disarm_pairing_watchdog()
         step_logger.warn("Disconnected from WhatsApp")
         self._on_status_changed(WhatsAppStatus.DISCONNECTED)
 
     def _handle_logged_out(self, _client: NewClient, _ev: LoggedOutEv) -> None:
-        step_logger.error(
-            "Logged out of WhatsApp. Delete the Service/WhatsAppDataFetchingService/session folder and "
-            "restart the server to pair again."
-        )
+        # A logged-out device's stored identity/keys are permanently invalid
+        # on WhatsApp's side — leaving them on disk actively breaks every
+        # future pairing attempt: neonize reopens this same file on the next
+        # connect() and reuses that dead identity, so the phone rejects the
+        # new QR with "Couldn't link device" indefinitely until someone
+        # notices and deletes it by hand. Clearing it here means the next
+        # connect() always starts from a clean device and a fresh QR
+        # actually has a chance to work.
+        #
+        # This callback runs synchronously from *inside* the still-blocking
+        # `connect()` Go call (it's invoked directly by the Go runtime), so
+        # the session db is still open at this point. On Windows that's a
+        # mandatory OS-level lock, so the delete attempted here reliably
+        # fails with PermissionError — unlike POSIX, where unlinking an
+        # open file quietly succeeds. Flagging `_needs_session_cleanup`
+        # lets the reconnect loop (whatsapp_service._run_client) retry the
+        # delete once `connect()` has actually returned and the file is
+        # guaranteed to be closed.
+        self._disarm_pairing_watchdog()
+        step_logger.error("Logged out of WhatsApp. Clearing the stale session so re-pairing starts clean.")
+        _delete_session_files()
+        self._needs_session_cleanup = True
+        self._on_qr_ready(None)  # the QR on screen is dead the moment the session is invalidated
         self._on_status_changed(WhatsAppStatus.LOGGED_OUT)
+
+        # LoggedOutEv alone does NOT make the blocking `connect()` call
+        # return — nothing else in neonize forces that on its own, so
+        # without this the reconnect loop in whatsapp_service.py never gets
+        # control back to build a new client and put up a fresh QR; the
+        # page is left stuck on this LOGGED_OUT status forever. `connect()`
+        # only returns once the Go context is cancelled via `stop()` —
+        # `disconnect()` alone (what this used to call) merely closes the
+        # websocket and does NOT unblock it, which is exactly why no fresh
+        # QR ever appeared after a real-device logout. `stop()` (same
+        # mechanism `_pairing_timed_out` already relies on) makes
+        # `connect()` return promptly so a new pairing round actually
+        # starts within seconds instead of never.
+        if self._client is not None:
+            try:
+                self._client.stop()
+            except Exception as exc:  # noqa: BLE001
+                step_logger.warn(f"Error stopping client after logout: {exc!r}")
+
+    def retry_pending_session_cleanup(self) -> None:
+        """Called by the reconnect loop after `connect()` has fully
+        returned. If a logout happened during the connection that just
+        ended, the session db was still locked when `_handle_logged_out`
+        tried to delete it — retry now that the file is guaranteed to be
+        closed, so the next `connect()` doesn't reopen a session file that
+        still carries a revoked device identity."""
+        if not self._needs_session_cleanup:
+            return
+        _delete_session_files()
+        self._needs_session_cleanup = False
+
+    def _arm_pairing_watchdog(self) -> None:
+        self._disarm_pairing_watchdog()
+        timer = threading.Timer(_PAIRING_TIMEOUT_SECONDS, self._pairing_timed_out)
+        timer.daemon = True
+        self._pairing_watchdog = timer
+        timer.start()
+
+    def _disarm_pairing_watchdog(self) -> None:
+        if self._pairing_watchdog is not None:
+            self._pairing_watchdog.cancel()
+            self._pairing_watchdog = None
+
+    def _pairing_timed_out(self) -> None:
+        # Nobody scanned any of the rotating QR codes in time. neonize has
+        # already given up on this pairing round on its own (silently, from
+        # our side), so the connection is just sitting there with a dead QR
+        # that will never successfully link. `client.start()`'s blocking
+        # call (`connect()`) only returns once the underlying Go context is
+        # cancelled via `stop()` — calling `disconnect()` alone just closes
+        # the websocket and does NOT unblock it (see neonize's own
+        # `connect_with_proxy` docstring/comments). Calling `stop()` here is
+        # what lets the retry loop in whatsapp_service.py rebuild a
+        # brand-new client and put up a genuinely fresh QR — instead of the
+        # page being stuck showing an unscannable code forever.
+        step_logger.warn("WhatsApp pairing timed out — nobody scanned in time. Restarting pairing with a fresh QR.")
+        self._on_qr_ready(None)
+        if self._client is not None:
+            try:
+                self._client.stop()
+            except Exception as exc:  # noqa: BLE001
+                step_logger.warn(f"Error stopping client after pairing timeout: {exc!r}")
 
     def _handle_message(self, _client: NewClient, ev: MessageEv) -> None:
         # Runs inside a ctypes callback invoked from the underlying Go

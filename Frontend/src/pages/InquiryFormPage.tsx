@@ -88,11 +88,24 @@ export default function InquiryFormPage() {
     if (saved) applyPrefill(saved);
   }
 
-  const canSubmit = name.trim().length > 0 && purpose !== "" && !submitting;
-
   async function handleSubmit(event: React.FormEvent<HTMLFormElement>) {
     event.preventDefault();
-    if (!canSubmit) return;
+    if (submitting) return;
+
+    // Validated on submit, not by silently disabling the button beforehand
+    // — a disabled button with no explanation looks broken/unresponsive
+    // (this is what was reported: the button "not available" with no clue
+    // why), whereas a submit attempt that fails tells the visitor exactly
+    // what's missing.
+    if (!name.trim()) {
+      setSubmitError("Please enter your name.");
+      return;
+    }
+    if (!purpose) {
+      setSubmitError("Please select whether you want to Buy, Rent, or Sell.");
+      return;
+    }
+
     setSubmitting(true);
     setSubmitError(null);
 
@@ -217,7 +230,7 @@ export default function InquiryFormPage() {
               </div>
 
               <div className="field">
-                <span className="field__label">I want to</span>
+                <span className="field__label">I want to (required)</span>
                 <Segmented<PurposeValue>
                   ariaLabel="Purpose"
                   value={purpose}
@@ -323,7 +336,7 @@ export default function InquiryFormPage() {
               )}
 
               <div className="row-flex">
-                <Button type="submit" variant="primary" busy={submitting} disabled={!canSubmit}>
+                <Button type="submit" variant="primary" busy={submitting} disabled={submitting}>
                   {submitting ? "Submitting…" : isNewClient ? "Submit requirements" : "Save changes"}
                 </Button>
                 {!isNewClient && (

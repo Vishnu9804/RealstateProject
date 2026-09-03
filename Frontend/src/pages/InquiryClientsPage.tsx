@@ -35,6 +35,7 @@ import {
 } from "../components/ui/Icons";
 
 const REFRESH_INTERVAL_MS = 8000;
+const QR_POLL_INTERVAL_MS = 3000;
 const FETCH_LIMIT = 500;
 
 type StatusFilter = "all" | "registered" | "pending_registration";
@@ -55,6 +56,21 @@ export default function InquiryClientsPage() {
   const searchRef = useRef<HTMLInputElement>(null);
   const seenPhones = useRef<Set<string> | null>(null);
   const [freshPhones, setFreshPhones] = useState<Set<string>>(new Set());
+
+  const [qrTick, setQrTick] = useState(0);
+  const [qrLoadFailed, setQrLoadFailed] = useState(false);
+  const waitingForQr = inquiryStatus?.status === "waiting_for_qr_scan";
+
+  // Only polled while a scan is actually being waited on — pointless to
+  // keep refreshing a QR image once pairing is done or hasn't started yet.
+  usePolling(
+    () => {
+      setQrTick((t) => t + 1);
+      setQrLoadFailed(false);
+    },
+    QR_POLL_INTERVAL_MS,
+    waitingForQr,
+  );
 
   const load = useCallback(
     async (manual = false) => {
@@ -171,17 +187,58 @@ export default function InquiryClientsPage() {
         </div>
       </header>
 
-      {statusDisplay && (
-        <Note tone={statusNoteTone} icon={<IconMessage size={16} />}>
-          <strong>Inquiry bot: {statusDisplay.label}.</strong> {statusDisplay.hint}
-          {inquiryStatus && !inquiryStatus.client_database_configured && (
-            <>
-              {" "}
-              <strong>CLIENT_DATABASE_URL is not set</strong> — client records are in-memory only and will be lost
-              on restart.
-            </>
-          )}
-        </Note>
+      {waitingForQr ? (
+        <Panel className="stack stack-4">
+          <div className="section-head__eyebrow" style={{ marginBottom: 0 }}>
+            Pair the inquiry-handling WhatsApp account
+          </div>
+          <div className="stack stack-4" style={{ alignItems: "center" }}>
+            {!qrLoadFailed ? (
+              <div className="qr">
+                <img
+                  src={inquiryClientApi.getQrCodeUrl(qrTick)}
+                  alt="WhatsApp pairing QR code for inquiry handling"
+                  onError={() => setQrLoadFailed(true)}
+                />
+                <span className="qr__corner qr__corner--tl" />
+                <span className="qr__corner qr__corner--tr" />
+                <span className="qr__corner qr__corner--bl" />
+                <span className="qr__corner qr__corner--br" />
+              </div>
+            ) : (
+              <div className="qr-skeleton">
+                <span className="spinner" style={{ width: 22, height: 22 }} />
+                <span>Waiting for WhatsApp to generate a code…</span>
+              </div>
+            )}
+            <ol className="stack stack-2 small muted" style={{ margin: 0, paddingLeft: 18 }}>
+              <li>Open WhatsApp on the phone that should handle inquiries.</li>
+              <li>
+                Go to <strong>Settings → Linked devices</strong>.
+              </li>
+              <li>
+                Tap <strong>Link a device</strong> and scan the code.
+              </li>
+            </ol>
+            <p className="faint small" style={{ textAlign: "center" }}>
+              This pairs a second, independent linked device from the Connection page's WhatsApp account — pairing
+              one never affects the other. The code refreshes automatically; you never need to reload the page.
+            </p>
+          </div>
+        </Panel>
+      ) : (
+        statusDisplay && (
+          <Note tone={statusNoteTone} icon={<IconMessage size={16} />}>
+            <strong>Inquiry bot: {statusDisplay.label}.</strong> {statusDisplay.hint}
+            {inquiryStatus && !inquiryStatus.client_database_configured && (
+              <>
+                {" "}
+                <strong>CLIENT_DATABASE_URL is not set</strong> — client records are in-memory only and will be lost
+                on restart.
+              </>
+            )}
+          </Note>
+        )
       )}
 
       {allClients.length > 0 && (

@@ -26,7 +26,7 @@ const STATUS_DISPLAY: Record<string, StatusDisplay> = {
   logged_out: {
     label: "Logged out of WhatsApp",
     tone: "error",
-    hint: "Delete Backend/Service/WhatsAppInquiryHandlingService/session and restart the backend to pair again.",
+    hint: "The backend cleared the stale session automatically and is generating a fresh pairing QR code — no restart needed.",
   },
   crashed: { label: "The WhatsApp client crashed", tone: "error" },
 };

@@ -4,7 +4,18 @@
  * of every page repeating its own fetch() boilerplate.
  */
 
-export const API_BASE_URL: string = import.meta.env.VITE_API_BASE_URL ?? "http://localhost:8000/api";
+// Defaults to the backend on the SAME host that served this page (just a
+// different port), not a hardcoded "localhost". That matters because the
+// WhatsApp inquiry form link (see Backend/Config/settings.py's
+// inquiry_form_base_url) is deliberately built with this machine's LAN IP so
+// a phone can open it — a bundle that always pointed at "localhost:8000"
+// would be unreachable from that phone (and even from this same machine in
+// a tab opened via the LAN IP, since browsers block a private-IP page from
+// silently calling "localhost"). VITE_API_BASE_URL still overrides this for
+// pointing at a different backend host/port entirely.
+const DEFAULT_API_BASE_URL = `${window.location.protocol}//${window.location.hostname}:8000/api`;
+
+export const API_BASE_URL: string = import.meta.env.VITE_API_BASE_URL || DEFAULT_API_BASE_URL;
 
 export class ApiError extends Error {
   status: number;

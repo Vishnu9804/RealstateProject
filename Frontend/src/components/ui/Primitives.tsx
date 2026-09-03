@@ -174,13 +174,21 @@ export function Segmented<T extends string>({
 }) {
   const containerRef = useRef<HTMLDivElement>(null);
   const [thumb, setThumb] = useState<{ left: number; width: number } | null>(null);
-  const index = Math.max(0, options.findIndex((option) => option.value === value));
+  // -1 when nothing matches `value` (e.g. no option chosen yet) -- must NOT
+  // fall back to 0, or the thumb highlights the first option as if it were
+  // already selected while `value` (and therefore validation) still sees
+  // nothing chosen. That mismatch is exactly what made this control look
+  // pre-filled when it wasn't.
+  const index = options.findIndex((option) => option.value === value);
 
   // Measured rather than computed from a fixed width, so the thumb stays
   // aligned when labels differ in length or the font renders differently.
   useLayoutEffect(() => {
     const container = containerRef.current;
-    if (!container) return;
+    if (!container || index === -1) {
+      setThumb(null);
+      return;
+    }
     const measure = () => {
       const active = container.querySelectorAll<HTMLButtonElement>(".segmented__opt")[index];
       if (!active) return;

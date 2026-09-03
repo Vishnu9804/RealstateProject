@@ -12,22 +12,31 @@ Every flush is routed one of two ways, checked in this order:
      and it would burn a request for something a plain keyword check
      answers just as reliably (requirement #4: no unnecessary LLM calls).
   2. Otherwise -> classified as property-related or not, then routed three
-     ways by ClientRecord.status:
-       - no record at all       -> NEW client: create a
-                                    "pending_registration" placeholder, send
-                                    the welcome + registration-form link,
-                                    exactly once.
-       - "pending_registration" -> already invited, hasn't submitted the
-                                    form yet: do NOT resend the welcome
-                                    message (duplicate-message prevention).
-       - "registered"           -> EXISTING client: send their stored
-                                    requirements, ask whether to update, and
-                                    set pending_action so their next reply
-                                    is handled by branch 1 above.
+     ways:
+       - a client record already exists  -> EXISTING client (a client
+                                             record only ever exists once
+                                             they've actually submitted the
+                                             form — see below): send their
+                                             stored requirements, ask
+                                             whether to update, and set
+                                             pending_action so their next
+                                             reply is handled by branch 1.
+       - no record, never invited before -> NEW client: send the welcome +
+                                             registration-form link, exactly
+                                             once.
+       - no record, already invited      -> already sent the welcome link,
+                                             hasn't submitted yet: do NOT
+                                             resend it (duplicate-message
+                                             prevention) — tracked in
+                                             invitation_tracker.py, NOT in
+                                             the database.
 
-The actual form page + submission endpoint (what turns "pending_registration"
-into "registered", and what the update-confirmation link points at) is
-deliberately not built yet — one step at a time.
+IMPORTANT: nothing here ever writes to the client database. A client
+record is created exactly once — when they actually submit the
+registration/update form (Service/WhatsAppInquiryHandlingService/
+inquiry_form_service.py:submit_form). Being sent a link, or even asked to
+update, produces no database entry on its own; only their own submitted
+data does.
 """
 
 from __future__ import annotations
@@ -39,7 +48,7 @@ from Config.settings import get_settings
 from Middleware import step_logger
 from Model.WhatsAppInquiryHandlingModel.client_record import ClientRecord
 from Model.WhatsAppInquiryHandlingModel.inquiry_message import InquiryChatMessage
-from Service.WhatsAppInquiryHandlingService import client_store, form_token_service, outbound_messenger
+from Service.WhatsAppInquiryHandlingService import client_store, form_token_service, invitation_tracker, outbound_messenger
 from Service.WhatsAppInquiryHandlingService.phone_utils import normalize_phone
 
 _property_inquiry_count = 0
@@ -92,7 +101,6 @@ def handle_batch_ready(phone: str, messages: List[InquiryChatMessage]) -> None:
         _handle_update_confirmation_reply(client_phone, existing_client, messages)
         return
 
-    step_logger.step(f"Classifying batch of {len(messages)} message(s) from {client_phone}")
     classification = inquiry_classifier.classify_batch(messages)
 
     if not classification.is_property_related:
@@ -106,28 +114,28 @@ def handle_batch_ready(phone: str, messages: List[InquiryChatMessage]) -> None:
     _property_inquiry_count += 1
     reason = classification.reason or "no reason given"
 
-    if existing_client is None:
-        _start_new_client(client_phone, reason)
-    elif existing_client.status == "pending_registration":
+    if existing_client is not None:
+        _greet_existing_client(client_phone, existing_client, reason)
+    elif invitation_tracker.was_invited(client_phone):
         step_logger.info(
-            f"[Inquiry] {client_phone}: still pending registration ({reason}) — "
+            f"[Inquiry] {client_phone}: already invited, hasn't submitted the form yet ({reason}) — "
             "welcome message already sent once, not resending."
         )
     else:
-        _greet_existing_client(client_phone, existing_client, reason)
+        _start_new_client(client_phone, reason)
 
 
 def _start_new_client(phone: str, reason: str) -> None:
-    # Written BEFORE the message is sent, and unconditionally so the very
-    # next flush for this number (even one arriving while this send is
-    # still in flight) sees status="pending_registration" and takes the
-    # "already invited" branch above instead of racing to send a second
-    # welcome message.
-    client_store.upsert_client(ClientRecord(phone=phone, status="pending_registration"))
-
     link = _build_form_link(phone)
     sent = outbound_messenger.send_text(phone, _WELCOME_TEXT_TEMPLATE.format(link=link))
     if sent:
+        # Marked only after a successful send, and BEFORE anything else runs
+        # — this is what stops the very next flush for this number (even
+        # one arriving while a slow send was still in flight) from racing
+        # to send a second welcome message. No database write happens here:
+        # this client won't have a record until they actually submit the
+        # form (see the module docstring).
+        invitation_tracker.mark_invited(phone)
         step_logger.success(
             f"[Inquiry] {phone}: NEW client, property-related ({reason}) — welcome + form link sent: {link}"
         )
@@ -154,7 +162,9 @@ def _greet_existing_client(phone: str, record: ClientRecord, reason: str) -> Non
     # Only set once the message actually sent (see the early return above)
     # — this is exactly what routes their NEXT batch to
     # _handle_update_confirmation_reply instead of back through the LLM
-    # classifier.
+    # classifier. This DOES write to the database, but it's an update to an
+    # existing row (they already have one, from their earlier submission),
+    # never a new row.
     client_store.upsert_client(record.model_copy(update={"pending_action": _AWAITING_UPDATE_CONFIRMATION}))
 
 

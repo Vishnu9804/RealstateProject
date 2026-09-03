@@ -49,7 +49,18 @@ def _get_engine():
         database_url = get_settings().database_url
         if not database_url:
             raise RuntimeError("DATABASE_URL is not set — add it to Backend/.env to use the database.")
-        _engine = create_engine(_normalize_database_url(database_url), pool_pre_ping=True)
+        # connect_timeout bounds the FIRST connection attempt only — Neon's
+        # free tier suspends its compute after being idle, and waking it
+        # back up on the next connection can genuinely take up to ~60s.
+        # Without this, a connection that's actually failing (bad
+        # credentials, network down) would hang indefinitely instead of
+        # raising a clear error — see init_db()'s log line, which exists so
+        # that 60s of silence doesn't look identical to a frozen process.
+        _engine = create_engine(
+            _normalize_database_url(database_url),
+            pool_pre_ping=True,
+            connect_args={"connect_timeout": 60},
+        )
         _session_factory = sessionmaker(bind=_engine, expire_on_commit=False)
     return _engine
 

@@ -9,10 +9,30 @@ final "connect the database" step — everything up to that point is built and
 runnable against these placeholders.
 """
 
+import socket
 from functools import lru_cache
 
-from pydantic import Field
+from pydantic import Field, model_validator
 from pydantic_settings import BaseSettings, SettingsConfigDict
+
+
+def _detect_lan_ip() -> str:
+    """Best-effort LAN IP for this machine — the address other devices on
+    the same network (e.g. a phone) would use to reach it, unlike
+    "localhost"/"127.0.0.1" which only ever resolves to the device it's
+    opened on. Connecting a UDP socket never actually sends a packet (UDP
+    is connectionless); it only asks the OS to pick the local interface/IP
+    it would route through for that destination, which is what we want.
+    Falls back to loopback if there's no network route at all (e.g. no
+    interface up), matching the old hardcoded behavior for that edge case."""
+    sock = socket.socket(socket.AF_INET, socket.SOCK_DGRAM)
+    try:
+        sock.connect(("8.8.8.8", 80))
+        return sock.getsockname()[0]
+    except OSError:
+        return "127.0.0.1"
+    finally:
+        sock.close()
 
 
 class Settings(BaseSettings):
@@ -44,11 +64,36 @@ class Settings(BaseSettings):
     inquiry_buffer_window_seconds: int = Field(default=10, gt=0)
     # Base URL the registration/update form link (sent over WhatsApp — see
     # Service/WhatsAppInquiryHandlingService/inquiry_pipeline_service.py)
-    # is built from: "{inquiry_form_base_url}/{token}". Points at the Vite
-    # dev server by default, matching main.py's CORS allow-list — the form
-    # PAGE itself doesn't exist yet (a later step), so links sent today
-    # won't resolve to anything real until then.
-    inquiry_form_base_url: str = "http://localhost:5173/whatsapp-inquiry"
+    # is built from: "{inquiry_form_base_url}/{token}". Left blank by
+    # default: a link containing "localhost" is unreachable from a real
+    # phone (it resolves to the phone's own loopback, not this machine), so
+    # rather than hardcode that broken default, `_fill_lan_defaults` below
+    # fills this in with this machine's actual LAN IP (e.g.
+    # "http://192.168.1.50:5173/whatsapp-inquiry") whenever it's left unset
+    # — set it explicitly here only to point at a real deployed frontend
+    # (e.g. once Step 12 hosts one) instead of a LAN dev server.
+    inquiry_form_base_url: str = ""
+    # Extra origin main.py's CORS allow-list accepts, beyond the hardcoded
+    # localhost ones. Left blank by default and auto-filled (see
+    # `_fill_lan_defaults`) to match the auto-detected LAN IP above, so a
+    # phone's browser loading the form page is allowed to call this API
+    # without any manual per-machine .env edits. Set explicitly only to
+    # override that detection (e.g. a real deployed frontend origin).
+    frontend_lan_origin: str = ""
+
+    @model_validator(mode="after")
+    def _fill_lan_defaults(self) -> "Settings":
+        """Auto-detects this machine's LAN IP once, at startup, and uses it
+        to fill in whichever of the two fields above weren't explicitly set
+        via .env — see their docstrings. Never overrides an explicit
+        setting, so a real production URL configured here always wins."""
+        if not self.inquiry_form_base_url or not self.frontend_lan_origin:
+            lan_ip = _detect_lan_ip()
+            if not self.inquiry_form_base_url:
+                self.inquiry_form_base_url = f"http://{lan_ip}:5173/whatsapp-inquiry"
+            if not self.frontend_lan_origin and lan_ip != "127.0.0.1":
+                self.frontend_lan_origin = f"http://{lan_ip}:5173"
+        return self
 
 
 @lru_cache

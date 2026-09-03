@@ -55,7 +55,7 @@ class InquiryBufferService:
             bucket.append(message)
 
             if len(bucket) >= MAX_MESSAGES_PER_BATCH:
-                self._flush_locked(phone)
+                self._flush_locked(phone, reason=f"buffer hit the {MAX_MESSAGES_PER_BATCH}-message cap")
                 return
 
             # Every message — first or not — (re)starts this number's own
@@ -77,7 +77,7 @@ class InquiryBufferService:
         """Flushes one number's buffer immediately, even if its inactivity
         timer hasn't fired yet. Exposed for manual/API control."""
         with self._lock:
-            self._flush_locked(phone)
+            self._flush_locked(phone, reason="manual flush")
 
     def _start_timer_locked(self, phone: str) -> None:
         self._cancel_timer_locked(phone)
@@ -90,19 +90,19 @@ class InquiryBufferService:
 
     def _handle_timer_fired(self, phone: str) -> None:
         with self._lock:
-            self._flush_locked(phone)
+            self._flush_locked(phone, reason=f"{self._inactivity_window_seconds:g}s of inactivity")
 
     def _cancel_timer_locked(self, phone: str) -> None:
         timer = self._timers.pop(phone, None)
         if timer is not None:
             timer.cancel()
 
-    def _flush_locked(self, phone: str) -> None:
+    def _flush_locked(self, phone: str, reason: str) -> None:
         bucket = self._buffers.pop(phone, None)
         self._cancel_timer_locked(phone)
         if not bucket:
             return
-        step_logger.info(f"[Inquiry] Buffer flushed for {phone}: {len(bucket)} message(s)")
+        step_logger.info(f"[Inquiry] {phone}: flushing {len(bucket)} message(s) ({reason})")
         # Run the callback on its own thread, outside the lock: the next
         # step wires this to an LLM call, which must never block new
         # messages — from this or any other number — from being buffered

@@ -58,8 +58,20 @@ class StructuredProperty(BaseModel):
     message_text: str
     message_timestamp: datetime
 
-    # --- "accepted"/"needs_review" set by the duplicate-detection stage;
-    # "outsider" set by the LLM structuring stage when the property falls
-    # outside every client-selected area (see property_structurer.py) ---
-    review_status: Literal["accepted", "needs_review", "outsider"] = "accepted"
+    # --- "accepted" vs "outsider" is decided once, by the LLM structuring
+    # stage (see property_structurer.py), based on whether the property
+    # falls inside a client-selected area. This is the property's permanent
+    # home tab (Main vs Outsider) and is never changed by review — a human
+    # can still move a property between the two later (see
+    # property_pipeline_service.update_property). ---
+    review_status: Literal["accepted", "outsider"] = "accepted"
+
+    # --- independent of review_status: set True by the duplicate-detection
+    # stage (see property_pipeline_service.handle_batch_ready) when a match
+    # is UNCERTAIN, so the property is pulled into a dedicated "needs
+    # review" queue regardless of whether it's a Main or Outsider property.
+    # Cleared back to False once a human accepts it — the property then
+    # simply shows up in whichever of Main/Outsider its review_status
+    # already says, unchanged. ---
+    needs_review: bool = False
     review_notes: Optional[str] = None

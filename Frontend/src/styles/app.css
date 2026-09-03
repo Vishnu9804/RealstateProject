@@ -289,6 +289,116 @@
   from { opacity: 0; transform: translate3d(0, -22px, -180px) rotateX(14deg); }
   to   { opacity: 1; transform: translate3d(0, 0, 0) rotateX(0); }
 }
+
+/* ---- confirm dialog (delete / move-to) --------------------------------- */
+.modal-scrim {
+  position: fixed;
+  inset: 0;
+  z-index: 200;
+  background: var(--scrim);
+  backdrop-filter: blur(6px);
+  -webkit-backdrop-filter: blur(6px);
+  display: flex;
+  justify-content: center;
+  align-items: center;
+  padding: 18px;
+  animation: fade-in var(--t-fast) linear both;
+}
+.modal {
+  width: min(420px, 100%);
+  border-radius: var(--r-lg);
+  background: var(--plane-2);
+  border: 1px solid var(--rim-strong);
+  box-shadow: var(--elev-4);
+  backdrop-filter: blur(30px) saturate(180%);
+  -webkit-backdrop-filter: blur(30px) saturate(180%);
+  overflow: hidden;
+}
+.modal__head {
+  display: flex;
+  align-items: center;
+  justify-content: space-between;
+  gap: 10px;
+  padding: 14px 12px 14px 18px;
+  border-bottom: 1px solid var(--rim);
+}
+.modal__title { font-size: 14.5px; font-weight: 640; letter-spacing: -0.01em; color: var(--ink); }
+.modal__body { padding: 16px 18px; font-size: 13.5px; color: var(--ink-2); line-height: 1.55; }
+.modal__body p + p { margin-top: 8px; }
+.modal__foot {
+  display: flex;
+  align-items: center;
+  justify-content: flex-end;
+  gap: 10px;
+  padding: 12px 16px;
+  border-top: 1px solid var(--rim);
+}
+
+/* ---- property detail dialog — one property, everything about it -------- */
+.detail-modal {
+  width: min(760px, 100%);
+  max-height: min(88vh, 820px);
+  display: flex;
+  flex-direction: column;
+  border-radius: var(--r-lg);
+  background: var(--plane-2);
+  border: 1px solid var(--rim-strong);
+  box-shadow: var(--elev-4);
+  backdrop-filter: blur(32px) saturate(180%);
+  -webkit-backdrop-filter: blur(32px) saturate(180%);
+  overflow: hidden;
+}
+.detail-modal__head {
+  position: relative;
+  display: flex;
+  align-items: flex-start;
+  justify-content: space-between;
+  gap: 14px;
+  padding: 24px 26px 20px;
+  border-bottom: 1px solid var(--rim);
+  background: linear-gradient(165deg, color-mix(in oklab, var(--accent) 8%, transparent), transparent 60%);
+}
+.detail-modal__eyebrow {
+  font-size: 11px;
+  font-weight: 660;
+  letter-spacing: 0.09em;
+  text-transform: uppercase;
+  color: var(--ink-4);
+  margin-bottom: 6px;
+}
+.detail-modal__title {
+  font-size: 21px;
+  font-weight: 660;
+  letter-spacing: -0.02em;
+  color: var(--ink);
+  margin: 0;
+  max-width: 100%;
+}
+.detail-modal__sub { font-size: 13.5px; color: var(--ink-3); margin-top: 4px; }
+.detail-modal__badges {
+  display: flex;
+  align-items: center;
+  flex-wrap: wrap;
+  gap: 7px;
+  margin-top: 12px;
+}
+.detail-modal__body {
+  padding: 20px 26px 22px;
+  overflow-y: auto;
+  flex: 1;
+  display: flex;
+  flex-direction: column;
+  gap: 16px;
+}
+.detail-modal__foot {
+  display: flex;
+  align-items: center;
+  gap: 10px;
+  padding: 16px 22px;
+  border-top: 1px solid var(--rim);
+  background: var(--plane-1);
+}
+
 .cmdk__field {
   display: flex;
   align-items: center;
@@ -546,11 +656,6 @@
   color: var(--ink);
 }
 .row:hover td:first-child { box-shadow: inset 3px 0 0 var(--accent); }
-.row--open td {
-  background: var(--plane-2);
-  border-bottom-color: transparent;
-}
-.row--open td:first-child { box-shadow: inset 3px 0 0 var(--accent); }
 .row--flagged td:first-child { box-shadow: inset 3px 0 0 var(--warn); }
 .row--outsider td:first-child { box-shadow: inset 3px 0 0 var(--info); }
 .row--new td { animation: row-flash 2.4s var(--ease-out) both; }
@@ -568,14 +673,36 @@
 .cell-muted { color: var(--ink-4); font-size: 12px; }
 .cell-num { font-variant-numeric: tabular-nums; }
 
-.detail-cell { padding: 0 !important; background: var(--plane-0); }
-.detail {
-  padding: 18px 22px 22px;
-  display: grid;
-  gap: 14px;
-  animation: expand-row var(--t-base) var(--ease-out) both;
-  border-bottom: 1px solid var(--rim);
+/* ---- row/card actions (accept, move to, delete) ------------------------ */
+.row-actions {
+  display: flex;
+  align-items: center;
+  justify-content: flex-end;
+  gap: 6px;
+  white-space: nowrap;
 }
+.row-actions__btn {
+  flex: none;
+  width: 30px;
+  height: 30px;
+  display: grid;
+  place-items: center;
+  border-radius: var(--r-xs);
+  border: 1px solid var(--rim);
+  background: var(--plane-1);
+  color: var(--ink-3);
+  cursor: pointer;
+  transition: all var(--t-fast) var(--ease-out);
+}
+.row-actions__btn:hover {
+  background: var(--plane-2);
+  border-color: var(--rim-strong);
+  color: var(--ink);
+  transform: translateY(-1px);
+}
+.row-actions__btn--accept:hover { color: var(--ok); border-color: color-mix(in oklab, var(--ok) 45%, transparent); }
+.row-actions__btn--danger:hover { color: var(--bad); border-color: color-mix(in oklab, var(--bad) 45%, transparent); }
+
 .detail__grid {
   display: grid;
   grid-template-columns: repeat(auto-fit, minmax(200px, 1fr));
@@ -643,6 +770,12 @@
   font-size: 12px;
   color: var(--ink-4);
 }
+.pcard__foot > span:first-child {
+  flex: 1;
+  min-width: 0;
+  max-width: none;
+}
+.pcard__foot .row-actions { flex: none; }
 
 /* Copyable value — reveals its affordance only on hover, so the table
    stays calm until you actually reach for something. */

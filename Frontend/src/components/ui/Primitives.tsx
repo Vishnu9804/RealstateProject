@@ -168,19 +168,25 @@ export function Segmented<T extends string>({
   ariaLabel,
 }: {
   options: SegmentOption<T>[];
-  value: T;
+  /** `null` shows the capsule with no option selected — no thumb, no
+   *  option marked active — for when a different control (e.g. a "Needs
+   *  review" button elsewhere) currently owns the view instead. */
+  value: T | null;
   onChange: (value: T) => void;
   ariaLabel: string;
 }) {
   const containerRef = useRef<HTMLDivElement>(null);
   const [thumb, setThumb] = useState<{ left: number; width: number } | null>(null);
-  const index = Math.max(0, options.findIndex((option) => option.value === value));
+  const index = value === null ? -1 : options.findIndex((option) => option.value === value);
 
   // Measured rather than computed from a fixed width, so the thumb stays
   // aligned when labels differ in length or the font renders differently.
   useLayoutEffect(() => {
     const container = containerRef.current;
-    if (!container) return;
+    if (!container || index < 0) {
+      setThumb(null);
+      return;
+    }
     const measure = () => {
       const active = container.querySelectorAll<HTMLButtonElement>(".segmented__opt")[index];
       if (!active) return;

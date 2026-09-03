@@ -105,17 +105,6 @@ export function sourceDetail(property: PropertyRecord): string {
 /* -------------------------------------------------------------- definitions */
 
 export const FILTER_DEFS: ColumnFilterDef[] = [
-  {
-    key: "status",
-    label: "Status",
-    kind: "values",
-    optionOf: (property) =>
-      property.review_status === "outsider"
-        ? "Outsider"
-        : property.review_status === "needs_review"
-          ? "Needs review"
-          : "Accepted",
-  },
   { key: "locality", label: "Area", kind: "values", optionOf: (property) => property.area_name },
   { key: "bhk", label: "BHK", kind: "values", optionOf: (property) => property.bhk },
   { key: "type", label: "Type", kind: "values", optionOf: (property) => property.property_type },

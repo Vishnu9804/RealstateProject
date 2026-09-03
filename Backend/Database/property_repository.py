@@ -2,14 +2,16 @@
 production backend behind Service/WhatsAppDataFetchingService/property_vector_store.py once
 DATABASE_URL is set. Same contract as the in-memory version it sits
 alongside: add_property, find_top_candidates, get_all_properties,
-get_property_count. Callers never call this module directly.
+get_property_count, update_property, delete_property. Callers never call
+this module directly.
 """
 
 from __future__ import annotations
 
-from typing import List, Tuple
+from typing import List, Optional, Tuple
 
 from sqlalchemy import func, select
+from sqlalchemy.orm import Session
 
 from Database.models import PropertyRow
 from Database.session import get_session
@@ -40,6 +42,7 @@ _COLUMNS = (
     "message_text",
     "message_timestamp",
     "review_status",
+    "needs_review",
     "review_notes",
 )
 
@@ -72,6 +75,45 @@ def get_all_properties(limit: int) -> List[EmbeddedProperty]:
 def get_property_count() -> int:
     with get_session() as session:
         return session.execute(select(func.count()).select_from(PropertyRow)).scalar_one()
+
+
+def update_property(
+    record_id: str, review_status: Optional[str] = None, needs_review: Optional[bool] = None
+) -> Optional[EmbeddedProperty]:
+    with get_session() as session:
+        row = _find_row(session, record_id)
+        if row is None:
+            return None
+        if review_status is not None:
+            row.review_status = review_status
+        if needs_review is not None:
+            row.needs_review = needs_review
+        session.flush()
+        return _to_pydantic(row)
+
+
+def delete_property(record_id: str) -> bool:
+    with get_session() as session:
+        row = _find_row(session, record_id)
+        if row is None:
+            return False
+        session.delete(row)
+        return True
+
+
+def _find_row(session: Session, record_id: str) -> Optional[PropertyRow]:
+    # A row written before record_id existed has none stored (see
+    # _to_pydantic) and is addressed by the API using its "legacy-{id}"
+    # fallback identity instead — recover the real primary key from that
+    # rather than failing to find the row at all.
+    if record_id.startswith("legacy-"):
+        try:
+            row_id = int(record_id[len("legacy-") :])
+        except ValueError:
+            return None
+        return session.get(PropertyRow, row_id)
+    stmt = select(PropertyRow).where(PropertyRow.record_id == record_id)
+    return session.execute(stmt).scalar_one_or_none()
 
 
 def _to_row(prop: EmbeddedProperty) -> PropertyRow:

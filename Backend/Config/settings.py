@@ -39,6 +39,12 @@ class Settings(BaseSettings):
     model_config = SettingsConfigDict(env_file=".env", env_file_encoding="utf-8", extra="ignore")
 
     zai_api_key: str = ""
+    # Google Gemini API key used by the inquiry-classification stage
+    # (Agent/WhatsAppInquiryHandlingAgent/inquiry_classifier.py) — separate
+    # from zai_api_key above, which is only used by the property-structuring
+    # stage (Agent/WhatsAppDataFetchingAgent/property_structurer.py).
+    gemini_api_key: str = ""
+    gemini_model: str = "gemini-2.5-flash-lite"
     database_url: str = ""
     # Separate Neon Postgres database for whatsappInquiryHandling's client
     # records (Database/client_session.py) — deliberately independent from

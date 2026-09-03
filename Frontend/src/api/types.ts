@@ -44,6 +44,73 @@ export interface DisplaySettings {
   use_24_hour_format: boolean;
 }
 
+/**
+ * Mirrors Backend/Model/WhatsAppInquiryHandlingModel/form_submission.py's
+ * FormPrefillResponse — what the registration/update form page reads
+ * before rendering. `is_new_client` decides whether the page shows a blank
+ * registration form or a pre-filled update form.
+ */
+export interface InquiryFormPrefill {
+  is_new_client: boolean;
+  name: string | null;
+  email: string | null;
+  purpose: string | null;
+  property_type: string | null;
+  bhk: string | null;
+  budget_min_inr: number | null;
+  budget_max_inr: number | null;
+  preferred_areas: string | null;
+  additional_requirements: string | null;
+}
+
+/** Mirrors FormSubmissionRequest — every field optional; omitted/blank is
+ *  how a field gets cleared server-side, not an error. */
+export interface InquiryFormSubmission {
+  name?: string | null;
+  email?: string | null;
+  purpose?: string | null;
+  property_type?: string | null;
+  bhk?: string | null;
+  budget_min_inr?: number | null;
+  budget_max_inr?: number | null;
+  preferred_areas?: string | null;
+  additional_requirements?: string | null;
+}
+
+/**
+ * Mirrors Backend/Model/WhatsAppInquiryHandlingModel/client_record.py's
+ * ClientRecord — one client's info + property requirements, as stored by
+ * the inquiry-handling pipeline and the registration/update form.
+ */
+export interface InquiryClientRecord {
+  phone: string;
+  status: string;
+  pending_action: string | null;
+  name: string | null;
+  email: string | null;
+  purpose: string | null;
+  property_type: string | null;
+  bhk: string | null;
+  budget_min_inr: number | null;
+  budget_max_inr: number | null;
+  preferred_areas: string | null;
+  additional_requirements: string | null;
+  created_at: string | null;
+  updated_at: string | null;
+}
+
+/** Mirrors Backend/Service/WhatsAppInquiryHandlingService/whatsapp_inquiry_service.py's get_status() dict. */
+export interface InquiryStatusResponse {
+  status: string;
+  captured_message_count: number;
+  buffered_message_count: number;
+  active_buffer_user_count: number;
+  property_inquiry_count: number;
+  non_property_message_count: number;
+  client_database_configured: boolean;
+  client_count: number;
+}
+
 export interface PropertyRecord {
   record_id: string;
   source_message_id: string;

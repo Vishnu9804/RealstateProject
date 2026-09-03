@@ -11,6 +11,7 @@ persist for real — see Service/WhatsAppDataFetchingService/property_vector_sto
 from __future__ import annotations
 
 import threading
+import time
 from typing import List, Optional
 
 from Config.settings import get_settings
@@ -37,36 +38,57 @@ _client: Optional[WhatsAppClient] = None
 _message_buffer: Optional[MessageBufferService] = None
 
 
+_RECONNECT_DELAY_SECONDS = 5
+
+
 def start_agent_in_background() -> None:
     """Starts the WhatsApp client on a background thread so it never blocks
-    the FastAPI/Uvicorn event loop. Runs for the lifetime of the process."""
-    global _client, _message_buffer
+    the FastAPI/Uvicorn event loop. Runs for the lifetime of the process,
+    rebuilding the client and retrying for as long as the process is alive
+    — see `_run_client`."""
+    global _message_buffer
     _message_buffer = MessageBufferService(
         on_batch_ready=property_pipeline_service.handle_batch_ready,
         batch_window_seconds=get_settings().batch_window_minutes * 60,
     )
-    _client = WhatsAppClient(
-        on_groups_ready=_handle_groups_ready,
-        on_group_selection_made=_handle_group_selection_made,
-        on_personal_selection_made=_handle_personal_selection_made,
-        on_message=_handle_message,
-        on_qr_ready=_handle_qr_ready,
-        on_status_changed=_handle_status_changed,
-    )
-    thread = threading.Thread(target=_run_client, args=(_client,), name="whatsapp-client", daemon=True)
+    thread = threading.Thread(target=_run_client, name="whatsapp-client", daemon=True)
     thread.start()
 
 
-def _run_client(client: WhatsAppClient) -> None:
-    try:
-        client.start()
-    except Exception as exc:  # noqa: BLE001
-        # WhatsAppClient.start() normally never returns while connected.
-        # If it does raise, the background thread would otherwise die
-        # silently — the server keeps responding to HTTP requests with no
-        # sign that message capture has stopped. Surface it loudly instead.
-        _handle_status_changed(WhatsAppStatus.CRASHED)
-        step_logger.error(f"WhatsApp client stopped unexpectedly: {exc!r}")
+def _run_client() -> None:
+    """`WhatsAppClient.start()` blocks for as long as the connection is
+    alive, but a stream conflict, a logout, or the phone rejecting a pairing
+    attempt can all make the underlying Go call return (or raise) without
+    the process itself dying. Previously that silently ended this
+    background thread — the API kept responding, but nothing was listening
+    to WhatsApp anymore until someone noticed and restarted the whole
+    server by hand. Looping here and building a brand-new client each time
+    means a bad connection heals itself (and, combined with WhatsAppClient's
+    logout handler clearing the stale session file, the next attempt gets a
+    genuinely fresh device/QR instead of reusing whatever broke last time)."""
+    global _client
+    while True:
+        client = WhatsAppClient(
+            on_groups_ready=_handle_groups_ready,
+            on_group_selection_made=_handle_group_selection_made,
+            on_personal_selection_made=_handle_personal_selection_made,
+            on_message=_handle_message,
+            on_qr_ready=_handle_qr_ready,
+            on_status_changed=_handle_status_changed,
+        )
+        _client = client
+        try:
+            client.start()
+            step_logger.warn("WhatsApp connection ended; reconnecting...")
+        except Exception as exc:  # noqa: BLE001
+            step_logger.error(f"WhatsApp client stopped unexpectedly: {exc!r}; reconnecting...")
+        # `client.start()` has now returned, so the session db it held open
+        # is guaranteed closed — safe to retry any cleanup that a logout
+        # during this connection couldn't complete while the file was still
+        # locked. Must happen before the next loop iteration reopens it.
+        client.retry_pending_session_cleanup()
+        _handle_status_changed(WhatsAppStatus.DISCONNECTED)
+        time.sleep(_RECONNECT_DELAY_SECONDS)
 
 
 def get_status() -> dict:

@@ -227,7 +227,7 @@ export default function ConnectionPage() {
       {backendDown && (
         <Note tone="bad" icon={<IconAlert size={17} />}>
           <strong>Backend unreachable.</strong> {statusError} — check that{" "}
-          <code>uvicorn main:app --reload --port 8000</code> is running, then this page will recover on its own.
+          <code>uvicorn main:app --reload --host 0.0.0.0 --port 8000</code> is running, then this page will recover on its own.
         </Note>
       )}
 

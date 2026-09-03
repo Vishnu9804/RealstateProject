@@ -2,6 +2,8 @@ import { BrowserRouter, Route, Routes } from "react-router-dom";
 import Layout from "./components/Layout";
 import ConnectionPage from "./pages/ConnectionPage";
 import DashboardPage from "./pages/DashboardPage";
+import InquiryClientsPage from "./pages/InquiryClientsPage";
+import InquiryFormPage from "./pages/InquiryFormPage";
 import SettingsPage from "./pages/SettingsPage";
 import { ThemeProvider } from "./components/ui/Theme";
 import { ToastProvider } from "./components/ui/Toast";
@@ -9,24 +11,35 @@ import { StatusProvider } from "./state/StatusProvider";
 
 /**
  * Provider order matters: theme sits outermost because everything below it
- * is painted in its colours, toasts next so any screen (and the status
- * poller) can raise one, and the status poll innermost — it is the only
- * provider that talks to the network.
+ * is painted in its colours, toasts next so any screen can raise one.
+ *
+ * StatusProvider (polls the internal whatsappDataFetching connection
+ * status) wraps ONLY the internal-tool routes under <Layout> — not
+ * /whatsapp-inquiry/:token, which is a public page a prospective client
+ * opens from a WhatsApp link. That visitor's browser has no business
+ * polling an internal ops endpoint, and the page has no ops nav to show a
+ * status pill in anyway.
  */
 export default function App() {
   return (
     <ThemeProvider>
       <ToastProvider>
         <BrowserRouter>
-          <StatusProvider>
-            <Routes>
-              <Route element={<Layout />}>
-                <Route index element={<ConnectionPage />} />
-                <Route path="dashboard" element={<DashboardPage />} />
-                <Route path="settings" element={<SettingsPage />} />
-              </Route>
-            </Routes>
-          </StatusProvider>
+          <Routes>
+            <Route path="/whatsapp-inquiry/:token" element={<InquiryFormPage />} />
+            <Route
+              element={
+                <StatusProvider>
+                  <Layout />
+                </StatusProvider>
+              }
+            >
+              <Route index element={<ConnectionPage />} />
+              <Route path="dashboard" element={<DashboardPage />} />
+              <Route path="inquiries" element={<InquiryClientsPage />} />
+              <Route path="settings" element={<SettingsPage />} />
+            </Route>
+          </Routes>
         </BrowserRouter>
       </ToastProvider>
     </ThemeProvider>

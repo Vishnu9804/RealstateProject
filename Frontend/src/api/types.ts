@@ -136,7 +136,8 @@ export interface PropertyRecord {
   sender_phone: string;
   message_text: string;
   message_timestamp: string;
-  review_status: "accepted" | "needs_review" | "outsider";
+  review_status: "accepted" | "outsider";
+  needs_review: boolean;
   review_notes: string | null;
   formatted_timestamp: string;
 }

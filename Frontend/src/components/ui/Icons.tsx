@@ -214,3 +214,21 @@ export const IconPower = svg(
     <path d="M18.4 6.6a9 9 0 1 1-12.8 0" />
   </>,
 );
+
+export const IconTrash = svg(
+  <>
+    <path d="M4 7h16" />
+    <path d="M9 7V4.5a1.5 1.5 0 0 1 1.5-1.5h3A1.5 1.5 0 0 1 15 4.5V7" />
+    <path d="M6.5 7 7.4 19.5A2 2 0 0 0 9.4 21.3h5.2a2 2 0 0 0 2-1.8L17.5 7" />
+    <path d="M10.3 11v6.3M13.7 11v6.3" />
+  </>,
+);
+
+export const IconMove = svg(
+  <>
+    <path d="M8 4 4.3 7.7 8 11.4" />
+    <path d="M4.3 7.7H14a5 5 0 0 1 5 5v1" />
+    <path d="M16 20l3.7-3.7L16 12.6" />
+    <path d="M19.7 16.3H10a5 5 0 0 1-5-5v-1" />
+  </>,
+);

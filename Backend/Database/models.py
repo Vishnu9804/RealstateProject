@@ -18,7 +18,7 @@ from datetime import datetime
 from typing import Optional
 
 from pgvector.sqlalchemy import Vector
-from sqlalchemy import JSON, DateTime, Float, String, Text, func
+from sqlalchemy import JSON, Boolean, DateTime, Float, String, Text, func
 from sqlalchemy.orm import DeclarativeBase, Mapped, mapped_column
 
 from Service.WhatsAppDataFetchingService.embedding_service import EMBEDDING_DIMENSIONS
@@ -71,8 +71,13 @@ class PropertyRow(Base):
     message_text: Mapped[str] = mapped_column(Text, nullable=False)
     message_timestamp: Mapped[datetime] = mapped_column(DateTime(timezone=True), nullable=False)
 
-    # --- set by the duplicate-detection stage, not the LLM ---
+    # --- "accepted" or "outsider" — the property's permanent Main/Outsider
+    # home, decided by the LLM structuring stage and movable later by a
+    # human (see Database/property_repository.py's update_property) ---
     review_status: Mapped[str] = mapped_column(String, nullable=False, default="accepted")
+    # --- independent flag set by the duplicate-detection stage, cleared
+    # when a human accepts the property out of the review queue ---
+    needs_review: Mapped[bool] = mapped_column(Boolean, nullable=False, default=False, server_default="false")
     review_notes: Mapped[Optional[str]] = mapped_column(Text, nullable=True)
 
     # --- computed once by the embedding stage, never recomputed here ---

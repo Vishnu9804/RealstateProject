@@ -113,3 +113,18 @@ def init_db() -> None:
         connection.execute(
             text("ALTER TABLE properties ADD COLUMN IF NOT EXISTS listing_type VARCHAR NOT NULL DEFAULT 'Sale'")
         )
+        connection.execute(
+            text("ALTER TABLE properties ADD COLUMN IF NOT EXISTS needs_review BOOLEAN NOT NULL DEFAULT false")
+        )
+        # One-time backfill for rows written before needs_review existed,
+        # when "needs_review" was itself a review_status value rather than
+        # its own column: carry that meaning over to the new column and
+        # collapse review_status back down to the two-value "accepted"/
+        # "outsider" it's now restricted to. Idempotent — after the first
+        # run no row matches this WHERE clause again.
+        connection.execute(
+            text(
+                "UPDATE properties SET needs_review = true, review_status = 'accepted' "
+                "WHERE review_status = 'needs_review'"
+            )
+        )

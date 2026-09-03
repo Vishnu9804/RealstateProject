@@ -12,23 +12,25 @@ and — for properties that get stored — they are the exact vectors that end
 up in the store (later: pgvector). Nothing downstream ever re-embeds or
 recomputes them.
 
-Duplicate detection now has three outcomes, not two (see Model/
-duplicate_verdict.py):
+Duplicate detection has three outcomes (see Model/duplicate_verdict.py):
   - HIGH_CONFIDENCE_DUPLICATE: skipped, not stored.
-  - HIGH_CONFIDENCE_NEW: stored as a normal, accepted property.
+  - HIGH_CONFIDENCE_NEW: stored as a normal property, needs_review=False.
   - UNCERTAIN: still stored (never silently discarded — it's real data),
-    but flagged with review_status="needs_review" and review_notes
-    explaining why, so nothing gets lost while still surfacing the
-    ambiguity for a human to resolve later.
+    but flagged with needs_review=True and review_notes explaining why, so
+    nothing gets lost while still surfacing the ambiguity for a human to
+    resolve later.
 
-A property can separately already arrive here with review_status="outsider"
-— the LLM structuring stage (Agent/WhatsAppDataFetchingAgent/
-property_structurer.py) sets that when the property falls outside every
-client-selected area. That flag takes priority over an UNCERTAIN duplicate
-verdict (an outsider property never gets relabelled "needs_review" — it
-stays visible in its own Outsider tab instead), but a HIGH_CONFIDENCE_DUPLICATE
-outsider is still skipped like any other duplicate — being outside the
-service area doesn't make an exact repeat worth storing twice.
+needs_review is independent of review_status ("accepted" vs "outsider",
+i.e. which of the Main/Outsider tabs a property belongs to) — a property
+can arrive here already review_status="outsider", set by the LLM
+structuring stage (Agent/WhatsAppDataFetchingAgent/property_structurer.py)
+when it falls outside every client-selected area, and separately be
+flagged needs_review=True by an UNCERTAIN duplicate verdict. Both flags are
+shown at once; a human resolving the review flag (see accept_property
+below) never changes which tab (Main/Outsider) the property is in. A
+HIGH_CONFIDENCE_DUPLICATE outsider is still skipped like any other
+duplicate — being outside the service area doesn't make an exact repeat
+worth storing twice.
 """
 
 from __future__ import annotations
@@ -95,16 +97,19 @@ def handle_batch_ready(batch: List[WhatsAppChatMessage]) -> None:
         if result.verdict == DuplicateVerdict.UNCERTAIN:
             uncertain_count_this_batch += 1
             _uncertain_count += 1
-            # An outsider flag from the LLM structuring stage takes priority
-            # over "needs_review" — the two are independent judgments (area
-            # relevance vs. possible duplicate), and only one status field
-            # exists to show in the UI, so the property stays in the
-            # Outsider tab rather than being relabelled.
-            if not is_outsider:
-                embedded.review_status = "needs_review"
-                embedded.review_notes = (
-                    f"Possible duplicate of message {result.matched_source_message_id!r}: {result.reason}"
-                )
+            # needs_review is independent of review_status (Main/Outsider) —
+            # an outsider property flagged UNCERTAIN still shows up in the
+            # Outsider tab, just also pulled into the review queue until a
+            # human resolves it. review_notes is a single free-text field
+            # shared by both judgments, so an outsider's existing reason
+            # (set by the LLM structuring stage) is appended to rather than
+            # overwritten — losing why it was marked outsider would be a
+            # real regression, not just a cosmetic one.
+            duplicate_reason = f"Possible duplicate of message {result.matched_source_message_id!r}: {result.reason}"
+            embedded.needs_review = True
+            embedded.review_notes = (
+                f"{embedded.review_notes} | {duplicate_reason}" if embedded.review_notes else duplicate_reason
+            )
             step_logger.warn(
                 f"Uncertain match, flagged for review (source message {embedded.source_message_id!r}): "
                 f"{result.reason}"
@@ -140,18 +145,34 @@ def _embed(prop: StructuredProperty) -> Optional[EmbeddedProperty]:
 
 
 def get_properties(limit: int = 100) -> List[PropertyRecord]:
-    use_24_hour_format = display_settings_service.get_use_24_hour_format()
-    return [
-        PropertyRecord(
-            **prop.model_dump(exclude=_NON_API_FIELDS),
-            formatted_timestamp=timestamp_formatting.format_ist(prop.message_timestamp, use_24_hour_format),
-        )
-        for prop in property_vector_store.get_all_properties(limit=limit)
-    ]
+    return [_to_record(prop) for prop in property_vector_store.get_all_properties(limit=limit)]
 
 
 def get_property_count() -> int:
     return property_vector_store.get_property_count()
+
+
+def update_property(
+    record_id: str, review_status: Optional[str] = None, needs_review: Optional[bool] = None
+) -> Optional[PropertyRecord]:
+    """Backs both actions the UI offers on a stored property: "move to
+    Main/Outsider" (review_status) and "accept out of the review queue"
+    (needs_review=False) — either can be passed alone, or both together.
+    Returns None if no property with this record_id exists."""
+    updated = property_vector_store.update_property(record_id, review_status=review_status, needs_review=needs_review)
+    return _to_record(updated) if updated is not None else None
+
+
+def delete_property(record_id: str) -> bool:
+    return property_vector_store.delete_property(record_id)
+
+
+def _to_record(prop: EmbeddedProperty) -> PropertyRecord:
+    use_24_hour_format = display_settings_service.get_use_24_hour_format()
+    return PropertyRecord(
+        **prop.model_dump(exclude=_NON_API_FIELDS),
+        formatted_timestamp=timestamp_formatting.format_ist(prop.message_timestamp, use_24_hour_format),
+    )
 
 
 def get_duplicate_count() -> int:

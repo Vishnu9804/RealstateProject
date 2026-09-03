@@ -168,7 +168,10 @@ export function Segmented<T extends string>({
   ariaLabel,
 }: {
   options: SegmentOption<T>[];
-  value: T;
+  /** `null` shows the capsule with no option selected — no thumb, no
+   *  option marked active — for when a different control (e.g. a "Needs
+   *  review" button elsewhere) currently owns the view instead. */
+  value: T | null;
   onChange: (value: T) => void;
   ariaLabel: string;
 }) {

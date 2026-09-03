@@ -1,5 +1,6 @@
 /* =======================================================================
-   CURSOR — an accent dot with a ring easing behind it.
+   CURSOR — a single ring that eases to the pointer, grows over anything
+   clickable, and gives a brief tactile shrink on press.
 
    `.has-cursor` is added by the Cursor component at runtime, never here, so
    the native cursor is only ever hidden once a replacement is actually on
@@ -18,34 +19,23 @@
   cursor: text !important;
 }
 
-.cursor-ring,
-.cursor-dot {
+.cursor-ring {
   position: fixed;
   top: 0;
   left: 0;
-  z-index: 200;
+  /* Above every other layer in the app — popovers (70), toasts (80),
+     command palette (90), confirm/detail dialogs (200) included. The
+     cursor is the one thing that must never end up behind an overlay. */
+  z-index: 9999;
+  width: 26px;
+  height: 26px;
   pointer-events: none;
   opacity: 0;
   transition: opacity 220ms var(--ease-out);
   will-change: transform;
 }
-:root.cursor-on .cursor-ring,
-:root.cursor-on .cursor-dot {
-  opacity: 1;
-}
+:root.cursor-on .cursor-ring { opacity: 1; }
 
-.cursor-dot {
-  width: 6px;
-  height: 6px;
-  border-radius: 50%;
-  background: var(--accent);
-  box-shadow: 0 0 12px var(--accent-glow);
-}
-
-.cursor-ring {
-  width: 30px;
-  height: 30px;
-}
 /* The visible circle is an inner element so it can scale without changing
    the box the JS positions — scaling the positioned element itself would
    fight the transform being written every frame. */
@@ -54,19 +44,23 @@
   width: 100%;
   height: 100%;
   border-radius: 50%;
-  border: 1.5px solid color-mix(in oklab, var(--accent) 72%, transparent);
-  background: color-mix(in oklab, var(--accent) 7%, transparent);
+  border: 1.5px solid color-mix(in oklab, var(--accent) 78%, transparent);
+  background: color-mix(in oklab, var(--accent) 10%, transparent);
+  box-shadow: 0 0 16px -2px var(--accent-glow);
   transition:
-    transform 240ms var(--ease-spring),
-    background-color 240ms var(--ease-out),
-    border-color 240ms var(--ease-out);
+    transform 260ms var(--ease-spring),
+    background-color 200ms var(--ease-out),
+    border-color 200ms var(--ease-out);
 }
-.cursor-ring[data-state="active"] span {
-  transform: scale(1.5);
+.cursor-ring[data-state="hover"] span {
+  transform: scale(1.55);
   border-color: var(--accent);
-  background: color-mix(in oklab, var(--accent) 16%, transparent);
+  background: color-mix(in oklab, var(--accent) 18%, transparent);
 }
+/* Pressed always wins over hover — the click feedback must read clearly
+   even while sitting on top of a button. */
 .cursor-ring[data-pressed="true"] span {
-  transform: scale(0.8);
-  background: color-mix(in oklab, var(--accent) 26%, transparent);
+  transform: scale(0.7);
+  background: color-mix(in oklab, var(--accent) 30%, transparent);
+  border-color: var(--accent);
 }

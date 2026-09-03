@@ -18,7 +18,7 @@ in sync, in either mode.
 
 from __future__ import annotations
 
-from typing import List, Tuple
+from typing import List, Optional, Tuple
 
 import numpy as np
 
@@ -68,3 +68,28 @@ def get_property_count() -> int:
     if is_database_configured():
         return property_repository.get_property_count()
     return len(_properties)
+
+
+def update_property(
+    record_id: str, review_status: Optional[str] = None, needs_review: Optional[bool] = None
+) -> Optional[EmbeddedProperty]:
+    if is_database_configured():
+        return property_repository.update_property(record_id, review_status=review_status, needs_review=needs_review)
+    for prop in _properties:
+        if prop.record_id == record_id:
+            if review_status is not None:
+                prop.review_status = review_status
+            if needs_review is not None:
+                prop.needs_review = needs_review
+            return prop
+    return None
+
+
+def delete_property(record_id: str) -> bool:
+    if is_database_configured():
+        return property_repository.delete_property(record_id)
+    for index, prop in enumerate(_properties):
+        if prop.record_id == record_id:
+            del _properties[index]
+            return True
+    return False

@@ -1,19 +1,16 @@
 import { useEffect, useRef } from "react";
 
 /**
- * The pointer: an exact accent dot with a ring easing along behind it.
+ * The pointer: a single ring that eases toward the pointer, grows over
+ * anything clickable, and gives a quick tactile shrink on press before
+ * settling back. Previously a small solid dot plus a separately-lagging
+ * ring — two moving parts reading as disconnected from each other rather
+ * than as one cursor. One element only, now.
  *
- * This replaces the large radial "spotlight" gradient that used to follow
- * the mouse. That effect had two problems: a pale wash of colour dragging
- * across the page looks like a smudge rather than a cursor, and repainting a
- * 600px gradient over the whole viewport on every pointer move was one of
- * the main reasons the interface felt like it stuttered.
- *
- * Both elements move by `transform` only, so the browser can composite them
- * on the GPU without repainting anything underneath.
+ * Positioned by `transform` only, so the browser composites it on the GPU
+ * without repainting anything underneath.
  */
 export default function Cursor() {
-  const dotRef = useRef<HTMLDivElement>(null);
   const ringRef = useRef<HTMLDivElement>(null);
 
   useEffect(() => {
@@ -23,9 +20,8 @@ export default function Cursor() {
     if (!window.matchMedia("(pointer: fine)").matches) return;
     if (window.matchMedia("(prefers-reduced-motion: reduce)").matches) return;
 
-    const dot = dotRef.current;
     const ring = ringRef.current;
-    if (!dot || !ring) return;
+    if (!ring) return;
 
     const root = document.documentElement;
     // Added from here, never in the stylesheet: if this component fails to
@@ -38,16 +34,19 @@ export default function Cursor() {
     let ringY = targetY;
     let frame = 0;
     let shown = false;
+    let pressTimer = 0;
 
     const draw = () => {
-      ringX += (targetX - ringX) * 0.2;
-      ringY += (targetY - ringY) * 0.2;
+      // A tighter follow than the old two-element version (0.2 -> 0.4) —
+      // with only one shape on screen, any visible lag reads as the cursor
+      // failing to keep up rather than as a deliberate trailing effect.
+      ringX += (targetX - ringX) * 0.4;
+      ringY += (targetY - ringY) * 0.4;
       ring.style.transform = `translate3d(${ringX}px, ${ringY}px, 0) translate(-50%, -50%)`;
-      dot.style.transform = `translate3d(${targetX}px, ${targetY}px, 0) translate(-50%, -50%)`;
 
-      // Stop once the ring has caught up. A permanently running rAF costs a
-      // frame of work forever, including while the page sits idle.
-      if (Math.abs(targetX - ringX) > 0.2 || Math.abs(targetY - ringY) > 0.2) {
+      // Stop once it has caught up. A permanently running rAF costs a frame
+      // of work forever, including while the page sits idle.
+      if (Math.abs(targetX - ringX) > 0.15 || Math.abs(targetY - ringY) > 0.15) {
         frame = requestAnimationFrame(draw);
       } else {
         frame = 0;
@@ -67,14 +66,25 @@ export default function Cursor() {
       }
       const element = event.target as Element | null;
       const interactive = element?.closest?.(
-        "a, button, input, textarea, select, label, [role='button'], .row, .popover__opt, .cmdk__item",
+        "a, button, input, textarea, select, label, [role='button'], .row, .pcard, .popover__opt, .cmdk__item",
       );
-      ring.dataset.state = interactive ? "active" : "idle";
+      ring.dataset.state = interactive ? "hover" : "idle";
       schedule();
     };
 
-    const onDown = () => (ring.dataset.pressed = "true");
-    const onUp = () => (ring.dataset.pressed = "false");
+    // The shrink-on-press holds briefly even for a fast click/tap — a
+    // press that un-shrinks the instant the button is released is too
+    // quick to actually see, which defeats the point of the feedback.
+    const onDown = () => {
+      window.clearTimeout(pressTimer);
+      ring.dataset.pressed = "true";
+    };
+    const onUp = () => {
+      window.clearTimeout(pressTimer);
+      pressTimer = window.setTimeout(() => {
+        ring.dataset.pressed = "false";
+      }, 160);
+    };
     const onLeave = () => {
       shown = false;
       root.classList.remove("cursor-on");
@@ -93,16 +103,14 @@ export default function Cursor() {
       document.removeEventListener("mouseleave", onLeave);
       window.removeEventListener("blur", onLeave);
       if (frame) cancelAnimationFrame(frame);
+      window.clearTimeout(pressTimer);
       root.classList.remove("has-cursor", "cursor-on");
     };
   }, []);
 
   return (
-    <>
-      <div ref={ringRef} className="cursor-ring" aria-hidden="true">
-        <span />
-      </div>
-      <div ref={dotRef} className="cursor-dot" aria-hidden="true" />
-    </>
+    <div ref={ringRef} className="cursor-ring" aria-hidden="true">
+      <span />
+    </div>
   );
 }

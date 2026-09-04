@@ -51,7 +51,9 @@ Middleware/step_logger.py.
 """
 
 import asyncio
+import os
 import sys
+import threading
 from contextlib import asynccontextmanager
 
 from fastapi import FastAPI
@@ -164,6 +166,18 @@ async def lifespan(_app: FastAPI):
     # loop, no stagger needed for the same reason as above.
     instagram_polling_service.start_background_polling()
     yield
+    # The WhatsApp/Instagram clients above run on daemon threads blocked
+    # inside native (cgo) calls into the whatsmeow/neonize Go library —
+    # normally daemon threads die the instant the process exits, but a
+    # thread parked in native network I/O at this exact moment can leave
+    # the OS process itself lingering well after this coroutine returns and
+    # uvicorn logs "Application shutdown complete." On Windows that's what
+    # turns Ctrl+C into "the terminal never gives back its prompt": the
+    # shell is still waiting on a process that looks done but hasn't
+    # actually exited. Force-exiting shortly after shutdown guarantees
+    # Ctrl+C always hands the prompt back quickly — if shutdown was already
+    # clean, the process is gone before this timer ever fires.
+    threading.Timer(2.0, lambda: os._exit(0)).start()
 
 
 app = FastAPI(title="Real Estate WhatsApp Ingestion API", lifespan=lifespan)

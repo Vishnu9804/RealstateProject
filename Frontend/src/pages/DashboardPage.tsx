@@ -21,6 +21,7 @@ import {
 import { useToast } from "../components/ui/Toast";
 import FilterPopover, { type SortControl } from "../components/ui/FilterPopover";
 import ConfirmDialog from "../components/ui/ConfirmDialog";
+import PropertyFormDialog from "../components/PropertyFormDialog";
 import {
   Badge,
   Button,
@@ -39,13 +40,16 @@ import {
   IconBuilding,
   IconCheck,
   IconChevron,
+  IconEdit,
   IconGrid,
   IconInbox,
+  IconInstagram,
   IconList,
   IconMessage,
   IconMove,
   IconPhone,
   IconPin,
+  IconPlus,
   IconRefresh,
   IconRuler,
   IconSearch,
@@ -147,6 +151,11 @@ export default function DashboardPage() {
     null,
   );
   const [actionBusy, setActionBusy] = useState(false);
+  const [formDialog, setFormDialog] = useState<{ mode: "add" | "edit"; property?: PropertyRecord } | null>(null);
+  // Not persisted like `view`/`viewTab` — this is a quick one-off lens on
+  // the current list, not a standing preference worth remembering across
+  // visits.
+  const [reelOnly, setReelOnly] = useState(false);
 
   const searchRef = useRef<HTMLInputElement>(null);
   const listTopRef = useRef<HTMLDivElement>(null);
@@ -246,6 +255,7 @@ export default function DashboardPage() {
     const needle = query.trim().toLowerCase();
     const filtered = tabFiltered.filter((property) => {
       if (!passesFilters(property)) return false;
+      if (reelOnly && !property.instagram_reel_url) return false;
       if (!needle) return true;
       const haystack = [
         property.society_name,
@@ -287,7 +297,7 @@ export default function DashboardPage() {
           return compareNullable(a.message_timestamp, b.message_timestamp, direction);
       }
     });
-  }, [tabFiltered, query, passesFilters, sortKey, sortDir]);
+  }, [tabFiltered, query, passesFilters, sortKey, sortDir, reelOnly]);
 
   const pageCount = Math.max(1, Math.ceil(visibleProperties.length / PAGE_SIZE));
   const pageItems = useMemo(
@@ -297,7 +307,7 @@ export default function DashboardPage() {
 
   // Any change that narrows the list invalidates the page you were on —
   // page 7 of a 3-page result is a blank screen that reads as a bug.
-  useEffect(() => setPage(1), [query, filters, sortKey, sortDir, viewTab]);
+  useEffect(() => setPage(1), [query, filters, sortKey, sortDir, viewTab, reelOnly]);
   useEffect(() => {
     if (page > pageCount) setPage(pageCount);
   }, [page, pageCount]);
@@ -456,6 +466,9 @@ export default function DashboardPage() {
           <Button icon={<IconRefresh size={15} />} onClick={() => load(true)} busy={refreshing}>
             Refresh
           </Button>
+          <Button variant="primary" icon={<IconPlus size={15} />} onClick={() => setFormDialog({ mode: "add" })}>
+            Add property
+          </Button>
         </div>
       </header>
 
@@ -531,6 +544,17 @@ export default function DashboardPage() {
             { value: "cards", label: "Cards", icon: <IconGrid size={14} /> },
           ]}
         />
+
+        <Button
+          size="sm"
+          variant={reelOnly ? "primary" : "ghost"}
+          icon={<IconInstagram size={14} />}
+          onClick={() => setReelOnly((prev) => !prev)}
+          title="Show only properties with an Instagram reel link"
+          aria-pressed={reelOnly}
+        >
+          Has reel
+        </Button>
 
         {filtersActive && (
           <Button size="sm" variant="ghost" onClick={resetAll}>
@@ -650,6 +674,7 @@ export default function DashboardPage() {
               onAccept={handleAccept}
               onMove={(property) => setConfirmAction({ type: "move", property })}
               onDelete={(property) => setConfirmAction({ type: "delete", property })}
+              onEdit={(property) => setFormDialog({ mode: "edit", property })}
             />
           ) : (
             <PropertyCards
@@ -661,6 +686,7 @@ export default function DashboardPage() {
               onAccept={handleAccept}
               onMove={(property) => setConfirmAction({ type: "move", property })}
               onDelete={(property) => setConfirmAction({ type: "delete", property })}
+              onEdit={(property) => setFormDialog({ mode: "edit", property })}
             />
           )}
           <Pager page={page} pageCount={pageCount} total={visibleProperties.length} onChange={setPage} />
@@ -686,7 +712,25 @@ export default function DashboardPage() {
           onAccept={handleAccept}
           onMove={(property) => setConfirmAction({ type: "move", property })}
           onDelete={(property) => setConfirmAction({ type: "delete", property })}
+          onEdit={(property) => setFormDialog({ mode: "edit", property })}
           onClose={() => setDetailId(null)}
+        />
+      )}
+
+      {formDialog && (
+        <PropertyFormDialog
+          mode={formDialog.mode}
+          property={formDialog.property}
+          onClose={() => setFormDialog(null)}
+          onSaved={(saved, mode) => {
+            if (mode === "add") {
+              setProperties((prev) => (prev ? [...prev, saved] : [saved]));
+              seenIds.current?.add(saved.record_id);
+            } else {
+              updateLocalProperty(saved.record_id, saved);
+            }
+            setFormDialog(null);
+          }}
         />
       )}
 
@@ -861,6 +905,7 @@ interface ListProps {
   onAccept: (property: PropertyRecord) => void;
   onMove: (property: PropertyRecord) => void;
   onDelete: (property: PropertyRecord) => void;
+  onEdit: (property: PropertyRecord) => void;
 }
 
 function PropertyTable({
@@ -878,6 +923,7 @@ function PropertyTable({
   onAccept,
   onMove,
   onDelete,
+  onEdit,
 }: ListProps & {
   sortKey: SortKey;
   sortDir: SortDir;
@@ -1009,6 +1055,7 @@ function PropertyTable({
                       onAccept={onAccept}
                       onMove={onMove}
                       onDelete={onDelete}
+                      onEdit={onEdit}
                     />
                   </td>
                 </tr>
@@ -1032,6 +1079,7 @@ function PropertyCards({
   onAccept,
   onMove,
   onDelete,
+  onEdit,
 }: ListProps) {
   return (
     <div className="card-grid">
@@ -1111,7 +1159,7 @@ function PropertyCards({
                 <IconUsers size={11} /> {sourceLabel(property)} · {property.formatted_timestamp}
               </span>
               <div onClick={(event) => event.stopPropagation()}>
-                <RowActions property={property} viewTab={viewTab} onAccept={onAccept} onMove={onMove} onDelete={onDelete} />
+                <RowActions property={property} viewTab={viewTab} onAccept={onAccept} onMove={onMove} onDelete={onDelete} onEdit={onEdit} />
               </div>
             </div>
           </Panel>
@@ -1133,12 +1181,14 @@ function RowActions({
   onAccept,
   onMove,
   onDelete,
+  onEdit,
 }: {
   property: PropertyRecord;
   viewTab: ViewTab;
   onAccept: (property: PropertyRecord) => void;
   onMove: (property: PropertyRecord) => void;
   onDelete: (property: PropertyRecord) => void;
+  onEdit: (property: PropertyRecord) => void;
 }) {
   const movesTo = property.review_status === "outsider" ? "Main" : "Outsider";
   return (
@@ -1152,6 +1202,21 @@ function RowActions({
           onClick={() => onAccept(property)}
         >
           <IconCheck size={15} />
+        </button>
+      )}
+      {/* Edit only makes sense once a property has left the review queue —
+          Needs review already has its own resolution step (Accept), and
+          editing a not-yet-reviewed property here would let its content
+          change before anyone has actually looked at it. */}
+      {viewTab !== "needsReview" && (
+        <button
+          type="button"
+          className="row-actions__btn"
+          title="Edit"
+          aria-label="Edit this property"
+          onClick={() => onEdit(property)}
+        >
+          <IconEdit size={15} />
         </button>
       )}
       <button
@@ -1194,6 +1259,7 @@ function PropertyDetailDialog({
   onAccept,
   onMove,
   onDelete,
+  onEdit,
   onClose,
 }: {
   property: PropertyRecord;
@@ -1201,6 +1267,7 @@ function PropertyDetailDialog({
   onAccept: (property: PropertyRecord) => void;
   onMove: (property: PropertyRecord) => void;
   onDelete: (property: PropertyRecord) => void;
+  onEdit: (property: PropertyRecord) => void;
   onClose: () => void;
 }) {
   useEffect(() => {
@@ -1316,6 +1383,19 @@ function PropertyDetailDialog({
                 {sourceDetail(property)} · {property.formatted_timestamp}
               </div>
             </div>
+
+            {property.instagram_reel_url && (
+              <div className="detail__block">
+                <div className="detail__k">
+                  <IconInstagram size={11} /> Instagram reel
+                </div>
+                <div className="detail__v">
+                  <a href={property.instagram_reel_url} target="_blank" rel="noreferrer">
+                    {property.instagram_reel_url}
+                  </a>
+                </div>
+              </div>
+            )}
           </div>
 
           {property.description && (
@@ -1341,6 +1421,11 @@ function PropertyDetailDialog({
             {viewTab === "needsReview" && (
               <Button icon={<IconCheck size={14} />} onClick={() => onAccept(property)}>
                 Accept
+              </Button>
+            )}
+            {viewTab !== "needsReview" && (
+              <Button variant="ghost" icon={<IconEdit size={14} />} onClick={() => onEdit(property)}>
+                Edit
               </Button>
             )}
             <Button variant="ghost" icon={<IconMove size={14} />} onClick={() => onMove(property)}>

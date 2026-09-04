@@ -232,3 +232,22 @@ export const IconMove = svg(
     <path d="M19.7 16.3H10a5 5 0 0 1-5-5v-1" />
   </>,
 );
+
+export const IconEdit = svg(
+  <>
+    <path d="M14.5 4.5 19 9l-11 11H3.5v-4.5Z" />
+    <path d="m12.5 6.5 4.5 4.5" />
+  </>,
+);
+
+/** Instagram's familiar rounded-square/lens/flash glyph, drawn in the same
+ *  stroke weight and geometry as every other icon here rather than pulled in
+ *  as a brand asset — used only to mean "this is the Instagram field/filter",
+ *  not as the Instagram brand mark itself. */
+export const IconInstagram = svg(
+  <>
+    <rect x="3" y="3" width="18" height="18" rx="5.5" />
+    <circle cx="12" cy="12" r="4.2" />
+    <path d="M17.2 6.8h.01" />
+  </>,
+);

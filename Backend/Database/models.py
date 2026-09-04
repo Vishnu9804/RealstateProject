@@ -61,6 +61,18 @@ class PropertyRow(Base):
     contact_name: Mapped[Optional[str]] = mapped_column(String, nullable=True)
     contact_phone: Mapped[Optional[str]] = mapped_column(String, nullable=True)
     description: Mapped[Optional[str]] = mapped_column(Text, nullable=True)
+    # Set by a human on the Properties page, never by the LLM — see
+    # StructuredProperty.instagram_reel_url.
+    instagram_reel_url: Mapped[Optional[str]] = mapped_column(String, nullable=True)
+    # Derived cache, not content: instagram_reel_url resolved to Instagram's
+    # own numeric media id once (Service/InstagramInquiryHandlingService/
+    # instagram_reel_matcher.py), so the comment/DM poller can match against
+    # it without re-resolving the URL on every poll. Deliberately absent
+    # from StructuredProperty/EmbeddedProperty/PropertyRecord — it's never
+    # LLM/user content and has no business being in the public API or the
+    # Add/Edit dialog; read/written directly via property_repository's own
+    # get/set_instagram_media_pk.
+    instagram_media_pk: Mapped[Optional[str]] = mapped_column(String, nullable=True)
 
     # --- known for certain from WhatsApp itself, not from the LLM ---
     group_name: Mapped[str] = mapped_column(String, nullable=False)

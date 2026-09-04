@@ -35,9 +35,12 @@ worth storing twice.
 
 from __future__ import annotations
 
-from typing import List, Optional
+import uuid
+from datetime import datetime, timezone
+from typing import Any, Dict, List, Optional
 
 from Agent.WhatsAppDataFetchingAgent import property_structurer
+from Database.property_repository import EDITABLE_CONTENT_FIELDS
 from Middleware import step_logger
 from Model.WhatsAppDataFetchingModel.duplicate_verdict import DuplicateVerdict
 from Model.WhatsAppDataFetchingModel.embedded_property import EmbeddedProperty
@@ -152,14 +155,81 @@ def get_property_count() -> int:
     return property_vector_store.get_property_count()
 
 
+def create_property(content_fields: Dict[str, Any]) -> PropertyRecord:
+    """Backs the Properties page's Add dialog — a property entered by hand
+    rather than extracted from a WhatsApp message. Every WhatsApp-metadata
+    field StructuredProperty otherwise requires (sender, group, message
+    text/timestamp) gets a placeholder here instead, since none of it
+    exists for a manual entry; every content field is optional, matching
+    the dialog itself (see property_controller.py's PropertyContentFields).
+
+    Stored directly as review_status="accepted", needs_review=False — a
+    human deliberately adding a property already knows about it, so running
+    it back through duplicate detection would only risk second-guessing
+    their own input."""
+    fields = {key: value for key, value in content_fields.items() if key in EDITABLE_CONTENT_FIELDS}
+    now = datetime.now(timezone.utc)
+    structured = StructuredProperty(
+        source_message_id=f"manual-{uuid.uuid4().hex}",
+        group_name="Manually added",
+        chat_type="personal",
+        sender_name="Manual entry",
+        sender_saved_name="Manual entry",
+        sender_phone="manual",
+        message_text=fields.get("description") or "Added manually via the Properties page.",
+        message_timestamp=now,
+        **fields,
+    )
+    embedded = _embed(structured)
+    if embedded is None:
+        # Embedding only fails on an unexpected model error (see _embed) —
+        # exceedingly rare for a hand-typed property, but a manual Add must
+        # never silently do nothing, so this is a real error, not a no-op.
+        raise RuntimeError("Could not save this property — the embedding step failed. Please try again.")
+    property_vector_store.add_property(embedded)
+    return _to_record(embedded)
+
+
 def update_property(
-    record_id: str, review_status: Optional[str] = None, needs_review: Optional[bool] = None
+    record_id: str,
+    review_status: Optional[str] = None,
+    needs_review: Optional[bool] = None,
+    content_updates: Optional[Dict[str, Any]] = None,
 ) -> Optional[PropertyRecord]:
-    """Backs both actions the UI offers on a stored property: "move to
-    Main/Outsider" (review_status) and "accept out of the review queue"
-    (needs_review=False) — either can be passed alone, or both together.
-    Returns None if no property with this record_id exists."""
-    updated = property_vector_store.update_property(record_id, review_status=review_status, needs_review=needs_review)
+    """Backs three actions the UI offers on a stored property: "move to
+    Main/Outsider" (review_status), "accept out of the review queue"
+    (needs_review=False), and the Properties page's Edit dialog
+    (content_updates) — any of the three can be passed alone, or together.
+    Returns None if no property with this record_id exists.
+
+    content_updates triggers a full embedding recompute, over the property's
+    OTHER fields merged with the edit — never a partial/stale vector — so a
+    hand-edited property stays exactly as comparable for duplicate detection
+    as one the LLM structured, with no second, out-of-date vector left
+    behind from before the edit."""
+    embedding_kwargs: Dict[str, Any] = {}
+    filtered_updates: Optional[Dict[str, Any]] = None
+    if content_updates:
+        filtered_updates = {key: value for key, value in content_updates.items() if key in EDITABLE_CONTENT_FIELDS}
+        existing = property_vector_store.get_property(record_id)
+        if existing is None:
+            return None
+        merged_data = existing.model_dump(exclude={"embedding", "field_embeddings", "embedding_model"})
+        merged_data.update(filtered_updates)
+        merged_structured = StructuredProperty(**merged_data)
+        embedding_kwargs = {
+            "embedding": embedding_service.embed_property(merged_structured),
+            "field_embeddings": embedding_service.embed_property_fields(merged_structured),
+            "embedding_model": embedding_service.EMBEDDING_MODEL_NAME,
+        }
+
+    updated = property_vector_store.update_property(
+        record_id,
+        review_status=review_status,
+        needs_review=needs_review,
+        content_updates=filtered_updates,
+        **embedding_kwargs,
+    )
     return _to_record(updated) if updated is not None else None
 
 

@@ -128,3 +128,5 @@ def init_db() -> None:
                 "WHERE review_status = 'needs_review'"
             )
         )
+        connection.execute(text("ALTER TABLE properties ADD COLUMN IF NOT EXISTS instagram_reel_url VARCHAR"))
+        connection.execute(text("ALTER TABLE properties ADD COLUMN IF NOT EXISTS instagram_media_pk VARCHAR"))

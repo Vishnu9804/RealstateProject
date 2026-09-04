@@ -74,3 +74,70 @@ class ClientRow(ClientBase):
     updated_at: Mapped[datetime] = mapped_column(
         DateTime(timezone=True), server_default=func.now(), onupdate=func.now()
     )
+
+
+class InstagramContactRow(ClientBase):
+    """A prospective client identified only by Instagram, before (or
+    instead of) ever giving a WhatsApp number — see
+    Service/InstagramInquiryHandlingService/instagram_contact_store.py.
+    Mirrors ClientRow's requirement fields field-for-field on purpose: once
+    someone submits the form WITH a phone number, their data moves into a
+    real ClientRow (via client_store.upsert_client) and this row is just
+    marked "converted" rather than duplicated — a person only ever has one
+    real inquiry record, in whichever table matches how they're currently
+    reachable.
+    """
+
+    __tablename__ = "instagram_contacts"
+
+    # Instagram's numeric user id (as a string) — stable for the account's
+    # lifetime, unlike the username, which can change.
+    ig_user_id: Mapped[str] = mapped_column(String, primary_key=True)
+    ig_username: Mapped[Optional[str]] = mapped_column(String, nullable=True)
+
+    # "new" (DM sequence sent, no submission yet), "registered" (submitted
+    # the form without a phone — still Instagram-only), "converted"
+    # (submitted WITH a phone — see linked_phone below; all further contact
+    # happens on WhatsApp instead, never both channels at once).
+    status: Mapped[str] = mapped_column(String, nullable=False, default="new")
+
+    # Set only once this contact submits the form with a WhatsApp number —
+    # from that point on, Service/InstagramInquiryHandlingService/
+    # instagram_polling_service.py skips this ig_user_id entirely.
+    linked_phone: Mapped[Optional[str]] = mapped_column(String, nullable=True)
+
+    # --- client info ---
+    name: Mapped[Optional[str]] = mapped_column(String, nullable=True)
+    email: Mapped[Optional[str]] = mapped_column(String, nullable=True)
+
+    # --- property requirements — same shape as ClientRow ---
+    purpose: Mapped[Optional[str]] = mapped_column(String, nullable=True)
+    property_type: Mapped[Optional[str]] = mapped_column(String, nullable=True)
+    bhk: Mapped[Optional[str]] = mapped_column(String, nullable=True)
+    budget_min_inr: Mapped[Optional[float]] = mapped_column(Float, nullable=True)
+    budget_max_inr: Mapped[Optional[float]] = mapped_column(Float, nullable=True)
+    preferred_areas: Mapped[Optional[str]] = mapped_column(String, nullable=True)
+    additional_requirements: Mapped[Optional[str]] = mapped_column(Text, nullable=True)
+
+    created_at: Mapped[datetime] = mapped_column(DateTime(timezone=True), server_default=func.now())
+    updated_at: Mapped[datetime] = mapped_column(
+        DateTime(timezone=True), server_default=func.now(), onupdate=func.now()
+    )
+
+
+class InstagramProcessedEventRow(ClientBase):
+    """Pure idempotency guard for Service/InstagramInquiryHandlingService/
+    instagram_polling_service.py — every comment reply and every DM sequence
+    it sends is recorded here first (by a unique event_key describing what
+    was done, e.g. "comment:{comment_pk}" or "dm:{property_record_id}:
+    {ig_user_id}") so a restart or two overlapping poll cycles can never
+    reply to the same comment twice or DM the same person about the same
+    property twice — persisted rather than in-memory (unlike WhatsApp's
+    invitation_tracker.py) because a duplicate DM is far more visibly bad on
+    Instagram than a duplicate WhatsApp welcome text.
+    """
+
+    __tablename__ = "instagram_processed_events"
+
+    event_key: Mapped[str] = mapped_column(String, primary_key=True)
+    created_at: Mapped[datetime] = mapped_column(DateTime(timezone=True), server_default=func.now())

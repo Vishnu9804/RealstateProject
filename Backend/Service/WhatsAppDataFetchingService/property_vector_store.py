@@ -18,7 +18,7 @@ in sync, in either mode.
 
 from __future__ import annotations
 
-from typing import List, Optional, Tuple
+from typing import Any, Dict, List, Optional, Tuple
 
 import numpy as np
 
@@ -70,17 +70,70 @@ def get_property_count() -> int:
     return len(_properties)
 
 
+# In-memory fallback only, for get/set_instagram_media_pk below — mirrors
+# _properties in spirit but keyed separately since instagram_media_pk is
+# deliberately not a field on EmbeddedProperty itself (see Database/models.py's
+# PropertyRow.instagram_media_pk).
+_instagram_media_pks: Dict[str, str] = {}
+
+
+def get_instagram_media_pk(record_id: str) -> Optional[str]:
+    if is_database_configured():
+        return property_repository.get_instagram_media_pk(record_id)
+    return _instagram_media_pks.get(record_id)
+
+
+def set_instagram_media_pk(record_id: str, media_pk: str) -> None:
+    if is_database_configured():
+        property_repository.set_instagram_media_pk(record_id, media_pk)
+        return
+    _instagram_media_pks[record_id] = media_pk
+
+
+def get_property(record_id: str) -> Optional[EmbeddedProperty]:
+    if is_database_configured():
+        return property_repository.get_property(record_id)
+    for prop in _properties:
+        if prop.record_id == record_id:
+            return prop
+    return None
+
+
 def update_property(
-    record_id: str, review_status: Optional[str] = None, needs_review: Optional[bool] = None
+    record_id: str,
+    review_status: Optional[str] = None,
+    needs_review: Optional[bool] = None,
+    content_updates: Optional[Dict[str, Any]] = None,
+    embedding: Optional[List[float]] = None,
+    field_embeddings: Optional[dict] = None,
+    embedding_model: Optional[str] = None,
 ) -> Optional[EmbeddedProperty]:
     if is_database_configured():
-        return property_repository.update_property(record_id, review_status=review_status, needs_review=needs_review)
+        return property_repository.update_property(
+            record_id,
+            review_status=review_status,
+            needs_review=needs_review,
+            content_updates=content_updates,
+            embedding=embedding,
+            field_embeddings=field_embeddings,
+            embedding_model=embedding_model,
+        )
     for prop in _properties:
         if prop.record_id == record_id:
             if review_status is not None:
                 prop.review_status = review_status
             if needs_review is not None:
                 prop.needs_review = needs_review
+            if content_updates:
+                for key, value in content_updates.items():
+                    if key in property_repository.EDITABLE_CONTENT_FIELDS:
+                        setattr(prop, key, value)
+            if embedding is not None:
+                prop.embedding = embedding
+            if field_embeddings is not None:
+                prop.field_embeddings = field_embeddings
+            if embedding_model is not None:
+                prop.embedding_model = embedding_model
             return prop
     return None
 

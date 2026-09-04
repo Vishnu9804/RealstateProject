@@ -50,8 +50,15 @@ export interface DisplaySettings {
  * before rendering. `is_new_client` decides whether the page shows a blank
  * registration form or a pre-filled update form.
  */
+/** "whatsapp": phone is known and fixed (locked field). "instagram": phone
+ *  is unknown unless/until the visitor adds one (open, optional field) —
+ *  see InquiryFormPage.tsx. */
+export type InquiryChannel = "whatsapp" | "instagram";
+
 export interface InquiryFormPrefill {
   is_new_client: boolean;
+  channel: InquiryChannel;
+  phone: string | null;
   name: string | null;
   email: string | null;
   purpose: string | null;
@@ -64,8 +71,12 @@ export interface InquiryFormPrefill {
 }
 
 /** Mirrors FormSubmissionRequest — every field optional; omitted/blank is
- *  how a field gets cleared server-side, not an error. */
+ *  how a field gets cleared server-side, not an error. `phone` is read by
+ *  the backend only for an "instagram" channel token — sending it on a
+ *  "whatsapp" one has no effect, since that identity is fixed by the URL
+ *  token, never by this body. */
 export interface InquiryFormSubmission {
+  phone?: string | null;
   name?: string | null;
   email?: string | null;
   purpose?: string | null;
@@ -129,6 +140,7 @@ export interface PropertyRecord {
   contact_name: string | null;
   contact_phone: string | null;
   description: string | null;
+  instagram_reel_url: string | null;
   group_name: string;
   chat_type: "group" | "personal";
   sender_name: string;

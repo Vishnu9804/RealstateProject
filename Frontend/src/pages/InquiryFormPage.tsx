@@ -1,10 +1,11 @@
-import { useEffect, useState } from "react";
+import { useEffect, useRef, useState } from "react";
 import { useParams } from "react-router-dom";
 import "../styles/inquiryForm.css";
 import { ApiError } from "../api/client";
 import { inquiryFormApi } from "../api/inquiryFormApi";
-import type { InquiryFormPrefill, InquiryFormSubmission } from "../api/types";
+import type { InquiryChannel, InquiryFormPrefill, InquiryFormSubmission } from "../api/types";
 import { friendlyError } from "../lib/apiError";
+import ConfirmDialog from "../components/ui/ConfirmDialog";
 import { Badge, Button, EmptyState, Note, Panel, Segmented, SkeletonRows } from "../components/ui/Primitives";
 import { IconAlert, IconBuilding, IconCheckCircle, IconRefresh } from "../components/ui/Icons";
 
@@ -29,6 +30,16 @@ export default function InquiryFormPage() {
   const [loadError, setLoadError] = useState<string | null>(null);
   const [isNewClient, setIsNewClient] = useState(true);
   const [saved, setSaved] = useState<InquiryFormPrefill | null>(null);
+  const [channel, setChannel] = useState<InquiryChannel>("whatsapp");
+
+  const [phone, setPhone] = useState("");
+  const phoneInputRef = useRef<HTMLInputElement>(null);
+  // Only ever relevant on an "instagram" link with no phone entered — set
+  // once the visitor explicitly says "No, Continue on Instagram" in the
+  // nudge dialog below, so the very next Save actually goes through
+  // instead of asking again.
+  const [skipPhoneNudge, setSkipPhoneNudge] = useState(false);
+  const [showPhoneNudge, setShowPhoneNudge] = useState(false);
 
   const [name, setName] = useState("");
   const [email, setEmail] = useState("");
@@ -71,6 +82,8 @@ export default function InquiryFormPage() {
   function applyPrefill(data: InquiryFormPrefill) {
     setSaved(data);
     setIsNewClient(data.is_new_client);
+    setChannel(data.channel);
+    setPhone(data.phone ?? "");
     setName(data.name ?? "");
     setEmail(data.email ?? "");
     setPurpose((data.purpose as PurposeValue) || "");
@@ -88,7 +101,7 @@ export default function InquiryFormPage() {
     if (saved) applyPrefill(saved);
   }
 
-  async function handleSubmit(event: React.FormEvent<HTMLFormElement>) {
+  function handleSubmit(event: React.FormEvent<HTMLFormElement>) {
     event.preventDefault();
     if (submitting) return;
 
@@ -106,6 +119,19 @@ export default function InquiryFormPage() {
       return;
     }
 
+    // Only an Instagram-originated link ever has an empty, still-editable
+    // phone field — a WhatsApp one is always pre-filled and locked, so it
+    // can never hit this. Ask once per visit; "No, Continue on Instagram"
+    // sets skipPhoneNudge so this same Save then goes straight through.
+    if (channel === "instagram" && !phone.trim() && !skipPhoneNudge) {
+      setShowPhoneNudge(true);
+      return;
+    }
+
+    void doSubmit();
+  }
+
+  async function doSubmit() {
     setSubmitting(true);
     setSubmitError(null);
 
@@ -113,6 +139,12 @@ export default function InquiryFormPage() {
     // backend a field was deliberately cleared (see
     // inquiry_form_service.py's _blank_to_none), not left untouched.
     const body: InquiryFormSubmission = {
+      // Only ever meaningful for an "instagram" token — a "whatsapp" one's
+      // identity is fixed by the link itself, so sending its (locked,
+      // read-only) value here would be redundant at best; omitting it
+      // entirely keeps that invariant visible in the request itself, not
+      // just enforced silently server-side.
+      phone: channel === "instagram" ? phone.trim() || null : undefined,
       name: name.trim(),
       email: email.trim() || null,
       purpose: purpose || null,
@@ -200,6 +232,23 @@ export default function InquiryFormPage() {
             </div>
 
             <form className="stack stack-4" onSubmit={handleSubmit}>
+              <div className="field">
+                <label className="field__label" htmlFor="phone">
+                  WhatsApp number{channel === "instagram" && " (optional)"}
+                </label>
+                <input
+                  id="phone"
+                  ref={phoneInputRef}
+                  type="tel"
+                  className="input"
+                  value={phone}
+                  onChange={(e) => setPhone(e.target.value)}
+                  placeholder="e.g. 9876543210"
+                  disabled={channel === "whatsapp"}
+                  style={channel === "whatsapp" ? { opacity: 0.7, cursor: "not-allowed" } : undefined}
+                />
+              </div>
+
               <div className="field">
                 <label className="field__label" htmlFor="name">
                   Your name
@@ -355,6 +404,27 @@ export default function InquiryFormPage() {
           </Panel>
         )}
       </div>
+
+      {showPhoneNudge && (
+        <ConfirmDialog
+          title="Add your WhatsApp number?"
+          body={<p>Sharing your WhatsApp number makes it much easier for us to send you property details and stay in touch.</p>}
+          confirmLabel="No, Continue on Instagram"
+          cancelLabel="Okay"
+          onConfirm={() => {
+            setShowPhoneNudge(false);
+            setSkipPhoneNudge(true);
+            void doSubmit();
+          }}
+          onClose={() => {
+            // Covers the Okay button as well as the dialog's X/outside-
+            // click/Escape — all of them mean the same thing here: don't
+            // submit yet, let them come back and add the number.
+            setShowPhoneNudge(false);
+            phoneInputRef.current?.focus();
+          }}
+        />
+      )}
     </div>
   );
 }

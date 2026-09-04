@@ -8,7 +8,7 @@ this module directly.
 
 from __future__ import annotations
 
-from typing import List, Optional, Tuple
+from typing import Any, Dict, List, Optional, Tuple
 
 from sqlalchemy import func, select
 from sqlalchemy.orm import Session
@@ -16,6 +16,30 @@ from sqlalchemy.orm import Session
 from Database.models import PropertyRow
 from Database.session import get_session
 from Model.WhatsAppDataFetchingModel.embedded_property import EmbeddedProperty
+
+# Content fields a human can edit from the Properties page (Add/Edit dialog)
+# — everything else on the row (record_id, sender/group metadata, message
+# text/timestamp, review_status, needs_review) is either system-assigned or
+# changed through its own dedicated action, never through a generic content
+# update. Kept here, next to _COLUMNS, since both describe the same table.
+EDITABLE_CONTENT_FIELDS = (
+    "property_type",
+    "bhk",
+    "society_name",
+    "area_name",
+    "address",
+    "carpet_area_sqft",
+    "carpet_area_unit",
+    "price_text",
+    "price_amount_inr",
+    "price_per_unit_text",
+    "price_per_unit_amount_inr",
+    "listing_type",
+    "contact_name",
+    "contact_phone",
+    "description",
+    "instagram_reel_url",
+)
 
 _COLUMNS = (
     "source_message_id",
@@ -34,6 +58,7 @@ _COLUMNS = (
     "contact_name",
     "contact_phone",
     "description",
+    "instagram_reel_url",
     "group_name",
     "chat_type",
     "sender_name",
@@ -77,9 +102,39 @@ def get_property_count() -> int:
         return session.execute(select(func.count()).select_from(PropertyRow)).scalar_one()
 
 
+def get_instagram_media_pk(record_id: str) -> Optional[str]:
+    with get_session() as session:
+        row = _find_row(session, record_id)
+        return row.instagram_media_pk if row is not None else None
+
+
+def set_instagram_media_pk(record_id: str, media_pk: str) -> None:
+    with get_session() as session:
+        row = _find_row(session, record_id)
+        if row is not None:
+            row.instagram_media_pk = media_pk
+
+
+def get_property(record_id: str) -> Optional[EmbeddedProperty]:
+    with get_session() as session:
+        row = _find_row(session, record_id)
+        return _to_pydantic(row) if row is not None else None
+
+
 def update_property(
-    record_id: str, review_status: Optional[str] = None, needs_review: Optional[bool] = None
+    record_id: str,
+    review_status: Optional[str] = None,
+    needs_review: Optional[bool] = None,
+    content_updates: Optional[Dict[str, Any]] = None,
+    embedding: Optional[List[float]] = None,
+    field_embeddings: Optional[dict] = None,
+    embedding_model: Optional[str] = None,
 ) -> Optional[EmbeddedProperty]:
+    """review_status/needs_review back the Main/Outsider move and the Needs
+    review Accept action; content_updates (plus a freshly recomputed
+    embedding, passed in by the caller — see Service/WhatsAppDataFetchingService/
+    property_pipeline_service.py) backs the Properties page's Edit dialog.
+    Either group can be passed alone or together."""
     with get_session() as session:
         row = _find_row(session, record_id)
         if row is None:
@@ -88,6 +143,16 @@ def update_property(
             row.review_status = review_status
         if needs_review is not None:
             row.needs_review = needs_review
+        if content_updates:
+            for key, value in content_updates.items():
+                if key in EDITABLE_CONTENT_FIELDS:
+                    setattr(row, key, value)
+        if embedding is not None:
+            row.embedding = embedding
+        if field_embeddings is not None:
+            row.field_embeddings = field_embeddings
+        if embedding_model is not None:
+            row.embedding_model = embedding_model
         session.flush()
         return _to_pydantic(row)
 

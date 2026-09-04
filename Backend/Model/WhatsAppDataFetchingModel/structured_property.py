@@ -48,6 +48,11 @@ class StructuredProperty(BaseModel):
     contact_name: Optional[str] = None
     contact_phone: Optional[str] = None
     description: Optional[str] = None
+    # --- set by a human on the Properties page, never by the LLM ---
+    # The Instagram reel this property was posted as, if any — how the
+    # InstagramInquiryHandling pipeline matches a reel comment/DM share back
+    # to the property it's about (see Service/InstagramInquiryHandlingService).
+    instagram_reel_url: Optional[str] = None
 
     # --- known for certain from WhatsApp itself, not from the LLM ---
     group_name: str

@@ -233,7 +233,7 @@ def _summarize_requirements(record: ClientRecord) -> str:
 
 
 def _build_form_link(phone: str) -> str:
-    token = form_token_service.issue_token(phone)
+    token = form_token_service.issue_token(channel="whatsapp", identity=phone)
     base = get_settings().inquiry_form_base_url.rstrip("/")
     return f"{base}/{token}"
 

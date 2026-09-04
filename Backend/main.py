@@ -78,6 +78,7 @@ from Controller.WhatsAppDataFetchingController.property_controller import router
 from Controller.WhatsAppDataFetchingController.whatsapp_controller import router as whatsapp_router
 from Controller.WhatsAppInquiryHandlingController.inquiry_form_controller import router as inquiry_form_router
 from Controller.WhatsAppInquiryHandlingController.whatsapp_inquiry_controller import router as whatsapp_inquiry_router
+from Controller.InstagramInquiryHandlingController.instagram_controller import router as instagram_router
 from Config.settings import get_settings
 from Database.client_session import init_client_db, is_client_database_configured
 from Database.session import init_db, is_database_configured
@@ -85,6 +86,7 @@ from Middleware.logging_config import configure_logging
 from Middleware import step_logger
 from Service.WhatsAppDataFetchingService import area_filter_service, display_settings_service, duplicate_detection_service, whatsapp_service
 from Service.WhatsAppInquiryHandlingService import whatsapp_inquiry_service
+from Service.InstagramInquiryHandlingService import instagram_connection_service, instagram_polling_service
 
 configure_logging()
 
@@ -104,6 +106,7 @@ async def _init_property_database() -> None:
         await asyncio.to_thread(area_filter_service.load_from_database)
         await asyncio.to_thread(display_settings_service.load_from_database)
         await asyncio.to_thread(duplicate_detection_service.load_from_database)
+        await asyncio.to_thread(instagram_connection_service.load_from_database)
         step_logger.success("Database ready — properties and settings will persist across restarts.")
     else:
         step_logger.info(
@@ -151,6 +154,15 @@ async def lifespan(_app: FastAPI):
     # the real fix is running the two clients in separate OS processes.
     await asyncio.sleep(8)
     whatsapp_inquiry_service.start_agent_in_background()
+    # No stagger needed here, unlike the two WhatsApp clients above — the
+    # Instagram connection is a plain HTTPS keepalive check, not a
+    # neonize/whatsmeow Go client, so it shares none of that library's
+    # concurrent-construction crash risk.
+    instagram_connection_service.start_background_keepalive()
+    # Also inert until Instagram is connected (see its own module
+    # docstring) — safe to start unconditionally alongside the keepalive
+    # loop, no stagger needed for the same reason as above.
+    instagram_polling_service.start_background_polling()
     yield
 
 
@@ -186,6 +198,7 @@ app.include_router(duplicate_detection_router, prefix="/api")
 app.include_router(property_router, prefix="/api")
 app.include_router(whatsapp_inquiry_router, prefix="/api")
 app.include_router(inquiry_form_router, prefix="/api")
+app.include_router(instagram_router, prefix="/api")
 
 
 @app.get("/")

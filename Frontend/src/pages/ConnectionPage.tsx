@@ -1,13 +1,15 @@
 import { useEffect, useMemo, useRef, useState } from "react";
+import { useLocation, useNavigate } from "react-router-dom";
 import { whatsappApi } from "../api/whatsappApi";
 import type { WhatsAppGroup, WhatsAppPersonalChat } from "../api/types";
 import { usePolling } from "../hooks/usePolling";
-import { useDebounced, useUnsavedGuard } from "../hooks/useUi";
+import { useDebounced, usePersistentState, useUnsavedGuard } from "../hooks/useUi";
 import { friendlyError } from "../lib/apiError";
 import type { StatusTone } from "../lib/whatsappStatus";
 import { canSelectMonitoring, describeWhatsAppStatus, PIPELINE_STEPS, pipelineStage, statusTone } from "../lib/whatsappStatus";
 import { useAppStatus } from "../state/StatusProvider";
 import { useToast } from "../components/ui/Toast";
+import InstagramConnectionTab from "../components/InstagramConnectionTab";
 import {
   Badge,
   Button,
@@ -17,6 +19,7 @@ import {
   Note,
   Panel,
   SearchInput,
+  Segmented,
   SkeletonRows,
   Stat,
 } from "../components/ui/Primitives";
@@ -26,6 +29,7 @@ import {
   IconDatabase,
   IconInbox,
   IconInfo,
+  IconInstagram,
   IconLayers,
   IconMessage,
   IconPhone,
@@ -36,6 +40,59 @@ import {
   IconUsers,
   IconZap,
 } from "../components/ui/Icons";
+
+type ConnectionTab = "whatsapp" | "instagram";
+
+/**
+ * Both connection channels live under this one page, as tabs — the
+ * Connection page is "how do messages/inquiries get in", and WhatsApp and
+ * Instagram are just two sources feeding the same property/inquiry
+ * pipeline, not two separate concerns.
+ *
+ * Also picks up the ?instagram=connected|error&message=... redirect
+ * Backend/Controller/InstagramInquiryHandlingController/instagram_controller.py's
+ * /callback route lands the browser back on after the Instagram OAuth
+ * flow, surfaces it as a toast, switches to the Instagram tab, and strips
+ * the query string so a page refresh doesn't replay the same toast.
+ */
+export default function ConnectionPage() {
+  const [tab, setTab] = usePersistentState<ConnectionTab>("connection.tab", "whatsapp");
+  const location = useLocation();
+  const navigate = useNavigate();
+  const toast = useToast();
+
+  useEffect(() => {
+    const params = new URLSearchParams(location.search);
+    const result = params.get("instagram");
+    if (!result) return;
+
+    if (result === "connected") {
+      toast.push({ tone: "ok", title: "Instagram connected", message: "Reel comments and DMs will now be handled automatically." });
+    } else if (result === "error") {
+      toast.push({ tone: "bad", title: "Instagram connection failed", message: params.get("message") ?? "Please try again." });
+    }
+    setTab("instagram");
+    navigate(location.pathname, { replace: true });
+    // Only ever meant to run once, for the redirect this page was just
+    // loaded from — re-running on every render would re-fire the toast.
+    // eslint-disable-next-line react-hooks/exhaustive-deps
+  }, []);
+
+  return (
+    <div className="stack stack-5">
+      <Segmented<ConnectionTab>
+        ariaLabel="Connection channel"
+        value={tab}
+        onChange={setTab}
+        options={[
+          { value: "whatsapp", label: "WhatsApp", icon: <IconMessage size={14} /> },
+          { value: "instagram", label: "Instagram", icon: <IconInstagram size={14} /> },
+        ]}
+      />
+      {tab === "whatsapp" ? <WhatsAppTab /> : <InstagramConnectionTab />}
+    </div>
+  );
+}
 
 /** The badge palette has no neutral slot; an unrecognized status is still
  *  information worth showing, so it borrows the informational tone rather
@@ -53,7 +110,7 @@ const GROUPS_POLL_INTERVAL_MS = 10000;
  *  silent no-match hours later when the messages never arrive. */
 const VALID_NUMBER = /^\d{8,15}$/;
 
-export default function ConnectionPage() {
+function WhatsAppTab() {
   const { status, error: statusError, initialLoading, failures, refresh } = useAppStatus();
   const toast = useToast();
 

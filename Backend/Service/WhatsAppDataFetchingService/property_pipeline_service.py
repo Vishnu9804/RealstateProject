@@ -180,6 +180,13 @@ def create_property(content_fields: Dict[str, Any]) -> PropertyRecord:
         message_timestamp=now,
         **fields,
     )
+    # A manual Add that already includes a photo or reel link counts as
+    # qualifying for the Landing Page page from the moment it's created —
+    # same signal update_property computes below for an edit, just inlined
+    # here since create_property builds the StructuredProperty directly
+    # rather than going through content_updates.
+    if structured.image_urls or structured.instagram_reel_url:
+        structured.qualified_at = now
     embedded = _embed(structured)
     if embedded is None:
         # Embedding only fails on an unexpected model error (see _embed) —
@@ -195,20 +202,28 @@ def update_property(
     review_status: Optional[str] = None,
     needs_review: Optional[bool] = None,
     content_updates: Optional[Dict[str, Any]] = None,
+    landing_page: Optional[bool] = None,
 ) -> Optional[PropertyRecord]:
-    """Backs three actions the UI offers on a stored property: "move to
+    """Backs four actions the UI offers on a stored property: "move to
     Main/Outsider" (review_status), "accept out of the review queue"
-    (needs_review=False), and the Properties page's Edit dialog
-    (content_updates) — any of the three can be passed alone, or together.
+    (needs_review=False), the Properties page's Edit dialog
+    (content_updates), and the Landing Page page's Send/Remove actions
+    (landing_page) — any of the four can be passed alone, or together.
     Returns None if no property with this record_id exists.
 
     content_updates triggers a full embedding recompute, over the property's
     OTHER fields merged with the edit — never a partial/stale vector — so a
     hand-edited property stays exactly as comparable for duplicate detection
     as one the LLM structured, with no second, out-of-date vector left
-    behind from before the edit."""
+    behind from before the edit.
+
+    An edit that adds a photo or an Instagram reel link also bumps
+    qualified_at — the Landing Page page's Ready to Add tab sorts newly
+    qualified properties to the top by this, and Send/Remove deliberately
+    never touch it (see StructuredProperty.qualified_at)."""
     embedding_kwargs: Dict[str, Any] = {}
     filtered_updates: Optional[Dict[str, Any]] = None
+    qualified_at: Optional[datetime] = None
     if content_updates:
         filtered_updates = {key: value for key, value in content_updates.items() if key in EDITABLE_CONTENT_FIELDS}
         existing = property_vector_store.get_property(record_id)
@@ -222,12 +237,16 @@ def update_property(
             "field_embeddings": embedding_service.embed_property_fields(merged_structured),
             "embedding_model": embedding_service.EMBEDDING_MODEL_NAME,
         }
+        if filtered_updates.get("image_urls") or filtered_updates.get("instagram_reel_url"):
+            qualified_at = datetime.now(timezone.utc)
 
     updated = property_vector_store.update_property(
         record_id,
         review_status=review_status,
         needs_review=needs_review,
         content_updates=filtered_updates,
+        on_landing_page=landing_page,
+        qualified_at=qualified_at,
         **embedding_kwargs,
     )
     return _to_record(updated) if updated is not None else None

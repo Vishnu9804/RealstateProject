@@ -1,11 +1,10 @@
 import { memo, useLayoutEffect, useMemo, useRef, useState } from "react";
 import { NavLink, Outlet, useLocation } from "react-router-dom";
 import Scene from "./Scene";
-import Cursor from "./Cursor";
 import CommandPalette, { useCommandPalette } from "./CommandPalette";
 import { ThemeToggle } from "./ui/Theme";
 import { Tip } from "./ui/Primitives";
-import { IconCommand, IconGrid, IconLink, IconSliders, IconUsers, IconZap } from "./ui/Icons";
+import { IconCommand, IconGrid, IconLink, IconSliders, IconUsers, IconWindow, IconZap } from "./ui/Icons";
 import { useAppStatus } from "../state/StatusProvider";
 import { describeWhatsAppStatus, statusTone } from "../lib/whatsappStatus";
 import { useOnline, useScrolled } from "../hooks/useUi";
@@ -13,6 +12,7 @@ import { useOnline, useScrolled } from "../hooks/useUi";
 const NAV = [
   { to: "/", end: true, label: "Connection", icon: IconLink },
   { to: "/dashboard", end: false, label: "Properties", icon: IconGrid },
+  { to: "/landing-page", end: false, label: "Landing Page", icon: IconWindow },
   { to: "/inquiries", end: false, label: "Inquiries", icon: IconUsers },
   { to: "/settings", end: false, label: "Settings", icon: IconSliders },
 ];
@@ -78,7 +78,6 @@ export default function Layout() {
   return (
     <>
       <Scene />
-      <Cursor />
 
       <div className="shell">
         <header className={`topbar${scrolled ? " topbar--stuck" : ""}`}>

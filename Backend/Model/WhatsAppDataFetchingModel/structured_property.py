@@ -1,6 +1,6 @@
 import uuid
 from datetime import datetime
-from typing import Literal, Optional
+from typing import List, Literal, Optional
 
 from pydantic import BaseModel, Field
 
@@ -53,6 +53,13 @@ class StructuredProperty(BaseModel):
     # InstagramInquiryHandling pipeline matches a reel comment/DM share back
     # to the property it's about (see Service/InstagramInquiryHandlingService).
     instagram_reel_url: Optional[str] = None
+    # Photos of the property, set by a human on the Properties page — never
+    # by the LLM (same reasoning as instagram_reel_url: nothing in the raw
+    # WhatsApp text is a photo for it to extract). Each entry is a data URL
+    # (already resized/compressed client-side before upload), stored in the
+    # order the user arranged them; the first is the cover photo. Optional —
+    # an empty list is the common case, not an error.
+    image_urls: List[str] = Field(default_factory=list)
 
     # --- known for certain from WhatsApp itself, not from the LLM ---
     group_name: str
@@ -80,3 +87,23 @@ class StructuredProperty(BaseModel):
     # already says, unchanged. ---
     needs_review: bool = False
     review_notes: Optional[str] = None
+
+    # --- the Landing Page page's own state — never set by the LLM, and not
+    # part of the Add/Edit dialog either (see PropertyContentFields): these
+    # three are managed entirely by property_pipeline_service.update_property
+    # and property_pipeline_service.create_property. ---
+    # Whether this property is currently published to the public landing
+    # page. Only ever True for a property that has at least one photo or an
+    # Instagram reel — the Landing Page page is the only place this is set.
+    on_landing_page: bool = False
+    # When on_landing_page was last flipped, either direction — what Live's
+    # "newest sent first" ordering sorts by, and what Ready to Add's "removed
+    # recently sinks back down" behavior relies on simply NOT touching (a
+    # property that got removed keeps whatever qualified_at it already had,
+    # rather than jumping back to the top of Ready to Add).
+    landing_page_updated_at: Optional[datetime] = None
+    # When this property most recently gained a photo or an Instagram reel —
+    # what Ready to Add's "just qualified rises to the top" ordering sorts
+    # by. Set whenever an edit adds photos or a reel link, never touched by
+    # the Landing Page page's own Send/Remove actions.
+    qualified_at: Optional[datetime] = None

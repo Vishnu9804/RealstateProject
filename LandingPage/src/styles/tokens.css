@@ -1,0 +1,85 @@
+/**
+ * Design tokens for the public site.
+ *
+ * A deliberately different language from the internal tool (Frontend/,
+ * violet-on-near-black, dense and utilitarian). This is a shop window, not
+ * a workbench: warm champagne gold on a near-black neutral, a high-contrast
+ * serif for display type against a quiet sans for everything else, and
+ * generous air. The palette is intentionally narrow — one accent, one
+ * neutral ramp — because a property photo is the only thing on any of these
+ * screens that should be shouting colour.
+ *
+ * Dark-only, and that is a decision rather than an omission: every surface
+ * here is a frame around a photograph, and a dark frame is what makes a
+ * photograph look expensive. There is no theme toggle to keep in sync.
+ */
+
+:root {
+  color-scheme: dark;
+
+  /* ---- neutral ramp (cool-leaning near-black through warm white) ---- */
+  --ink-1000: #08080a;
+  --ink-900: #0c0c0f;
+  --ink-850: #101014;
+  --ink-800: #16161b;
+  --ink-700: #1e1e25;
+  --ink-600: #2a2a33;
+  --ink-500: #3a3a46;
+
+  --paper: #f4f1ea;
+  --text: #ece9e2;
+  --text-soft: #a8a49b;
+  --text-faint: #6f6c66;
+
+  /* ---- accent: champagne gold ---- */
+  --gold-100: #f6e7bd;
+  --gold-200: #e8cf95;
+  --gold-300: #d9b871;
+  --gold-400: #c9a24f;
+  --gold-500: #a8853c;
+  --accent: var(--gold-300);
+  --accent-soft: rgba(217, 184, 113, 0.14);
+  --accent-line: rgba(217, 184, 113, 0.28);
+  --accent-glow: rgba(217, 184, 113, 0.35);
+  --accent-text: linear-gradient(100deg, var(--gold-100) 0%, var(--gold-300) 42%, var(--gold-500) 100%);
+
+  /* ---- glass surfaces ---- */
+  --glass-1: rgba(255, 255, 255, 0.028);
+  --glass-2: rgba(255, 255, 255, 0.05);
+  --glass-3: rgba(255, 255, 255, 0.08);
+  --hairline: rgba(255, 255, 255, 0.09);
+  --hairline-strong: rgba(255, 255, 255, 0.16);
+
+  /* ---- depth ---- */
+  --shadow-sm: 0 2px 10px rgba(0, 0, 0, 0.4);
+  --shadow-md: 0 18px 40px -18px rgba(0, 0, 0, 0.8), 0 2px 10px rgba(0, 0, 0, 0.35);
+  --shadow-lg: 0 44px 90px -34px rgba(0, 0, 0, 0.92), 0 6px 22px rgba(0, 0, 0, 0.4);
+  --shadow-gold: 0 30px 70px -30px rgba(217, 184, 113, 0.4);
+
+  /* ---- radii ---- */
+  --r-sm: 10px;
+  --r-md: 16px;
+  --r-lg: 24px;
+  --r-xl: 34px;
+  --r-pill: 999px;
+
+  /* ---- motion ---- */
+  --ease-out: cubic-bezier(0.16, 1, 0.3, 1);
+  --ease-inout: cubic-bezier(0.65, 0, 0.35, 1);
+  --ease-spring: cubic-bezier(0.34, 1.4, 0.64, 1);
+  --t-fast: 180ms;
+  --t-base: 420ms;
+  --t-slow: 900ms;
+
+  /* ---- layout ---- */
+  --header-h: 76px;
+  --page-max: 1240px;
+  --gutter: clamp(20px, 5vw, 56px);
+  /* Every <section> reserves this much room above itself so that a nav
+     click, which scrolls the section's top to the viewport top, doesn't
+     tuck the heading underneath the fixed header. */
+  --scroll-offset: calc(var(--header-h) + 18px);
+
+  --font-display: "Fraunces", "Iowan Old Style", Georgia, "Times New Roman", serif;
+  --font-sans: "Inter", system-ui, -apple-system, "Segoe UI", Roboto, sans-serif;
+}

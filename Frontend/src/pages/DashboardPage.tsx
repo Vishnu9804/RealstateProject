@@ -42,6 +42,7 @@ import {
   IconChevron,
   IconEdit,
   IconGrid,
+  IconImage,
   IconInbox,
   IconInstagram,
   IconList,
@@ -63,7 +64,7 @@ import {
  *  permanent home (review_status), toggled via the Main/Outsider capsule;
  *  Needs review is an orthogonal queue (needs_review=true, from either
  *  home) opened via its own button and left via Accept. */
-type ViewTab = "main" | "outsider" | "needsReview";
+export type ViewTab = "main" | "outsider" | "needsReview";
 
 const REFRESH_INTERVAL_MS = 8000;
 const FETCH_LIMIT = 500;
@@ -81,10 +82,10 @@ const FETCH_LIMIT = 500;
 const PAGE_SIZE = 20;
 
 type ViewMode = "table" | "cards";
-type SortKey = "time" | "price" | "priceUnit" | "area" | "society" | "locality";
-type SortDir = "asc" | "desc";
+export type SortKey = "time" | "price" | "priceUnit" | "area" | "society" | "locality";
+export type SortDir = "asc" | "desc";
 
-interface Column {
+export interface Column {
   key: string;
   label: string;
   sort?: SortKey;
@@ -96,7 +97,10 @@ interface Column {
   filterKey?: string;
 }
 
-const COLUMNS: Column[] = [
+/** Exported so the Landing Page page's table can share the exact same
+ *  column set/labels/filter keys as this one, per its own requirement to
+ *  filter identically to the Properties page. */
+export const COLUMNS: Column[] = [
   { key: "society", label: "Society", sort: "society" },
   { key: "locality", label: "Area", sort: "locality", filterKey: "locality" },
   { key: "address", label: "Address" },
@@ -805,7 +809,7 @@ function pageNumbers(page: number, pageCount: number): (number | "gap")[] {
   return out;
 }
 
-function Pager({
+export function Pager({
   page,
   pageCount,
   total,
@@ -863,7 +867,7 @@ function Pager({
 
 /* ---------------------------------------------------------------- trigger */
 
-function FilterTrigger({
+export function FilterTrigger({
   label,
   filter,
   expanded,
@@ -933,7 +937,15 @@ function PropertyTable({
   onOpenFilter: (key: string, anchor: HTMLElement) => void;
 }) {
   return (
-    <div className="table-frame anim-rise">
+    <div className="table-with-rail">
+      <div className="row-icon-rail anim-rise" aria-hidden="true">
+        {properties.map((property) => (
+          <div key={property.record_id} className="row-icon-slot">
+            <PropertyIndicators property={property} />
+          </div>
+        ))}
+      </div>
+      <div className="table-frame anim-rise">
       <div className="table-scroll">
         <table className="table">
           <thead>
@@ -1064,6 +1076,7 @@ function PropertyTable({
           </tbody>
         </table>
       </div>
+    </div>
     </div>
   );
 }
@@ -1253,7 +1266,7 @@ function RowActions({
  * Move / Delete actions available inline are repeated here too, so acting
  * on a property never requires closing the dialog first to reach them.
  */
-function PropertyDetailDialog({
+export function PropertyDetailDialog({
   property,
   viewTab,
   onAccept,
@@ -1261,6 +1274,7 @@ function PropertyDetailDialog({
   onDelete,
   onEdit,
   onClose,
+  selectAction,
 }: {
   property: PropertyRecord;
   viewTab: ViewTab;
@@ -1269,22 +1283,43 @@ function PropertyDetailDialog({
   onDelete: (property: PropertyRecord) => void;
   onEdit: (property: PropertyRecord) => void;
   onClose: () => void;
+  /** Only set by the Landing Page page — an extra footer button, just left
+   *  of Edit, that marks this property selected (green on Ready to Add, red
+   *  on Live) and closes the dialog, same as clicking its row's own select
+   *  button. Undefined everywhere else (the Properties page), so the button
+   *  simply doesn't render there. */
+  selectAction?: { selected: boolean; tone: "add" | "remove"; onToggle: () => void };
 }) {
+  // The photo lightbox lives inside this same dialog rather than as a
+  // sibling — Escape backs out of it first (one Escape, one step back) and
+  // only closes the whole detail dialog once no photo is open.
+  const [lightboxIndex, setLightboxIndex] = useState<number | null>(null);
+  const photoCount = property.image_urls.length;
+
   useEffect(() => {
     const onKeyDown = (event: KeyboardEvent) => {
       if (event.key === "Escape") {
         event.stopPropagation();
-        onClose();
+        if (lightboxIndex !== null) {
+          setLightboxIndex(null);
+        } else {
+          onClose();
+        }
+        return;
       }
+      if (lightboxIndex === null || photoCount < 2) return;
+      if (event.key === "ArrowRight") setLightboxIndex((i) => (i === null ? i : (i + 1) % photoCount));
+      if (event.key === "ArrowLeft") setLightboxIndex((i) => (i === null ? i : (i - 1 + photoCount) % photoCount));
     };
     document.addEventListener("keydown", onKeyDown);
     return () => document.removeEventListener("keydown", onKeyDown);
-  }, [onClose]);
+  }, [onClose, lightboxIndex, photoCount]);
 
   const movesTo = property.review_status === "outsider" ? "Main" : "Outsider";
   const subtitle = [property.area_name, property.address].filter(Boolean).join(" · ");
 
   return createPortal(
+    <>
     <div className="modal-scrim" onMouseDown={(event) => event.target === event.currentTarget && onClose()}>
       <div className="detail-modal anim-rise" role="dialog" aria-modal="true" aria-label="Property details">
         <div className="detail-modal__head">
@@ -1318,6 +1353,22 @@ function PropertyDetailDialog({
         </div>
 
         <div className="detail-modal__body">
+          {photoCount > 0 && (
+            <div className="detail__gallery">
+              {property.image_urls.map((src, index) => (
+                <button
+                  key={index}
+                  type="button"
+                  className="detail__photo"
+                  onClick={() => setLightboxIndex(index)}
+                  aria-label={`View photo ${index + 1} of ${photoCount}`}
+                >
+                  <img src={src} alt={`Property photo ${index + 1}`} />
+                </button>
+              ))}
+            </div>
+          )}
+
           {property.needs_review && property.review_notes && (
             <Note tone="warn" icon={<IconAlert size={16} />}>
               <strong>Flagged for review:</strong> {property.review_notes}
@@ -1423,6 +1474,19 @@ function PropertyDetailDialog({
                 Accept
               </Button>
             )}
+            {selectAction && (
+              <Button
+                variant="ghost"
+                className={`select-toggle-btn${selectAction.selected ? ` select-toggle-btn--${selectAction.tone}` : ""}`}
+                icon={<IconCheck size={14} />}
+                onClick={() => {
+                  selectAction.onToggle();
+                  onClose();
+                }}
+              >
+                {selectAction.selected ? "Selected" : "Select"}
+              </Button>
+            )}
             {viewTab !== "needsReview" && (
               <Button variant="ghost" icon={<IconEdit size={14} />} onClick={() => onEdit(property)}>
                 Edit
@@ -1437,7 +1501,47 @@ function PropertyDetailDialog({
           </span>
         </div>
       </div>
-    </div>,
+    </div>
+
+    {lightboxIndex !== null && (
+      <div
+        className="modal-scrim lightbox-scrim"
+        onMouseDown={(event) => event.target === event.currentTarget && setLightboxIndex(null)}
+      >
+        <div className="lightbox anim-pop">
+          <button type="button" className="lightbox__close" onClick={() => setLightboxIndex(null)} aria-label="Close photo">
+            <IconX size={16} />
+          </button>
+          {photoCount > 1 && (
+            <button
+              type="button"
+              className="lightbox__nav lightbox__nav--prev"
+              onClick={() => setLightboxIndex((i) => (i === null ? i : (i - 1 + photoCount) % photoCount))}
+              aria-label="Previous photo"
+            >
+              <IconChevron size={18} />
+            </button>
+          )}
+          <img src={property.image_urls[lightboxIndex]} alt={`Property photo ${lightboxIndex + 1}`} />
+          {photoCount > 1 && (
+            <button
+              type="button"
+              className="lightbox__nav lightbox__nav--next"
+              onClick={() => setLightboxIndex((i) => (i === null ? i : (i + 1) % photoCount))}
+              aria-label="Next photo"
+            >
+              <IconChevron size={18} />
+            </button>
+          )}
+          {photoCount > 1 && (
+            <div className="lightbox__count">
+              {lightboxIndex + 1} / {photoCount}
+            </div>
+          )}
+        </div>
+      </div>
+    )}
+    </>,
     document.body,
   );
 }
@@ -1465,8 +1569,31 @@ function ReviewBadge({ property }: { property: PropertyRecord }) {
   return null;
 }
 
+/** One compact chip marking "this property has photos" / "has an Instagram
+ *  reel" / has both — rendered in the table's icon rail (a plain column of
+ *  divs floating in the page's own left gutter, not inside the table, see
+ *  PropertyTable), one slot per row in the same order, so it just scrolls
+ *  with the page like everything else — no JS position syncing. */
+function PropertyIndicators({ property }: { property: PropertyRecord }) {
+  const hasImages = property.image_urls.length > 0;
+  const hasReel = Boolean(property.instagram_reel_url);
+  if (!hasImages && !hasReel) return null;
+  const label = [
+    hasImages && `${property.image_urls.length} photo${property.image_urls.length === 1 ? "" : "s"}`,
+    hasReel && "Has an Instagram reel",
+  ]
+    .filter(Boolean)
+    .join(" · ");
+  return (
+    <span className={`row-indicator-chip${hasReel ? " row-indicator-chip--reel" : ""}`} title={label}>
+      {hasImages && <IconImage size={14} />}
+      {hasReel && <IconInstagram size={14} />}
+    </span>
+  );
+}
+
 /** Nulls sort last in both directions; everything else compares naturally. */
-function compareNullable(a: string | number | null, b: string | number | null, direction: number): number {
+export function compareNullable(a: string | number | null, b: string | number | null, direction: number): number {
   if (a === null && b === null) return 0;
   if (a === null) return 1;
   if (b === null) return -1;

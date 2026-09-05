@@ -58,6 +58,7 @@ from contextlib import asynccontextmanager
 
 from fastapi import FastAPI
 from fastapi.middleware.cors import CORSMiddleware
+from fastapi.middleware.gzip import GZipMiddleware
 
 if sys.platform == "win32":
     # The default Windows console codepage (cp1252) can't render the
@@ -81,6 +82,7 @@ from Controller.WhatsAppDataFetchingController.whatsapp_controller import router
 from Controller.WhatsAppInquiryHandlingController.inquiry_form_controller import router as inquiry_form_router
 from Controller.WhatsAppInquiryHandlingController.whatsapp_inquiry_controller import router as whatsapp_inquiry_router
 from Controller.InstagramInquiryHandlingController.instagram_controller import router as instagram_router
+from Controller.LandingPageController.landing_page_controller import router as landing_page_router
 from Config.settings import get_settings
 from Database.client_session import init_client_db, is_client_database_configured
 from Database.session import init_db, is_database_configured
@@ -193,9 +195,18 @@ app = FastAPI(title="Real Estate WhatsApp Ingestion API", lifespan=lifespan)
 # machine's LAN IP>:5173" so a phone on the same network can actually load
 # the registration/update form (see Config/settings.py's
 # inquiry_form_base_url) and have its browser's API calls accepted here.
-_cors_origins = ["http://localhost:5173", "http://127.0.0.1:5173"]
+#
+# The public landing page (LandingPage/) is a SECOND Vite app on its own
+# port (5174 — pinned there by its vite.config.ts's strictPort so it can
+# never drift onto 5173 and collide with the internal frontend). A different
+# port is a different origin, so it needs its own entries here or every
+# request the public site makes is blocked by the browser before FastAPI
+# sees it — the same LAN-IP reasoning as above applies to it too, since the
+# site is worth opening on a phone.
+_cors_origins = ["http://localhost:5173", "http://127.0.0.1:5173", "http://localhost:5174", "http://127.0.0.1:5174"]
 if get_settings().frontend_lan_origin:
     _cors_origins.append(get_settings().frontend_lan_origin)
+    _cors_origins.append(get_settings().frontend_lan_origin.replace(":5173", ":5174"))
 
 app.add_middleware(
     CORSMiddleware,
@@ -205,6 +216,14 @@ app.add_middleware(
     allow_headers=["*"],
 )
 
+# Property photos are stored as base64 data URLs (Database/models.py's
+# PropertyRow.image_urls) and a single property with several photos can put
+# a few MB of that text in one response (see landing_page_service.py's own
+# comment on this). gzip typically shrinks base64 JSON by ~25-30% — free on
+# the server, and the browser decompresses it transparently — so this is
+# pure upside for every route, not just the landing page's.
+app.add_middleware(GZipMiddleware, minimum_size=1024)
+
 app.include_router(whatsapp_router, prefix="/api")
 app.include_router(area_filter_router, prefix="/api")
 app.include_router(display_settings_router, prefix="/api")
@@ -213,6 +232,7 @@ app.include_router(property_router, prefix="/api")
 app.include_router(whatsapp_inquiry_router, prefix="/api")
 app.include_router(inquiry_form_router, prefix="/api")
 app.include_router(instagram_router, prefix="/api")
+app.include_router(landing_page_router, prefix="/api")
 
 
 @app.get("/")

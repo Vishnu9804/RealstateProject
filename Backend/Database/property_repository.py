@@ -8,6 +8,7 @@ this module directly.
 
 from __future__ import annotations
 
+from datetime import datetime, timezone
 from typing import Any, Dict, List, Optional, Tuple
 
 from sqlalchemy import func, select
@@ -39,6 +40,7 @@ EDITABLE_CONTENT_FIELDS = (
     "contact_phone",
     "description",
     "instagram_reel_url",
+    "image_urls",
 )
 
 _COLUMNS = (
@@ -59,6 +61,7 @@ _COLUMNS = (
     "contact_phone",
     "description",
     "instagram_reel_url",
+    "image_urls",
     "group_name",
     "chat_type",
     "sender_name",
@@ -69,6 +72,9 @@ _COLUMNS = (
     "review_status",
     "needs_review",
     "review_notes",
+    "on_landing_page",
+    "landing_page_updated_at",
+    "qualified_at",
 )
 
 
@@ -94,6 +100,25 @@ def get_all_properties(limit: int) -> List[EmbeddedProperty]:
     with get_session() as session:
         rows = list(session.execute(stmt).scalars().all())
     rows.reverse()  # oldest-first, matching the in-memory store's insertion order
+    return [_to_pydantic(row) for row in rows]
+
+
+def get_landing_page_properties() -> List[EmbeddedProperty]:
+    """Only the rows with on_landing_page=true — what the public site's
+    /api/landing/properties reads (Service/LandingPageService).
+
+    Filtered in SQL rather than in Python on top of get_all_properties: a
+    row's `image_urls` column can run to several megabytes of base64 photo
+    data, and this table's WHATSAPP DATA FETCHING has been running for a
+    while, so most rows are NOT published. Pulling every row's image blobs
+    across the wire just to throw most of them away in Python is exactly
+    the kind of query that gets slower every week as the table grows —
+    filtering here means the amount of data ever leaving Postgres for this
+    endpoint is bounded by what's actually published, not by how many
+    properties have ever been captured."""
+    stmt = select(PropertyRow).where(PropertyRow.on_landing_page.is_(True))
+    with get_session() as session:
+        rows = list(session.execute(stmt).scalars().all())
     return [_to_pydantic(row) for row in rows]
 
 
@@ -129,12 +154,21 @@ def update_property(
     embedding: Optional[List[float]] = None,
     field_embeddings: Optional[dict] = None,
     embedding_model: Optional[str] = None,
+    on_landing_page: Optional[bool] = None,
+    qualified_at: Optional[datetime] = None,
 ) -> Optional[EmbeddedProperty]:
     """review_status/needs_review back the Main/Outsider move and the Needs
     review Accept action; content_updates (plus a freshly recomputed
     embedding, passed in by the caller — see Service/WhatsAppDataFetchingService/
-    property_pipeline_service.py) backs the Properties page's Edit dialog.
-    Either group can be passed alone or together."""
+    property_pipeline_service.py) backs the Properties page's Edit dialog;
+    on_landing_page backs the Landing Page page's Send/Remove actions
+    (landing_page_updated_at is stamped here, not passed in, the same way
+    Postgres's own server_default/onupdate would — the caller never has to
+    remember to compute "now"). qualified_at backs Ready to Add's own
+    ordering and is passed in already-computed, since only the caller (see
+    property_pipeline_service.update_property) knows whether this edit
+    actually touched image_urls/instagram_reel_url. Any of these groups can
+    be passed alone or together."""
     with get_session() as session:
         row = _find_row(session, record_id)
         if row is None:
@@ -153,6 +187,11 @@ def update_property(
             row.field_embeddings = field_embeddings
         if embedding_model is not None:
             row.embedding_model = embedding_model
+        if on_landing_page is not None:
+            row.on_landing_page = on_landing_page
+            row.landing_page_updated_at = datetime.now(timezone.utc)
+        if qualified_at is not None:
+            row.qualified_at = qualified_at
         session.flush()
         return _to_pydantic(row)
 

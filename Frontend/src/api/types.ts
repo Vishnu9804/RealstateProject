@@ -141,6 +141,7 @@ export interface PropertyRecord {
   contact_phone: string | null;
   description: string | null;
   instagram_reel_url: string | null;
+  image_urls: string[];
   group_name: string;
   chat_type: "group" | "personal";
   sender_name: string;
@@ -152,4 +153,31 @@ export interface PropertyRecord {
   needs_review: boolean;
   review_notes: string | null;
   formatted_timestamp: string;
+  /** The Landing Page page's own state — see Backend/Model/.../
+   *  structured_property.py's own comment on these three. */
+  on_landing_page: boolean;
+  landing_page_updated_at: string | null;
+  qualified_at: string | null;
+}
+
+/**
+ * Mirrors Backend/Model/LandingPageModel/landing_lead.py's LandingLeadRecord
+ * — one "I'm interested" submission from the PUBLIC landing page's own
+ * enquiry form (LandingPage/, a separate site — not this app). Two shapes:
+ * `property_record_id` set means it came from a specific property's page
+ * (someone who liked THAT listing, not stating open requirements the way a
+ * whatsapp-inquiry client does); null means it came from the home page's
+ * general Contact section instead.
+ */
+export interface LandingLeadRecord {
+  lead_id: string;
+  name: string;
+  whatsapp_number: string;
+  property_record_id: string | null;
+  /** A snapshot of the property's title taken at submission time — still
+   *  meaningful even if that property is later edited, unpublished, or
+   *  deleted (see property_record_id's own lookup against PropertyRecord,
+   *  which can come back empty for exactly that reason). */
+  property_label: string | null;
+  created_at: string | null;
 }

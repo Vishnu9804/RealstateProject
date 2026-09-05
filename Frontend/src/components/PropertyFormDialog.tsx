@@ -6,6 +6,7 @@ import { friendlyError } from "../lib/apiError";
 import { useToast } from "./ui/Toast";
 import { Button, Segmented } from "./ui/Primitives";
 import { IconInstagram, IconX } from "./ui/Icons";
+import PropertyImagesField from "./PropertyImagesField";
 
 /**
  * The Properties page's Add/Edit dialog — the same field set either way
@@ -35,6 +36,7 @@ interface FormState {
   contact_phone: string;
   description: string;
   instagram_reel_url: string;
+  image_urls: string[];
 }
 
 const BLANK_FORM: FormState = {
@@ -54,6 +56,7 @@ const BLANK_FORM: FormState = {
   contact_phone: "",
   description: "",
   instagram_reel_url: "",
+  image_urls: [],
 };
 
 function toFormState(property: PropertyRecord): FormState {
@@ -74,6 +77,7 @@ function toFormState(property: PropertyRecord): FormState {
     contact_phone: property.contact_phone ?? "",
     description: property.description ?? "",
     instagram_reel_url: property.instagram_reel_url ?? "",
+    image_urls: property.image_urls ?? [],
   };
 }
 
@@ -99,6 +103,7 @@ function toPayload(form: FormState): PropertyContentFields {
     contact_phone: text(form.contact_phone),
     description: text(form.description),
     instagram_reel_url: text(form.instagram_reel_url),
+    image_urls: form.image_urls,
   };
 }
 
@@ -160,6 +165,24 @@ export default function PropertyFormDialog({
     setForm((prev) => ({ ...prev, [key]: value }));
   }
 
+  // Functional updates, not "[...form.image_urls, ...dataUrls]" closed over
+  // the render's `form` — PropertyImagesField resolves each file async, and
+  // a second drop landing before the first finishes must never clobber it.
+  function addImages(dataUrls: string[]) {
+    setForm((prev) => ({ ...prev, image_urls: [...prev.image_urls, ...dataUrls] }));
+  }
+  function removeImage(index: number) {
+    setForm((prev) => ({ ...prev, image_urls: prev.image_urls.filter((_, i) => i !== index) }));
+  }
+  function reorderImages(fromIndex: number, toIndex: number) {
+    setForm((prev) => {
+      const next = [...prev.image_urls];
+      const [moved] = next.splice(fromIndex, 1);
+      next.splice(toIndex, 0, moved);
+      return { ...prev, image_urls: next };
+    });
+  }
+
   async function handleSave() {
     setSaving(true);
     try {
@@ -197,6 +220,15 @@ export default function PropertyFormDialog({
 
         <div className="detail-modal__body">
           <div className="stack stack-4">
+            <Field label="Property photos" hint="Optional — add photos of this property.">
+              <PropertyImagesField
+                images={form.image_urls}
+                onAdd={addImages}
+                onRemove={removeImage}
+                onReorder={reorderImages}
+              />
+            </Field>
+
             <div style={GRID_STYLE}>
               <Field label="Society / building name">
                 <input className="input" value={form.society_name} onChange={(e) => set("society_name", e.target.value)} placeholder="e.g. Black Residency" />

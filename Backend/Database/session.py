@@ -99,6 +99,13 @@ def init_db() -> None:
 
     from Database.models import Base
 
+    # Imported for its import side effect only: defining LandingLeadRow is
+    # what registers the landing_page_leads table on the Base above, and
+    # create_all can only create tables it has been told about. Nothing
+    # else in this module's startup path imports the LandingPage feature,
+    # so without this line that table is silently never created.
+    from Database import landing_page_models  # noqa: F401
+
     engine = _get_engine()
     with engine.begin() as connection:
         connection.execute(text("CREATE EXTENSION IF NOT EXISTS vector"))
@@ -130,3 +137,13 @@ def init_db() -> None:
         )
         connection.execute(text("ALTER TABLE properties ADD COLUMN IF NOT EXISTS instagram_reel_url VARCHAR"))
         connection.execute(text("ALTER TABLE properties ADD COLUMN IF NOT EXISTS instagram_media_pk VARCHAR"))
+        connection.execute(
+            text("ALTER TABLE properties ADD COLUMN IF NOT EXISTS image_urls JSON NOT NULL DEFAULT '[]'::json")
+        )
+        connection.execute(
+            text("ALTER TABLE properties ADD COLUMN IF NOT EXISTS on_landing_page BOOLEAN NOT NULL DEFAULT false")
+        )
+        connection.execute(
+            text("ALTER TABLE properties ADD COLUMN IF NOT EXISTS landing_page_updated_at TIMESTAMPTZ")
+        )
+        connection.execute(text("ALTER TABLE properties ADD COLUMN IF NOT EXISTS qualified_at TIMESTAMPTZ"))

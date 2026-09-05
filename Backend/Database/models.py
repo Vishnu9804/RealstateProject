@@ -64,6 +64,10 @@ class PropertyRow(Base):
     # Set by a human on the Properties page, never by the LLM — see
     # StructuredProperty.instagram_reel_url.
     instagram_reel_url: Mapped[Optional[str]] = mapped_column(String, nullable=True)
+    # Photos of the property (data URLs, in display order) — see
+    # StructuredProperty.image_urls. Same "human-only, optional" story as
+    # instagram_reel_url just above.
+    image_urls: Mapped[list] = mapped_column(JSON, nullable=False, default=list)
     # Derived cache, not content: instagram_reel_url resolved to Instagram's
     # own numeric media id once (Service/InstagramInquiryHandlingService/
     # instagram_reel_matcher.py), so the comment/DM poller can match against
@@ -91,6 +95,12 @@ class PropertyRow(Base):
     # when a human accepts the property out of the review queue ---
     needs_review: Mapped[bool] = mapped_column(Boolean, nullable=False, default=False, server_default="false")
     review_notes: Mapped[Optional[str]] = mapped_column(Text, nullable=True)
+
+    # --- the Landing Page page's own state — see StructuredProperty's own
+    # comment on these three for what each one means and who sets it ---
+    on_landing_page: Mapped[bool] = mapped_column(Boolean, nullable=False, default=False, server_default="false")
+    landing_page_updated_at: Mapped[Optional[datetime]] = mapped_column(DateTime(timezone=True), nullable=True)
+    qualified_at: Mapped[Optional[datetime]] = mapped_column(DateTime(timezone=True), nullable=True)
 
     # --- computed once by the embedding stage, never recomputed here ---
     embedding: Mapped[list] = mapped_column(Vector(EMBEDDING_DIMENSIONS), nullable=False)

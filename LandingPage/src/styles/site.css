@@ -1,0 +1,975 @@
+/**
+ * The home page: header, hero, property grid, about, process, contact,
+ * footer. One file because these only ever appear together on one scrolling
+ * page — splitting them would mean jumping between six files to trace a
+ * single vertical rhythm.
+ */
+
+/* ============================== header ============================== */
+
+.site-header {
+  position: fixed;
+  inset: 0 0 auto 0;
+  z-index: 100;
+  height: var(--header-h);
+  display: flex;
+  align-items: center;
+  /* Transparent over the hero and solid once the page has moved — the bar
+     shouldn't cut a horizontal line across the hero image, but it also
+     can't float unreadably over a photograph further down. */
+  background: transparent;
+  border-bottom: 1px solid transparent;
+  transition:
+    background-color var(--t-base) var(--ease-out),
+    border-color var(--t-base) linear,
+    backdrop-filter var(--t-base) linear;
+}
+
+.site-header.is-stuck {
+  background: rgba(8, 8, 10, 0.72);
+  backdrop-filter: blur(18px) saturate(140%);
+  border-bottom-color: var(--hairline);
+}
+
+.site-header__inner {
+  display: flex;
+  align-items: center;
+  gap: 24px;
+  width: 100%;
+}
+
+/* Reading progress, hairline-thin, pinned to the header's bottom edge. On
+   a long single-page site it's the only cue for "how much is left". */
+.scroll-progress {
+  position: absolute;
+  left: 0;
+  bottom: -1px;
+  height: 2px;
+  width: 100%;
+  transform-origin: 0 50%;
+  transform: scaleX(var(--progress, 0));
+  background: var(--accent-text);
+  opacity: 0.9;
+}
+
+/* Rendered as a <button> in the header (it scrolls the page home) and as a
+   plain <div> in the footer, so it carries its own control reset — without
+   it the header logo sits inside a grey browser-default button. */
+.brand {
+  display: inline-flex;
+  align-items: center;
+  gap: 12px;
+  margin-right: auto;
+  flex: none;
+  padding: 0;
+  border: 0;
+  background: none;
+  text-align: left;
+}
+.brand:focus-visible {
+  outline: 2px solid var(--accent);
+  outline-offset: 6px;
+  border-radius: var(--r-sm);
+}
+
+.brand__mark {
+  display: grid;
+  place-items: center;
+  width: 38px;
+  height: 38px;
+  border-radius: 11px;
+  border: 1px solid var(--accent-line);
+  background: linear-gradient(150deg, rgba(217, 184, 113, 0.22), rgba(217, 184, 113, 0.04));
+  font-family: var(--font-display);
+  font-size: 19px;
+  color: var(--gold-200);
+  transition: transform var(--t-base) var(--ease-spring);
+}
+.brand:hover .brand__mark {
+  transform: rotate(-8deg) scale(1.06);
+}
+
+.brand__text {
+  font-family: var(--font-display);
+  font-size: 19px;
+  letter-spacing: 0.01em;
+  white-space: nowrap;
+}
+.brand__text em {
+  font-style: italic;
+  color: var(--gold-200);
+}
+
+.nav {
+  display: flex;
+  align-items: center;
+  gap: 4px;
+}
+
+.nav__link {
+  position: relative;
+  border: 0;
+  background: none;
+  padding: 9px 15px;
+  border-radius: var(--r-pill);
+  font-size: 13.5px;
+  font-weight: 500;
+  color: var(--text-soft);
+  transition: color var(--t-fast) linear;
+}
+.nav__link:hover {
+  color: var(--text);
+}
+.nav__link.is-active {
+  color: var(--gold-200);
+}
+/* The active underline animates its own width rather than sliding a shared
+   pill between links — no layout measurement, and it degrades gracefully if
+   a section is missing. */
+.nav__link::after {
+  content: "";
+  position: absolute;
+  left: 15px;
+  right: 15px;
+  bottom: 3px;
+  height: 1px;
+  background: var(--accent);
+  transform: scaleX(0);
+  transform-origin: 50% 50%;
+  transition: transform var(--t-base) var(--ease-out);
+}
+.nav__link.is-active::after {
+  transform: scaleX(1);
+}
+
+.nav-toggle {
+  display: none;
+  width: 42px;
+  height: 42px;
+  border-radius: 12px;
+  border: 1px solid var(--hairline);
+  background: var(--glass-1);
+  place-items: center;
+}
+
+.header-cta {
+  flex: none;
+}
+
+/* --- mobile drawer --- */
+
+.drawer {
+  position: fixed;
+  inset: 0;
+  z-index: 99;
+  display: grid;
+  align-content: center;
+  justify-items: stretch;
+  gap: 4px;
+  padding: calc(var(--header-h) + 30px) var(--gutter) 40px;
+  background: rgba(8, 8, 10, 0.94);
+  backdrop-filter: blur(24px);
+  opacity: 0;
+  pointer-events: none;
+  transition: opacity var(--t-base) var(--ease-out);
+}
+.drawer.is-open {
+  opacity: 1;
+  pointer-events: auto;
+}
+
+.drawer__link {
+  border: 0;
+  background: none;
+  text-align: left;
+  padding: 18px 4px;
+  border-bottom: 1px solid var(--hairline);
+  font-family: var(--font-display);
+  font-size: 30px;
+  color: var(--text);
+}
+.drawer__link.is-active {
+  color: var(--gold-200);
+}
+
+@media (max-width: 900px) {
+  .nav {
+    display: none;
+  }
+  .nav-toggle {
+    display: grid;
+  }
+  .header-cta {
+    display: none;
+  }
+}
+
+/* =============================== hero =============================== */
+
+.hero {
+  position: relative;
+  min-height: 100svh;
+  display: flex;
+  align-items: center;
+  padding-top: calc(var(--header-h) + 40px);
+  padding-bottom: 90px;
+  overflow: hidden;
+}
+
+.hero__bg {
+  position: absolute;
+  inset: 0;
+  pointer-events: none;
+  overflow: hidden;
+}
+
+/* Two enormous, heavily blurred colour fields drifting on long loops. This
+   is what keeps a near-black hero from looking like a dead screen, without
+   putting anything in it that competes with the headline. */
+.orb {
+  position: absolute;
+  border-radius: 50%;
+  filter: blur(90px);
+  opacity: 0.5;
+}
+.orb--1 {
+  width: 46vw;
+  height: 46vw;
+  min-width: 320px;
+  min-height: 320px;
+  top: -12vw;
+  right: -8vw;
+  background: radial-gradient(circle at 35% 35%, rgba(217, 184, 113, 0.4), transparent 68%);
+  animation: drift 26s var(--ease-inout) infinite;
+}
+.orb--2 {
+  width: 40vw;
+  height: 40vw;
+  min-width: 280px;
+  min-height: 280px;
+  bottom: -14vw;
+  left: -10vw;
+  background: radial-gradient(circle at 60% 40%, rgba(94, 122, 138, 0.34), transparent 66%);
+  animation: drift 34s var(--ease-inout) infinite reverse;
+}
+
+/* A faint architectural grid — a nod to a floor plan, at an opacity where
+   you feel it rather than read it. Masked to fade out toward the edges so
+   it never ends in a visible hard line. */
+.hero__grid {
+  position: absolute;
+  inset: 0;
+  background-image:
+    linear-gradient(var(--hairline) 1px, transparent 1px),
+    linear-gradient(90deg, var(--hairline) 1px, transparent 1px);
+  background-size: 92px 92px;
+  opacity: 0.5;
+  mask-image: radial-gradient(ellipse 78% 68% at 50% 42%, #000 20%, transparent 78%);
+  -webkit-mask-image: radial-gradient(ellipse 78% 68% at 50% 42%, #000 20%, transparent 78%);
+}
+
+.hero__inner {
+  position: relative;
+  z-index: 1;
+  width: 100%;
+}
+
+.hero h1 {
+  max-width: 15ch;
+}
+
+/* Each hero element enters on its own beat rather than all at once — the
+   staggered arrival is what makes a first load feel composed. */
+.hero__stagger > * {
+  opacity: 0;
+  animation: fade-up 1s var(--ease-out) forwards;
+}
+.hero__stagger > *:nth-child(1) {
+  animation-delay: 120ms;
+}
+.hero__stagger > *:nth-child(2) {
+  animation-delay: 240ms;
+}
+.hero__stagger > *:nth-child(3) {
+  animation-delay: 400ms;
+}
+.hero__stagger > *:nth-child(4) {
+  animation-delay: 560ms;
+}
+.hero__stagger > *:nth-child(5) {
+  animation-delay: 720ms;
+}
+
+.hero__cta {
+  display: flex;
+  flex-wrap: wrap;
+  gap: 14px;
+  margin-top: 38px;
+}
+
+.hero__stats {
+  display: flex;
+  flex-wrap: wrap;
+  gap: clamp(24px, 5vw, 64px);
+  margin-top: clamp(48px, 7vw, 86px);
+  padding-top: 30px;
+  border-top: 1px solid var(--hairline);
+  max-width: 700px;
+}
+
+.stat__value {
+  font-family: var(--font-display);
+  font-size: clamp(28px, 3.4vw, 42px);
+  line-height: 1;
+  color: var(--gold-200);
+}
+.stat__label {
+  margin-top: 8px;
+  font-size: 12px;
+  letter-spacing: 0.16em;
+  text-transform: uppercase;
+  color: var(--text-faint);
+}
+
+.hero__hint {
+  position: absolute;
+  left: 50%;
+  bottom: 26px;
+  transform: translateX(-50%);
+  display: grid;
+  justify-items: center;
+  gap: 10px;
+  font-size: 10.5px;
+  letter-spacing: 0.3em;
+  text-transform: uppercase;
+  color: var(--text-faint);
+  z-index: 1;
+}
+.hero__hint span {
+  width: 1px;
+  height: 44px;
+  background: linear-gradient(180deg, var(--accent), transparent);
+  animation: float-slow 2.6s var(--ease-inout) infinite;
+}
+
+@media (max-width: 620px) {
+  .hero__hint {
+    display: none;
+  }
+}
+
+/* ========================= properties section ========================= */
+
+.props__head {
+  display: flex;
+  align-items: flex-end;
+  justify-content: space-between;
+  gap: 30px;
+  flex-wrap: wrap;
+  margin-bottom: clamp(36px, 4.6vw, 60px);
+}
+
+.props__filters {
+  display: flex;
+  gap: 8px;
+  flex-wrap: wrap;
+}
+
+.filter-btn {
+  border: 1px solid var(--hairline);
+  background: var(--glass-1);
+  color: var(--text-soft);
+  padding: 9px 18px;
+  border-radius: var(--r-pill);
+  font-size: 13px;
+  font-weight: 500;
+  transition:
+    color var(--t-fast) linear,
+    border-color var(--t-fast) linear,
+    background-color var(--t-fast) linear;
+}
+.filter-btn:hover {
+  color: var(--text);
+  border-color: var(--hairline-strong);
+}
+.filter-btn.is-active {
+  color: #16120a;
+  background-image: var(--accent-text);
+  border-color: transparent;
+  font-weight: 600;
+}
+
+.props__grid {
+  display: grid;
+  grid-template-columns: repeat(auto-fill, minmax(330px, 1fr));
+  gap: clamp(20px, 2.4vw, 32px);
+}
+
+@media (max-width: 700px) {
+  .props__grid {
+    grid-template-columns: 1fr;
+  }
+}
+
+/* --------------------------- property card --------------------------- */
+
+.pcard {
+  position: relative;
+  display: flex;
+  flex-direction: column;
+  border-radius: var(--r-lg);
+  overflow: hidden;
+  background: var(--ink-900);
+  border: 1px solid var(--hairline);
+  box-shadow: var(--shadow-md);
+  transition:
+    transform var(--t-base) var(--ease-out),
+    box-shadow var(--t-base) var(--ease-out),
+    border-color var(--t-base) linear;
+}
+.pcard:hover {
+  transform: translateY(-8px);
+  border-color: var(--accent-line);
+  box-shadow: var(--shadow-lg), var(--shadow-gold);
+}
+.pcard:focus-within {
+  border-color: var(--accent-line);
+}
+
+.pcard__media {
+  position: relative;
+  display: block;
+  aspect-ratio: 4 / 3;
+  background: var(--ink-800);
+  overflow: hidden;
+}
+
+/**
+ * The photos are stacked, all in the same box, and cross-faded by toggling
+ * one class — rather than a horizontal track that slides. A fade never has
+ * to know how wide the card is, so it can't drift out of alignment on a
+ * resize, and it reads as calmer than a sideways jump on a page where a
+ * dozen cards are cycling at once.
+ */
+.pcard__slide {
+  position: absolute;
+  inset: 0;
+  width: 100%;
+  height: 100%;
+  object-fit: cover;
+  opacity: 0;
+  transform: scale(1.06);
+  transition:
+    opacity 1100ms var(--ease-out),
+    transform 5000ms linear;
+}
+.pcard__slide.is-shown {
+  opacity: 1;
+  /* Held slightly zoomed and easing back — a very slow Ken Burns drift, so
+     even a single-photo card is never completely still. */
+  transform: scale(1);
+}
+
+.pcard__shade {
+  position: absolute;
+  inset: 0;
+  background: linear-gradient(180deg, rgba(0, 0, 0, 0.42) 0%, transparent 34%, transparent 52%, rgba(8, 8, 10, 0.86) 100%);
+}
+
+.pcard__tags {
+  position: absolute;
+  top: 14px;
+  left: 14px;
+  right: 14px;
+  display: flex;
+  gap: 8px;
+  align-items: center;
+}
+
+.tag {
+  display: inline-flex;
+  align-items: center;
+  gap: 6px;
+  padding: 6px 12px;
+  border-radius: var(--r-pill);
+  font-size: 11px;
+  font-weight: 600;
+  letter-spacing: 0.08em;
+  text-transform: uppercase;
+  background: rgba(8, 8, 10, 0.6);
+  backdrop-filter: blur(10px);
+  border: 1px solid var(--hairline-strong);
+  color: var(--text);
+}
+.tag--gold {
+  background: var(--accent-text);
+  border-color: transparent;
+  color: #16120a;
+}
+.tag--reel {
+  margin-left: auto;
+  color: var(--gold-200);
+  border-color: var(--accent-line);
+}
+
+/* Progress ticks instead of dots: they show both which photo is up AND how
+   long until the next one, so the auto-advance never feels arbitrary. */
+.pcard__ticks {
+  position: absolute;
+  left: 16px;
+  right: 16px;
+  bottom: 14px;
+  display: flex;
+  gap: 5px;
+  z-index: 1;
+}
+.pcard__tick {
+  flex: 1;
+  height: 2px;
+  border-radius: 2px;
+  background: rgba(255, 255, 255, 0.26);
+  overflow: hidden;
+}
+.pcard__tick.is-on {
+  background: var(--gold-200);
+}
+
+.pcard__body {
+  display: flex;
+  flex-direction: column;
+  gap: 12px;
+  padding: 22px 22px 24px;
+}
+
+.pcard__price {
+  font-family: var(--font-display);
+  font-size: 26px;
+  line-height: 1;
+  color: var(--gold-200);
+}
+
+.pcard__title {
+  margin: 0;
+  font-size: 17px;
+  font-weight: 600;
+  letter-spacing: -0.01em;
+  line-height: 1.35;
+}
+
+.pcard__loc {
+  margin: 0;
+  display: flex;
+  align-items: center;
+  gap: 7px;
+  font-size: 13.5px;
+  color: var(--text-soft);
+}
+
+.pcard__chips {
+  display: flex;
+  flex-wrap: wrap;
+  gap: 7px;
+  margin-top: 2px;
+}
+
+.pcard__foot {
+  display: flex;
+  align-items: center;
+  justify-content: space-between;
+  margin-top: 6px;
+  padding-top: 16px;
+  border-top: 1px solid var(--hairline);
+  font-size: 13px;
+  font-weight: 500;
+  color: var(--gold-200);
+}
+.pcard__foot svg {
+  transition: transform var(--t-base) var(--ease-out);
+}
+.pcard:hover .pcard__foot svg {
+  transform: translateX(5px);
+}
+
+/* One transparent layer over the whole card, so the entire card is the
+   link target without nesting interactive elements inside an <a>. */
+.pcard__link {
+  position: absolute;
+  inset: 0;
+  z-index: 2;
+}
+.pcard__link:focus-visible {
+  outline: 2px solid var(--accent);
+  outline-offset: -4px;
+  border-radius: var(--r-lg);
+}
+
+/* ---------------------------- empty state ---------------------------- */
+
+.empty {
+  display: grid;
+  justify-items: center;
+  text-align: center;
+  gap: 14px;
+  padding: clamp(50px, 8vw, 90px) 24px;
+  border: 1px dashed var(--hairline-strong);
+  border-radius: var(--r-lg);
+  background: var(--glass-1);
+}
+.empty__title {
+  font-family: var(--font-display);
+  font-size: 24px;
+  margin: 0;
+}
+.empty p {
+  margin: 0;
+  color: var(--text-soft);
+  max-width: 46ch;
+}
+
+/* ============================== about ============================== */
+
+.about {
+  display: grid;
+  grid-template-columns: 1.05fr 0.95fr;
+  gap: clamp(36px, 6vw, 88px);
+  align-items: center;
+}
+
+@media (max-width: 900px) {
+  .about {
+    grid-template-columns: 1fr;
+  }
+}
+
+.about__points {
+  display: grid;
+  gap: 18px;
+  margin-top: 34px;
+  padding: 0;
+  list-style: none;
+}
+.about__points li {
+  display: flex;
+  gap: 14px;
+  align-items: flex-start;
+  font-size: 15px;
+  color: var(--text-soft);
+}
+.about__points svg {
+  flex: none;
+  margin-top: 3px;
+  color: var(--gold-300);
+}
+
+/* A stack of offset panes — enough of a composition to hold the right half
+   of the section without needing stock photography the client hasn't got. */
+.about__art {
+  position: relative;
+  aspect-ratio: 4 / 4.4;
+  border-radius: var(--r-xl);
+  background:
+    radial-gradient(120% 90% at 20% 10%, rgba(217, 184, 113, 0.16), transparent 60%),
+    linear-gradient(160deg, var(--ink-800), var(--ink-1000));
+  border: 1px solid var(--hairline);
+  overflow: hidden;
+  display: grid;
+  place-items: center;
+}
+.about__art::before,
+.about__art::after {
+  content: "";
+  position: absolute;
+  border: 1px solid var(--accent-line);
+  border-radius: var(--r-lg);
+  opacity: 0.5;
+}
+.about__art::before {
+  inset: 34px 34px 120px 34px;
+  animation: float-slow 9s var(--ease-inout) infinite;
+}
+.about__art::after {
+  inset: 120px 60px 44px 60px;
+  animation: float-slow 11s var(--ease-inout) infinite reverse;
+}
+
+.about__quote {
+  position: relative;
+  z-index: 1;
+  padding: 30px;
+  text-align: center;
+  font-family: var(--font-display);
+  font-size: clamp(20px, 2.3vw, 28px);
+  line-height: 1.35;
+  color: var(--text);
+}
+.about__quote span {
+  display: block;
+  margin-top: 16px;
+  font-family: var(--font-sans);
+  font-size: 11px;
+  letter-spacing: 0.24em;
+  text-transform: uppercase;
+  color: var(--text-faint);
+}
+
+/* ============================= process ============================= */
+
+.steps {
+  display: grid;
+  grid-template-columns: repeat(auto-fit, minmax(230px, 1fr));
+  gap: clamp(16px, 2vw, 26px);
+  counter-reset: step;
+}
+
+.step {
+  position: relative;
+  padding: 30px 26px 32px;
+  border-radius: var(--r-lg);
+  border: 1px solid var(--hairline);
+  background: linear-gradient(180deg, var(--glass-2), transparent 70%), var(--ink-900);
+  overflow: hidden;
+  transition:
+    transform var(--t-base) var(--ease-out),
+    border-color var(--t-base) linear;
+}
+.step:hover {
+  transform: translateY(-6px);
+  border-color: var(--accent-line);
+}
+/* A large ghosted numeral behind the copy — gives the four cards an
+   unmistakable reading order without a row of literal "Step 1" labels. */
+.step::before {
+  counter-increment: step;
+  content: "0" counter(step);
+  position: absolute;
+  top: -14px;
+  right: 10px;
+  font-family: var(--font-display);
+  font-size: 92px;
+  line-height: 1;
+  color: rgba(255, 255, 255, 0.035);
+  pointer-events: none;
+}
+.step h3 {
+  margin: 0 0 10px;
+  font-size: 17px;
+  font-weight: 600;
+}
+.step p {
+  margin: 0;
+  font-size: 14.5px;
+  color: var(--text-soft);
+}
+.step__icon {
+  display: grid;
+  place-items: center;
+  width: 44px;
+  height: 44px;
+  margin-bottom: 20px;
+  border-radius: 13px;
+  border: 1px solid var(--accent-line);
+  background: var(--accent-soft);
+  color: var(--gold-200);
+}
+
+/* ============================== contact ============================== */
+
+.contact {
+  position: relative;
+  border-radius: var(--r-xl);
+  border: 1px solid var(--hairline);
+  overflow: hidden;
+  background:
+    radial-gradient(80% 120% at 88% 8%, rgba(217, 184, 113, 0.14), transparent 62%),
+    linear-gradient(170deg, var(--ink-850), var(--ink-1000));
+  padding: clamp(34px, 5vw, 66px);
+  display: grid;
+  grid-template-columns: 1fr 1fr;
+  gap: clamp(30px, 5vw, 64px);
+  align-items: center;
+}
+
+@media (max-width: 900px) {
+  .contact {
+    grid-template-columns: 1fr;
+  }
+}
+
+/* ============================ lead form ============================ */
+
+.lead-form {
+  display: grid;
+  gap: 14px;
+}
+
+.field {
+  display: grid;
+  gap: 8px;
+}
+
+.field__label {
+  font-size: 11.5px;
+  letter-spacing: 0.18em;
+  text-transform: uppercase;
+  color: var(--text-faint);
+}
+
+.field input {
+  width: 100%;
+  padding: 15px 18px;
+  border-radius: var(--r-md);
+  border: 1px solid var(--hairline-strong);
+  background: rgba(0, 0, 0, 0.32);
+  color: var(--text);
+  font: inherit;
+  font-size: 15px;
+  transition:
+    border-color var(--t-fast) linear,
+    box-shadow var(--t-fast) linear,
+    background-color var(--t-fast) linear;
+}
+.field input::placeholder {
+  color: var(--text-faint);
+}
+.field input:hover {
+  border-color: rgba(255, 255, 255, 0.24);
+}
+.field input:focus {
+  outline: none;
+  border-color: var(--accent);
+  background: rgba(0, 0, 0, 0.45);
+  box-shadow: 0 0 0 4px var(--accent-soft);
+}
+.field input[aria-invalid="true"] {
+  border-color: #d9736b;
+}
+
+.field__error {
+  font-size: 12.5px;
+  color: #e8918a;
+}
+
+.lead-form__note {
+  margin: 4px 0 0;
+  font-size: 12.5px;
+  color: var(--text-faint);
+  line-height: 1.55;
+}
+
+/* Success replaces the form entirely rather than sitting above it — once
+   someone has sent their number, a still-filled form invites a duplicate. */
+.lead-done {
+  display: grid;
+  justify-items: start;
+  gap: 12px;
+  padding: 30px;
+  border-radius: var(--r-lg);
+  border: 1px solid var(--accent-line);
+  background: var(--accent-soft);
+  animation: fade-up 600ms var(--ease-out) both;
+}
+.lead-done__icon {
+  display: grid;
+  place-items: center;
+  width: 46px;
+  height: 46px;
+  border-radius: 50%;
+  background: var(--accent-text);
+  color: #16120a;
+}
+.lead-done h3 {
+  margin: 0;
+  font-family: var(--font-display);
+  font-size: 24px;
+  font-weight: 400;
+}
+.lead-done p {
+  margin: 0;
+  color: var(--text-soft);
+  font-size: 14.5px;
+}
+
+.form-error {
+  display: flex;
+  gap: 10px;
+  padding: 13px 16px;
+  border-radius: var(--r-md);
+  border: 1px solid rgba(217, 115, 107, 0.4);
+  background: rgba(217, 115, 107, 0.1);
+  color: #eaa39c;
+  font-size: 13.5px;
+}
+
+/* ============================== footer ============================== */
+
+.site-footer {
+  border-top: 1px solid var(--hairline);
+  padding-block: 46px;
+  background: var(--ink-1000);
+}
+
+.site-footer__inner {
+  display: flex;
+  flex-wrap: wrap;
+  gap: 22px;
+  align-items: center;
+  justify-content: space-between;
+  color: var(--text-faint);
+  font-size: 13px;
+}
+
+.site-footer__links {
+  display: flex;
+  gap: 20px;
+  flex-wrap: wrap;
+}
+.site-footer__links button {
+  border: 0;
+  background: none;
+  padding: 0;
+  color: var(--text-faint);
+  font-size: 13px;
+  transition: color var(--t-fast) linear;
+}
+.site-footer__links button:hover {
+  color: var(--gold-200);
+}
+
+/* ====================== floating WhatsApp button ====================== */
+
+/* Persistent, because the entire point of the site is to start a WhatsApp
+   conversation — and a visitor who is ready to do that three sections down
+   shouldn't have to hunt for the way to. */
+.wa-fab {
+  position: fixed;
+  right: clamp(16px, 3vw, 30px);
+  bottom: clamp(16px, 3vw, 30px);
+  z-index: 90;
+  display: inline-flex;
+  align-items: center;
+  gap: 10px;
+  padding: 14px 20px;
+  border-radius: var(--r-pill);
+  border: 1px solid var(--accent-line);
+  background: rgba(8, 8, 10, 0.82);
+  backdrop-filter: blur(14px);
+  color: var(--gold-200);
+  font-size: 13.5px;
+  font-weight: 600;
+  box-shadow: var(--shadow-md);
+  transition:
+    transform var(--t-base) var(--ease-spring),
+    box-shadow var(--t-base) var(--ease-out);
+}
+.wa-fab:hover {
+  transform: translateY(-3px) scale(1.03);
+  box-shadow: var(--shadow-lg), var(--shadow-gold);
+}
+@media (max-width: 560px) {
+  .wa-fab span {
+    display: none;
+  }
+  .wa-fab {
+    padding: 15px;
+  }
+}

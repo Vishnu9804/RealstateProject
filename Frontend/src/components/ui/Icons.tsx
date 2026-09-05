@@ -244,6 +244,24 @@ export const IconEdit = svg(
  *  stroke weight and geometry as every other icon here rather than pulled in
  *  as a brand asset — used only to mean "this is the Instagram field/filter",
  *  not as the Instagram brand mark itself. */
+/** A browser/webpage window — used only to mean "the public landing page",
+ *  next to IconGrid ("Properties", the internal database) in the nav. */
+export const IconWindow = svg(
+  <>
+    <rect x="3" y="4.5" width="18" height="15" rx="2.5" />
+    <path d="M3 8.8h18" />
+    <path d="M6.3 6.6h.01M9 6.6h.01" />
+  </>,
+);
+
+export const IconImage = svg(
+  <>
+    <rect x="3" y="4" width="18" height="16" rx="2.5" />
+    <circle cx="8.5" cy="9.5" r="1.6" />
+    <path d="m4 17.5 5-5 3.5 3.5L17 11l3 3.5" />
+  </>,
+);
+
 export const IconInstagram = svg(
   <>
     <rect x="3" y="3" width="18" height="18" rx="5.5" />

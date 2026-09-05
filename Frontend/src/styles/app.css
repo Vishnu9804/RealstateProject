@@ -399,6 +399,193 @@
   background: var(--plane-1);
 }
 
+/* ---- property photo picker ---------------------------------------------
+   Same "well" surface as .input (things you drop stuff into sit below the
+   page), but with its own drag/hover choreography — this is the one field
+   in the Add/Edit dialog meant to feel tactile rather than form-like. */
+.photo-field { display: flex; flex-direction: column; gap: 10px; }
+
+.photo-drop {
+  position: relative;
+  display: flex;
+  flex-direction: column;
+  align-items: center;
+  justify-content: center;
+  gap: 9px;
+  padding: 30px 18px;
+  border-radius: var(--r-md);
+  border: 1.5px dashed var(--rim-strong);
+  background: var(--plane-0);
+  text-align: center;
+  cursor: pointer;
+  transition:
+    border-color var(--t-fast) var(--ease-out),
+    background-color var(--t-fast) var(--ease-out),
+    transform var(--t-base) var(--ease-spring),
+    box-shadow var(--t-base) var(--ease-out);
+}
+.photo-drop:hover {
+  border-color: var(--rim-strong);
+  background: var(--plane-1);
+  transform: perspective(700px) translate3d(0, -2px, 8px);
+  box-shadow: var(--elev-2);
+}
+.photo-drop:hover .photo-drop__icon { transform: translateY(-3px) scale(1.06); }
+.photo-drop--active,
+.photo-tile--add.photo-drop--active {
+  border-color: var(--accent);
+  background: var(--accent-soft);
+  transform: perspective(700px) translate3d(0, -2px, 10px) scale(1.01);
+  box-shadow: var(--elev-3), 0 0 0 4px var(--accent-soft);
+}
+.photo-drop__icon {
+  display: grid;
+  place-items: center;
+  width: 44px;
+  height: 44px;
+  border-radius: 50%;
+  background: var(--plane-2);
+  border: 1px solid var(--rim);
+  color: var(--accent);
+  transition: transform var(--t-base) var(--ease-spring);
+  animation: float-y 3.6s var(--ease-in-out) infinite;
+}
+.photo-drop--active .photo-drop__icon { animation: none; transform: scale(1.14); }
+.photo-drop__title { font-size: 13.5px; font-weight: 610; color: var(--ink-2); }
+.photo-drop__hint { font-size: 12px; color: var(--ink-4); }
+.photo-drop input[type="file"] {
+  position: absolute;
+  inset: 0;
+  width: 100%;
+  height: 100%;
+  opacity: 0;
+  cursor: pointer;
+}
+
+.photo-grid {
+  display: grid;
+  grid-template-columns: repeat(auto-fill, minmax(96px, 1fr));
+  gap: 10px;
+}
+
+.photo-tile {
+  position: relative;
+  aspect-ratio: 1;
+  border-radius: var(--r-sm);
+  overflow: hidden;
+  border: 1px solid var(--rim);
+  background: var(--plane-1);
+  box-shadow: var(--elev-1);
+  cursor: grab;
+  animation: pop-in var(--t-base) var(--ease-spring) both;
+  transition:
+    transform var(--t-base) var(--ease-spring),
+    box-shadow var(--t-base) var(--ease-out),
+    opacity var(--t-fast) var(--ease-out);
+}
+.photo-tile:active { cursor: grabbing; }
+.photo-tile:hover {
+  transform: perspective(700px) translate3d(0, -3px, 10px);
+  box-shadow: var(--elev-3);
+}
+.photo-tile img {
+  width: 100%;
+  height: 100%;
+  object-fit: cover;
+  display: block;
+  pointer-events: none;
+  user-select: none;
+}
+.photo-tile--dragging { opacity: 0.35; transform: scale(0.92); box-shadow: none; }
+.photo-tile--over { box-shadow: 0 0 0 2.5px var(--accent), var(--elev-3); transform: scale(1.05); }
+.photo-tile--removing { animation: photo-out var(--t-fast) var(--ease-out) forwards; pointer-events: none; }
+@keyframes photo-out {
+  to { opacity: 0; transform: scale(0.7); }
+}
+
+.photo-tile__cover {
+  position: absolute;
+  left: 6px;
+  bottom: 6px;
+  padding: 2px 7px;
+  border-radius: var(--r-pill);
+  font-size: 10px;
+  font-weight: 660;
+  letter-spacing: 0.02em;
+  background: var(--surface-strong);
+  color: var(--ink-2);
+  border: 1px solid var(--rim);
+  pointer-events: none;
+}
+
+.photo-tile__remove {
+  position: absolute;
+  top: 5px;
+  right: 5px;
+  width: 22px;
+  height: 22px;
+  display: grid;
+  place-items: center;
+  border: 0;
+  border-radius: 50%;
+  background: var(--surface-strong);
+  color: var(--ink-2);
+  opacity: 0;
+  transform: scale(0.7);
+  cursor: pointer;
+  transition: all var(--t-fast) var(--ease-spring);
+}
+.photo-tile:hover .photo-tile__remove,
+.photo-tile:focus-within .photo-tile__remove { opacity: 1; transform: scale(1); }
+.photo-tile__remove:hover {
+  background: color-mix(in oklab, var(--bad) 32%, var(--surface-strong));
+  color: var(--bad);
+  transform: scale(1.16);
+}
+
+.photo-tile--pending {
+  display: grid;
+  place-items: center;
+  cursor: default;
+  background: linear-gradient(100deg, var(--plane-1) 38%, var(--plane-2) 50%, var(--plane-1) 62%);
+  background-size: 250% 100%;
+  animation: shimmer 1.3s linear infinite, pop-in var(--t-base) var(--ease-spring) both;
+}
+.photo-tile--pending .spinner { color: var(--accent); }
+
+.photo-tile--add {
+  display: flex;
+  flex-direction: column;
+  align-items: center;
+  justify-content: center;
+  gap: 3px;
+  border: 1.5px dashed var(--rim-strong);
+  background: var(--plane-0);
+  color: var(--ink-3);
+  font-size: 11px;
+  font-weight: 610;
+  cursor: pointer;
+  transition:
+    border-color var(--t-fast) var(--ease-out),
+    background-color var(--t-fast) var(--ease-out),
+    color var(--t-fast) var(--ease-out),
+    transform var(--t-base) var(--ease-spring);
+}
+.photo-tile--add:hover {
+  border-color: var(--accent);
+  color: var(--accent);
+  background: var(--accent-soft);
+  transform: perspective(700px) translate3d(0, -3px, 10px);
+}
+.photo-tile--add input[type="file"] { position: absolute; inset: 0; opacity: 0; cursor: pointer; }
+
+.photo-field__hint {
+  margin: 0;
+  font-size: 11.5px;
+  color: var(--ink-4);
+  animation: fade-in var(--t-base) var(--ease-out) both;
+}
+
 .cmdk__field {
   display: flex;
   align-items: center;
@@ -673,6 +860,100 @@
 .cell-muted { color: var(--ink-4); font-size: 12px; }
 .cell-num { font-variant-numeric: tabular-nums; }
 
+/* ---- icon rail — floats in the page's own left gutter, beside the table --
+   Taken clean out of flow (position: absolute) so it never widens
+   .table-with-rail and never pushes .table-frame over by so much as a
+   pixel — the table sits at exactly the x-position it always has. The rail
+   just hangs in whatever blank margin already exists there.
+   Still one div per row, in the same order as tbody, still positioned by
+   plain CSS with no JS — vertical page scroll (see .table-scroll's own
+   comment: the page owns vertical scrolling, the table only scrolls
+   horizontally within itself) moves this exactly as fast as the rows next
+   to it, because it never leaves the normal page-scroll flow to begin
+   with; there's nothing to fall behind. */
+.table-with-rail { position: relative; }
+.row-icon-rail {
+  position: absolute;
+  top: 43px; /* clears the table's own header row, so slot 0 lines up with the first data row */
+  right: calc(100% + 8px);
+  display: flex;
+  flex-direction: column;
+  align-items: flex-end;
+}
+.row-icon-slot {
+  height: 62px;
+  display: flex;
+  align-items: center;
+}
+
+.row-indicator-chip {
+  display: inline-flex;
+  align-items: center;
+  gap: 4px;
+  padding: 6px 8px;
+  border-radius: var(--r-pill);
+  background: var(--plane-2);
+  border: 1px solid var(--rim);
+  color: var(--ink-2);
+  box-shadow: var(--elev-1);
+}
+.row-indicator-chip--reel {
+  color: var(--accent);
+  border-color: color-mix(in oklab, var(--accent) 40%, transparent);
+  background: color-mix(in oklab, var(--accent) 16%, transparent);
+}
+
+/* ---- Landing Page page — the round select toggle in the icon rail ------ */
+.select-toggle {
+  width: 30px;
+  height: 30px;
+  flex: none;
+  border-radius: 50%;
+  border: 1.5px solid var(--rim-strong);
+  background: var(--plane-2);
+  color: transparent;
+  display: grid;
+  place-items: center;
+  cursor: pointer;
+  box-shadow: var(--elev-1);
+  transition:
+    transform var(--t-base) var(--ease-spring),
+    background-color var(--t-fast) var(--ease-out),
+    border-color var(--t-fast) var(--ease-out),
+    color var(--t-fast) var(--ease-out),
+    box-shadow var(--t-base) var(--ease-out);
+}
+.select-toggle svg { transform: scale(0.5); transition: transform var(--t-base) var(--ease-spring); }
+.select-toggle:hover { border-color: var(--ink-4); transform: scale(1.08); box-shadow: var(--elev-2); }
+.select-toggle--add {
+  color: #fff;
+  background: var(--ok);
+  border-color: var(--ok);
+  box-shadow: 0 4px 14px -3px color-mix(in oklab, var(--ok) 60%, transparent);
+}
+.select-toggle--remove {
+  color: #fff;
+  background: var(--bad);
+  border-color: var(--bad);
+  box-shadow: 0 4px 14px -3px color-mix(in oklab, var(--bad) 60%, transparent);
+}
+.select-toggle--add svg,
+.select-toggle--remove svg { transform: scale(1); }
+
+/* Same toggle, as a button in the detail dialog's footer (see
+   PropertyDetailDialog's selectAction prop) — tinted rather than filled,
+   to sit comfortably next to the other ghost buttons there. */
+.select-toggle-btn--add {
+  border-color: color-mix(in oklab, var(--ok) 45%, transparent);
+  background: color-mix(in oklab, var(--ok) 18%, transparent);
+  color: var(--ok);
+}
+.select-toggle-btn--remove {
+  border-color: color-mix(in oklab, var(--bad) 45%, transparent);
+  background: color-mix(in oklab, var(--bad) 18%, transparent);
+  color: var(--bad);
+}
+
 /* ---- row/card actions (accept, move to, delete) ------------------------ */
 .row-actions {
   display: flex;
@@ -727,6 +1008,104 @@
 }
 .detail__v { font-size: 13.5px; color: var(--ink); word-break: break-word; }
 .detail__msg { white-space: pre-wrap; line-height: 1.6; font-size: 13.5px; color: var(--ink-2); }
+
+/* ---- property detail dialog — photo gallery + lightbox ----------------- */
+.detail__gallery {
+  display: grid;
+  grid-template-columns: repeat(auto-fill, minmax(104px, 1fr));
+  gap: 10px;
+}
+.detail__photo {
+  position: relative;
+  aspect-ratio: 1;
+  padding: 0;
+  border-radius: var(--r-sm);
+  overflow: hidden;
+  border: 1px solid var(--rim);
+  background: var(--plane-1);
+  box-shadow: var(--elev-1);
+  animation: pop-in var(--t-base) var(--ease-spring) both;
+  transition: transform var(--t-base) var(--ease-spring), box-shadow var(--t-base) var(--ease-out);
+}
+.detail__photo:hover {
+  transform: perspective(700px) translate3d(0, -3px, 12px);
+  box-shadow: var(--elev-3);
+}
+.detail__photo img {
+  width: 100%;
+  height: 100%;
+  object-fit: cover;
+  display: block;
+  pointer-events: none;
+}
+
+.lightbox-scrim { z-index: 210; background: rgba(4, 5, 12, 0.86); }
+.lightbox {
+  position: relative;
+  display: flex;
+  max-width: min(92vw, 1100px);
+  max-height: 88vh;
+}
+.lightbox img {
+  max-width: 100%;
+  max-height: 88vh;
+  border-radius: var(--r-md);
+  box-shadow: var(--elev-4);
+  object-fit: contain;
+  display: block;
+}
+.lightbox__close {
+  position: absolute;
+  top: -14px;
+  right: -14px;
+  width: 34px;
+  height: 34px;
+  display: grid;
+  place-items: center;
+  border: 1px solid var(--rim-strong);
+  border-radius: 50%;
+  background: var(--plane-3);
+  color: var(--ink);
+  box-shadow: var(--elev-3);
+  transition: transform var(--t-fast) var(--ease-spring), background-color var(--t-fast) var(--ease-out);
+}
+.lightbox__close:hover { transform: scale(1.1) rotate(90deg); background: var(--plane-2); }
+.lightbox__nav {
+  position: absolute;
+  top: 50%;
+  transform: translateY(-50%);
+  width: 44px;
+  height: 44px;
+  display: grid;
+  place-items: center;
+  border: 1px solid var(--rim-strong);
+  border-radius: 50%;
+  background: var(--plane-3);
+  color: var(--ink);
+  box-shadow: var(--elev-3);
+  transition: transform var(--t-fast) var(--ease-spring), background-color var(--t-fast) var(--ease-out);
+}
+.lightbox__nav:hover { background: var(--plane-2); }
+.lightbox__nav--prev { left: -20px; }
+.lightbox__nav--prev svg { transform: rotate(90deg); }
+.lightbox__nav--next { right: -20px; }
+.lightbox__nav--next svg { transform: rotate(-90deg); }
+.lightbox__nav--prev:hover { transform: translateY(-50%) translateX(-2px); }
+.lightbox__nav--next:hover { transform: translateY(-50%) translateX(2px); }
+.lightbox__count {
+  position: absolute;
+  bottom: -34px;
+  left: 50%;
+  transform: translateX(-50%);
+  padding: 4px 12px;
+  border-radius: var(--r-pill);
+  background: var(--surface-strong);
+  border: 1px solid var(--rim);
+  color: var(--ink-2);
+  font-size: 12px;
+  font-weight: 600;
+  white-space: nowrap;
+}
 
 /* Card view — the mobile/browse alternative to the table. */
 .card-grid {

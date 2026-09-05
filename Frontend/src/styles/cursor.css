@@ -1,66 +1,63 @@
 /* =======================================================================
-   CURSOR — a single ring that eases to the pointer, grows over anything
-   clickable, and gives a brief tactile shrink on press.
+   CURSOR — the pointer itself, recoloured to the site's accent instead of
+   the OS default black/white arrow.
 
-   `.has-cursor` is added by the Cursor component at runtime, never here, so
-   the native cursor is only ever hidden once a replacement is actually on
-   screen.
+   Previously a JS-driven ring that eased toward the pointer over several
+   animation frames — with only one visible follower shape, any perceptible
+   catch-up read as the cursor lagging behind fast mouse movement, which is
+   exactly what was reported. This is a plain CSS `cursor: url(...)` image
+   instead: it *is* the OS cursor, positioned by the OS itself, so it moves
+   at the same 1:1, zero-lag speed as the native arrow always did — just
+   shaped like a normal pointer and coloured to match the theme.
    ======================================================================= */
 
-:root.has-cursor,
-:root.has-cursor * {
-  cursor: none !important;
+:root {
+  --cursor-arrow: url("data:image/svg+xml,<svg xmlns='http://www.w3.org/2000/svg' width='24' height='24' viewBox='0 0 24 24'><path d='M3 3l7.4 17.75 2.44-7.9 7.9-2.44L3 3z' fill='%238b5cf6' stroke='white' stroke-width='1.7' stroke-linejoin='round'/></svg>")
+    3 3,
+    auto;
+  --cursor-arrow-hover: url("data:image/svg+xml,<svg xmlns='http://www.w3.org/2000/svg' width='24' height='24' viewBox='0 0 24 24'><path d='M3 3l7.4 17.75 2.44-7.9 7.9-2.44L3 3z' fill='%23a78bfa' stroke='white' stroke-width='1.7' stroke-linejoin='round'/></svg>")
+    3 3,
+    pointer;
 }
-/* Text entry keeps its caret — losing the I-beam inside a field makes it
-   genuinely harder to place the insertion point. */
-:root.has-cursor input,
-:root.has-cursor textarea,
-:root.has-cursor [contenteditable] {
-  cursor: text !important;
+:root[data-theme="light"] {
+  --cursor-arrow: url("data:image/svg+xml,<svg xmlns='http://www.w3.org/2000/svg' width='24' height='24' viewBox='0 0 24 24'><path d='M3 3l7.4 17.75 2.44-7.9 7.9-2.44L3 3z' fill='%237c3aed' stroke='%23131730' stroke-width='1.3' stroke-linejoin='round'/></svg>")
+    3 3,
+    auto;
+  --cursor-arrow-hover: url("data:image/svg+xml,<svg xmlns='http://www.w3.org/2000/svg' width='24' height='24' viewBox='0 0 24 24'><path d='M3 3l7.4 17.75 2.44-7.9 7.9-2.44L3 3z' fill='%238b5cf6' stroke='%23131730' stroke-width='1.3' stroke-linejoin='round'/></svg>")
+    3 3,
+    pointer;
 }
 
-.cursor-ring {
-  position: fixed;
-  top: 0;
-  left: 0;
-  /* Above every other layer in the app — popovers (70), toasts (80),
-     command palette (90), confirm/detail dialogs (200) included. The
-     cursor is the one thing that must never end up behind an overlay. */
-  z-index: 9999;
-  width: 26px;
-  height: 26px;
-  pointer-events: none;
-  opacity: 0;
-  transition: opacity 220ms var(--ease-out);
-  will-change: transform;
-}
-:root.cursor-on .cursor-ring { opacity: 1; }
+html { cursor: var(--cursor-arrow); }
 
-/* The visible circle is an inner element so it can scale without changing
-   the box the JS positions — scaling the positioned element itself would
-   fight the transform being written every frame. */
-.cursor-ring span {
-  display: block;
-  width: 100%;
-  height: 100%;
-  border-radius: 50%;
-  border: 1.5px solid color-mix(in oklab, var(--accent) 78%, transparent);
-  background: color-mix(in oklab, var(--accent) 10%, transparent);
-  box-shadow: 0 0 16px -2px var(--accent-glow);
-  transition:
-    transform 260ms var(--ease-spring),
-    background-color 200ms var(--ease-out),
-    border-color 200ms var(--ease-out);
+a,
+button,
+label,
+select,
+input[type="checkbox"],
+input[type="radio"],
+[role="button"],
+[role="radio"],
+.row,
+.pcard,
+.popover__opt,
+.cmdk__item,
+.segmented__opt,
+.photo-tile,
+.photo-tile--add,
+.photo-drop {
+  cursor: var(--cursor-arrow-hover);
 }
-.cursor-ring[data-state="hover"] span {
-  transform: scale(1.55);
-  border-color: var(--accent);
-  background: color-mix(in oklab, var(--accent) 18%, transparent);
+
+/* Text entry keeps the real I-beam — losing it makes placing the insertion
+   point genuinely harder, and no themed arrow is worth that trade. */
+input,
+textarea,
+[contenteditable] {
+  cursor: text;
 }
-/* Pressed always wins over hover — the click feedback must read clearly
-   even while sitting on top of a button. */
-.cursor-ring[data-pressed="true"] span {
-  transform: scale(0.7);
-  background: color-mix(in oklab, var(--accent) 30%, transparent);
-  border-color: var(--accent);
+
+:disabled,
+[aria-disabled="true"] {
+  cursor: var(--cursor-arrow);
 }

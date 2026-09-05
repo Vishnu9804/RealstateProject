@@ -21,11 +21,15 @@ export interface PropertyContentFields {
   contact_phone?: string | null;
   description?: string | null;
   instagram_reel_url?: string | null;
+  image_urls?: string[];
 }
 
 export interface PropertyUpdateBody extends Partial<PropertyContentFields> {
   review_status?: "accepted" | "outsider";
   needs_review?: boolean;
+  /** The Landing Page page's Send (true) / Remove (false) actions — always
+   *  sent alone, never bundled with a content edit. */
+  landing_page?: boolean;
 }
 
 export const propertyApi = {

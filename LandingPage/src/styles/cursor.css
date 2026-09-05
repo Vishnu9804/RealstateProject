@@ -1,0 +1,59 @@
+/* =======================================================================
+   CURSOR — the pointer itself, recoloured to the site's gold accent
+   instead of the OS default black/white arrow.
+
+   This is a plain CSS `cursor: url(...)` image, not a JS-driven follower:
+   it *is* the OS cursor, positioned by the OS itself, so it moves at the
+   same 1:1, zero-lag speed as the native arrow always did — just shaped
+   like a normal pointer and coloured to match the theme. Mirrors
+   Frontend/src/styles/cursor.css's own approach and its own reasoning
+   (recorded there after an earlier JS-eased cursor on this same site read
+   as laggy under fast mouse movement — the fix was to stop drawing a
+   cursor in JS at all, not to tune the easing).
+   ======================================================================= */
+
+:root {
+  /* Gold fill (--gold-300), white stroke for contrast — this site is
+     dark-only, so unlike Frontend's light/dark pair there's only ever one
+     variant to define. */
+  --cursor-arrow: url("data:image/svg+xml,<svg xmlns='http://www.w3.org/2000/svg' width='24' height='24' viewBox='0 0 24 24'><path d='M3 3l7.4 17.75 2.44-7.9 7.9-2.44L3 3z' fill='%23d9b871' stroke='white' stroke-width='1.7' stroke-linejoin='round'/></svg>")
+    3 3,
+    auto;
+  --cursor-arrow-hover: url("data:image/svg+xml,<svg xmlns='http://www.w3.org/2000/svg' width='24' height='24' viewBox='0 0 24 24'><path d='M3 3l7.4 17.75 2.44-7.9 7.9-2.44L3 3z' fill='%23f6e7bd' stroke='white' stroke-width='1.7' stroke-linejoin='round'/></svg>")
+    3 3,
+    pointer;
+}
+
+html {
+  cursor: var(--cursor-arrow);
+}
+
+a,
+button,
+[role="button"],
+.pcard,
+.pcard__link,
+.gallery__nav,
+.gallery__thumb,
+.gallery__expand,
+.lightbox__close,
+.nav__link,
+.drawer__link,
+.filter-btn,
+.wa-fab,
+.brand {
+  cursor: var(--cursor-arrow-hover);
+}
+
+/* Text entry keeps the real I-beam — losing it makes placing the insertion
+   point genuinely harder, and no themed arrow is worth that trade. */
+input,
+textarea,
+[contenteditable] {
+  cursor: text;
+}
+
+:disabled,
+[aria-disabled="true"] {
+  cursor: var(--cursor-arrow);
+}

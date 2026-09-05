@@ -1,0 +1,505 @@
+/**
+ * The single-property page: gallery, Instagram reel, spec table and the
+ * enquiry card.
+ *
+ * The layout question this file answers is that a listing has exactly two
+ * jobs — show the place, and make it trivial to ask about it — so on a wide
+ * screen the media column scrolls while the enquiry card stays pinned
+ * beside it, and on a narrow one the card follows the photos rather than
+ * being buried under them.
+ */
+
+.prop-page {
+  padding-top: var(--header-h);
+  min-height: 100svh;
+}
+
+/* A soft wash behind the top of the page so the header has something to
+   sit against on a listing whose cover photo is dark. */
+.prop-page__glow {
+  position: absolute;
+  inset: 0 0 auto 0;
+  height: 620px;
+  pointer-events: none;
+  background: radial-gradient(70% 100% at 50% 0%, rgba(217, 184, 113, 0.12), transparent 70%);
+}
+
+.prop-back {
+  display: inline-flex;
+  align-items: center;
+  gap: 9px;
+  margin: 30px 0 26px;
+  font-size: 13.5px;
+  color: var(--text-soft);
+  transition: color var(--t-fast) linear;
+}
+.prop-back:hover {
+  color: var(--gold-200);
+}
+.prop-back svg {
+  transition: transform var(--t-base) var(--ease-out);
+}
+.prop-back:hover svg {
+  transform: translateX(-4px);
+}
+
+.prop-head {
+  position: relative;
+  display: flex;
+  flex-wrap: wrap;
+  align-items: flex-end;
+  justify-content: space-between;
+  gap: 22px;
+  padding-bottom: 28px;
+  margin-bottom: 34px;
+  border-bottom: 1px solid var(--hairline);
+}
+
+.prop-head__title {
+  font-family: var(--font-display);
+  font-size: clamp(30px, 4.4vw, 54px);
+  line-height: 1.06;
+  letter-spacing: -0.02em;
+  margin: 14px 0 0;
+  max-width: 18ch;
+}
+
+.prop-head__loc {
+  display: flex;
+  align-items: center;
+  gap: 8px;
+  margin: 16px 0 0;
+  color: var(--text-soft);
+  font-size: 15px;
+}
+
+.prop-head__price {
+  text-align: right;
+}
+.prop-head__price strong {
+  display: block;
+  font-family: var(--font-display);
+  font-weight: 400;
+  font-size: clamp(28px, 3.6vw, 44px);
+  line-height: 1;
+  color: var(--gold-200);
+}
+.prop-head__price small {
+  display: block;
+  margin-top: 8px;
+  font-size: 12px;
+  letter-spacing: 0.16em;
+  text-transform: uppercase;
+  color: var(--text-faint);
+}
+
+@media (max-width: 620px) {
+  .prop-head__price {
+    text-align: left;
+  }
+}
+
+.prop-layout {
+  display: grid;
+  grid-template-columns: minmax(0, 1fr) 372px;
+  gap: clamp(28px, 4vw, 56px);
+  align-items: start;
+  padding-bottom: clamp(70px, 9vw, 130px);
+}
+
+@media (max-width: 1020px) {
+  .prop-layout {
+    grid-template-columns: 1fr;
+  }
+}
+
+.prop-main {
+  display: grid;
+  gap: clamp(34px, 4.6vw, 58px);
+  min-width: 0;
+}
+
+.prop-block__title {
+  display: flex;
+  align-items: center;
+  gap: 12px;
+  font-family: var(--font-display);
+  font-size: 23px;
+  font-weight: 400;
+  margin: 0 0 20px;
+}
+.prop-block__title svg {
+  color: var(--gold-300);
+}
+.prop-block__title small {
+  font-family: var(--font-sans);
+  font-size: 12px;
+  color: var(--text-faint);
+  letter-spacing: 0.08em;
+}
+
+/* ============================== gallery ============================== */
+
+.gallery__stage {
+  position: relative;
+  aspect-ratio: 16 / 11;
+  border-radius: var(--r-lg);
+  overflow: hidden;
+  background: var(--ink-850);
+  border: 1px solid var(--hairline);
+  box-shadow: var(--shadow-lg);
+}
+
+.gallery__img {
+  position: absolute;
+  inset: 0;
+  width: 100%;
+  height: 100%;
+  object-fit: cover;
+  opacity: 0;
+  transform: scale(1.04);
+  transition:
+    opacity 700ms var(--ease-out),
+    transform 1400ms var(--ease-out);
+}
+.gallery__img.is-shown {
+  opacity: 1;
+  transform: scale(1);
+}
+
+.gallery__nav {
+  position: absolute;
+  top: 50%;
+  transform: translateY(-50%);
+  display: grid;
+  place-items: center;
+  width: 46px;
+  height: 46px;
+  border-radius: 50%;
+  border: 1px solid var(--hairline-strong);
+  background: rgba(8, 8, 10, 0.6);
+  backdrop-filter: blur(10px);
+  color: var(--text);
+  opacity: 0;
+  transition:
+    opacity var(--t-base) var(--ease-out),
+    background-color var(--t-fast) linear;
+}
+.gallery__stage:hover .gallery__nav,
+.gallery__nav:focus-visible {
+  opacity: 1;
+}
+.gallery__nav:hover {
+  background: rgba(8, 8, 10, 0.9);
+}
+.gallery__nav--prev {
+  left: 16px;
+}
+.gallery__nav--next {
+  right: 16px;
+}
+/* Touch devices have no hover, so the arrows would never appear. */
+@media (hover: none) {
+  .gallery__nav {
+    opacity: 1;
+  }
+}
+
+.gallery__count {
+  position: absolute;
+  right: 16px;
+  bottom: 16px;
+  display: inline-flex;
+  align-items: center;
+  gap: 7px;
+  padding: 7px 13px;
+  border-radius: var(--r-pill);
+  background: rgba(8, 8, 10, 0.68);
+  backdrop-filter: blur(10px);
+  border: 1px solid var(--hairline);
+  font-size: 12px;
+  font-variant-numeric: tabular-nums;
+  color: var(--text-soft);
+}
+
+.gallery__expand {
+  position: absolute;
+  left: 16px;
+  bottom: 16px;
+  display: inline-flex;
+  align-items: center;
+  gap: 8px;
+  padding: 8px 14px;
+  border-radius: var(--r-pill);
+  background: rgba(8, 8, 10, 0.68);
+  backdrop-filter: blur(10px);
+  border: 1px solid var(--hairline);
+  font-size: 12px;
+  color: var(--text-soft);
+}
+.gallery__expand:hover {
+  color: var(--gold-200);
+  border-color: var(--accent-line);
+}
+
+.gallery__thumbs {
+  display: flex;
+  gap: 10px;
+  margin-top: 14px;
+  padding-bottom: 6px;
+  overflow-x: auto;
+  scroll-snap-type: x proximity;
+}
+
+.gallery__thumb {
+  flex: none;
+  width: 96px;
+  aspect-ratio: 4 / 3;
+  padding: 0;
+  border-radius: var(--r-sm);
+  overflow: hidden;
+  border: 1px solid var(--hairline);
+  background: var(--ink-800);
+  scroll-snap-align: start;
+  opacity: 0.55;
+  transition:
+    opacity var(--t-fast) linear,
+    border-color var(--t-fast) linear,
+    transform var(--t-fast) var(--ease-out);
+}
+.gallery__thumb:hover {
+  opacity: 0.85;
+  transform: translateY(-2px);
+}
+.gallery__thumb.is-active {
+  opacity: 1;
+  border-color: var(--accent);
+}
+.gallery__thumb img {
+  width: 100%;
+  height: 100%;
+  object-fit: cover;
+}
+
+/* ============================== lightbox ============================== */
+
+.lightbox {
+  position: fixed;
+  inset: 0;
+  z-index: 200;
+  display: grid;
+  place-items: center;
+  padding: clamp(16px, 4vw, 56px);
+  background: rgba(4, 4, 6, 0.94);
+  backdrop-filter: blur(12px);
+  animation: fade-up 240ms var(--ease-out);
+}
+
+.lightbox img {
+  max-width: 100%;
+  max-height: 86svh;
+  object-fit: contain;
+  border-radius: var(--r-md);
+  box-shadow: var(--shadow-lg);
+}
+
+.lightbox__close {
+  position: absolute;
+  top: clamp(14px, 3vw, 28px);
+  right: clamp(14px, 3vw, 28px);
+  display: grid;
+  place-items: center;
+  width: 46px;
+  height: 46px;
+  border-radius: 50%;
+  border: 1px solid var(--hairline-strong);
+  background: var(--glass-2);
+  color: var(--text);
+}
+.lightbox__close:hover {
+  background: var(--glass-3);
+}
+
+.lightbox__meta {
+  position: absolute;
+  bottom: clamp(16px, 3vw, 30px);
+  left: 50%;
+  transform: translateX(-50%);
+  font-size: 12.5px;
+  color: var(--text-faint);
+  font-variant-numeric: tabular-nums;
+}
+
+/* =============================== reel =============================== */
+
+.reel {
+  display: grid;
+  justify-items: center;
+}
+
+/**
+ * A phone-shaped frame around Instagram's embed. The embed itself is a
+ * fixed-chrome iframe that can't be restyled from here, so the frame does
+ * the presentation work: a 9:16 well, a gold rim and a glow underneath, so
+ * the reel reads as a deliberate feature of the page rather than a bare
+ * third-party box dropped into it.
+ */
+.reel__frame {
+  position: relative;
+  width: min(400px, 100%);
+  aspect-ratio: 9 / 15.4;
+  border-radius: 30px;
+  padding: 8px;
+  background: linear-gradient(160deg, rgba(217, 184, 113, 0.4), rgba(255, 255, 255, 0.06) 40%, rgba(0, 0, 0, 0.4));
+  box-shadow: var(--shadow-lg), var(--shadow-gold);
+}
+
+.reel__frame iframe {
+  width: 100%;
+  height: 100%;
+  border: 0;
+  border-radius: 24px;
+  background: var(--ink-850);
+  display: block;
+}
+
+.reel__fallback {
+  display: grid;
+  place-items: center;
+  gap: 14px;
+  text-align: center;
+  padding: 34px;
+  border-radius: var(--r-lg);
+  border: 1px dashed var(--hairline-strong);
+  color: var(--text-soft);
+  font-size: 14px;
+}
+
+/* ============================ spec table ============================ */
+
+.specs {
+  display: grid;
+  grid-template-columns: repeat(auto-fit, minmax(170px, 1fr));
+  gap: 1px;
+  background: var(--hairline);
+  border: 1px solid var(--hairline);
+  border-radius: var(--r-lg);
+  overflow: hidden;
+}
+
+.spec {
+  padding: 22px 20px;
+  background: var(--ink-900);
+  transition: background-color var(--t-fast) linear;
+}
+.spec:hover {
+  background: var(--ink-850);
+}
+.spec__label {
+  font-size: 11px;
+  letter-spacing: 0.18em;
+  text-transform: uppercase;
+  color: var(--text-faint);
+}
+.spec__value {
+  margin-top: 9px;
+  font-size: 16px;
+  font-weight: 500;
+  color: var(--text);
+}
+
+.prop-desc {
+  font-size: 15.5px;
+  line-height: 1.8;
+  color: var(--text-soft);
+  white-space: pre-wrap;
+  max-width: 70ch;
+  margin: 0;
+}
+
+/* ========================== enquiry sidecar ========================== */
+
+.enquire {
+  position: sticky;
+  /* Clears the fixed header, with a little air above the card. */
+  top: calc(var(--header-h) + 22px);
+  border-radius: var(--r-xl);
+  border: 1px solid var(--hairline);
+  background:
+    radial-gradient(90% 70% at 80% 0%, rgba(217, 184, 113, 0.16), transparent 62%),
+    linear-gradient(180deg, var(--ink-850), var(--ink-1000));
+  padding: clamp(24px, 2.6vw, 32px);
+  box-shadow: var(--shadow-lg);
+}
+
+@media (max-width: 1020px) {
+  .enquire {
+    position: static;
+  }
+}
+
+.enquire__title {
+  font-family: var(--font-display);
+  font-size: 26px;
+  font-weight: 400;
+  margin: 0 0 8px;
+}
+
+.enquire__sub {
+  margin: 0 0 24px;
+  font-size: 14px;
+  color: var(--text-soft);
+  line-height: 1.6;
+}
+
+.enquire__divider {
+  display: flex;
+  align-items: center;
+  gap: 14px;
+  margin: 22px 0 18px;
+  font-size: 11px;
+  letter-spacing: 0.2em;
+  text-transform: uppercase;
+  color: var(--text-faint);
+}
+.enquire__divider::before,
+.enquire__divider::after {
+  content: "";
+  flex: 1;
+  height: 1px;
+  background: var(--hairline);
+}
+
+/* ======================= loading / not-found ======================= */
+
+.prop-loading {
+  display: grid;
+  gap: 20px;
+  padding-block: clamp(50px, 8vw, 90px);
+}
+.prop-loading__stage {
+  aspect-ratio: 16 / 11;
+}
+.prop-loading__line {
+  height: 16px;
+  max-width: 380px;
+}
+
+.prop-missing {
+  display: grid;
+  justify-items: center;
+  text-align: center;
+  gap: 16px;
+  padding-block: clamp(80px, 14vw, 190px);
+}
+.prop-missing h1 {
+  font-family: var(--font-display);
+  font-size: clamp(30px, 5vw, 50px);
+  font-weight: 400;
+  margin: 0;
+}
+.prop-missing p {
+  margin: 0;
+  color: var(--text-soft);
+  max-width: 48ch;
+}

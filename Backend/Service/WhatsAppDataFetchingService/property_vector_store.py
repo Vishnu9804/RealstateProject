@@ -18,6 +18,7 @@ in sync, in either mode.
 
 from __future__ import annotations
 
+from datetime import datetime, timezone
 from typing import Any, Dict, List, Optional, Tuple
 
 import numpy as np
@@ -64,6 +65,17 @@ def get_all_properties(limit: int = 100) -> List[EmbeddedProperty]:
     return list(_properties[-limit:])
 
 
+def get_landing_page_properties() -> List[EmbeddedProperty]:
+    """Only published (on_landing_page=true) properties — see
+    Database/property_repository.py's version of this for why it's a
+    separate, SQL-filtered query rather than get_all_properties(...) plus a
+    Python filter: it keeps the public landing page's response size bounded
+    by what's actually published, not by the whole table."""
+    if is_database_configured():
+        return property_repository.get_landing_page_properties()
+    return [prop for prop in _properties if prop.on_landing_page]
+
+
 def get_property_count() -> int:
     if is_database_configured():
         return property_repository.get_property_count()
@@ -107,6 +119,8 @@ def update_property(
     embedding: Optional[List[float]] = None,
     field_embeddings: Optional[dict] = None,
     embedding_model: Optional[str] = None,
+    on_landing_page: Optional[bool] = None,
+    qualified_at: Optional[datetime] = None,
 ) -> Optional[EmbeddedProperty]:
     if is_database_configured():
         return property_repository.update_property(
@@ -117,6 +131,8 @@ def update_property(
             embedding=embedding,
             field_embeddings=field_embeddings,
             embedding_model=embedding_model,
+            on_landing_page=on_landing_page,
+            qualified_at=qualified_at,
         )
     for prop in _properties:
         if prop.record_id == record_id:
@@ -134,6 +150,11 @@ def update_property(
                 prop.field_embeddings = field_embeddings
             if embedding_model is not None:
                 prop.embedding_model = embedding_model
+            if on_landing_page is not None:
+                prop.on_landing_page = on_landing_page
+                prop.landing_page_updated_at = datetime.now(timezone.utc)
+            if qualified_at is not None:
+                prop.qualified_at = qualified_at
             return prop
     return None
 

@@ -88,6 +88,15 @@ class WhatsAppClient:
         self._setup_started = False
         self._pairing_watchdog: Optional[threading.Timer] = None
         self._needs_session_cleanup = False
+        # Set at the top of start(), i.e. once per WhatsAppClient instance —
+        # a fresh instance is built on every process boot and on every
+        # reconnect-loop rebuild (whatsapp_service._run_client), so this
+        # marks "now" for that connection attempt. Messages WhatsApp
+        # delivers as offline backlog on reconnect carry their original
+        # send timestamp, not the delivery time, so comparing against this
+        # cutoff in _process_message is what lets backlog be told apart
+        # from genuinely new messages — see its docstring.
+        self._startup_cutoff: Optional[datetime] = None
 
         # Resolving a sender's real phone number (from a LID) and their
         # saved-contact name involves a lookup per message; caching by
@@ -98,6 +107,7 @@ class WhatsAppClient:
     def start(self) -> None:
         """Connects to WhatsApp. Blocks for the lifetime of the connection."""
         step_logger.step("Starting WhatsApp client")
+        self._startup_cutoff = datetime.now(timezone.utc)
         os.makedirs(os.path.dirname(SESSION_DB_PATH), exist_ok=True)
 
         self._client = NewClient(SESSION_DB_PATH)
@@ -318,6 +328,20 @@ class WhatsAppClient:
             step_logger.error(f"Failed to process an incoming message: {exc!r}")
 
     def _process_message(self, ev: MessageEv) -> None:
+        received_at = self._safe_timestamp(ev.Info.Timestamp)
+        if self._startup_cutoff is not None and received_at < self._startup_cutoff:
+            # WhatsApp delivers everything that arrived while this device
+            # was offline as ordinary MessageEv events the moment it
+            # reconnects — there is no separate "this is backlog" signal
+            # from the protocol itself. Without this check, every message
+            # sent while the backend was off (or briefly disconnected)
+            # would be reprocessed as if it just arrived, re-running it
+            # through the property pipeline hours or days late. Comparing
+            # the message's own send time against when this connection
+            # attempt started is what tells backlog apart from the real
+            # thing.
+            return
+
         source = ev.Info.MessageSource
         chat_jid = Jid2String(source.Chat)
 
@@ -348,7 +372,7 @@ class WhatsAppClient:
             sender_name=sender_name,
             sender_saved_name=sender_saved_name,
             text=text,
-            received_at=self._safe_timestamp(ev.Info.Timestamp),
+            received_at=received_at,
         )
         self._on_message(message)
 

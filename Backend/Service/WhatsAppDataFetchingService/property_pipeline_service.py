@@ -148,7 +148,19 @@ def _embed(prop: StructuredProperty) -> Optional[EmbeddedProperty]:
 
 
 def get_properties(limit: int = 100) -> List[PropertyRecord]:
-    return [_to_record(prop) for prop in property_vector_store.get_all_properties(limit=limit)]
+    """Backs the Properties/Landing Page/Inquiries pages' polling list —
+    deliberately the lightweight summary (see property_vector_store.
+    get_all_properties_summary): no photo bytes, just an accurate count.
+    Callers that need one property's actual photos (opening its detail or
+    Edit dialog) use get_property(record_id) below instead."""
+    return [_to_record(prop, image_count=count) for prop, count in property_vector_store.get_all_properties_summary(limit=limit)]
+
+
+def get_property(record_id: str) -> Optional[PropertyRecord]:
+    """The single-record counterpart to get_properties — full content,
+    photos included. Backs GET /properties/{record_id}."""
+    prop = property_vector_store.get_property(record_id)
+    return _to_record(prop) if prop is not None else None
 
 
 def get_property_count() -> int:
@@ -256,11 +268,18 @@ def delete_property(record_id: str) -> bool:
     return property_vector_store.delete_property(record_id)
 
 
-def _to_record(prop: EmbeddedProperty) -> PropertyRecord:
+def _to_record(prop: EmbeddedProperty, image_count: Optional[int] = None) -> PropertyRecord:
     use_24_hour_format = display_settings_service.get_use_24_hour_format()
     return PropertyRecord(
         **prop.model_dump(exclude=_NON_API_FIELDS),
         formatted_timestamp=timestamp_formatting.format_ist(prop.message_timestamp, use_24_hour_format),
+        # Passed explicitly by get_properties, whose summary rows have
+        # image_urls=[] (see property_vector_store.get_all_properties_summary)
+        # — falling back to len(prop.image_urls) here would silently report
+        # zero photos for every property on that path. Every other caller
+        # (create/update/get_property) loads full rows, so the fallback is
+        # exact for them.
+        image_count=image_count if image_count is not None else len(prop.image_urls),
     )
 
 

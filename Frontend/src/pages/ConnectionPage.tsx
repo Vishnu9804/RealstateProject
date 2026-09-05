@@ -134,6 +134,15 @@ function WhatsAppTab() {
   const [submitting, setSubmitting] = useState(false);
 
   const waitingForQr = status?.status === "waiting_for_qr_scan";
+  // Covers both a plain drop (which reconnects on its own, using the
+  // existing paired session, no QR needed) and a real logout (which clears
+  // the stale session and puts up a fresh QR) — from the UI's side these
+  // look identical until the backend decides which one it turned out to
+  // be, so both get the same "hang on" placeholder instead of the stat
+  // grid freezing on stale numbers or a "0 selected" Sources panel that
+  // looks like the saved selection was lost (it wasn't — see
+  // monitoring_selection_store.py on the backend).
+  const reconnecting = status?.status === "disconnected" || status?.status === "logged_out";
   const groupsRelevant = canSelectMonitoring(status?.status);
   const display = status ? describeWhatsAppStatus(status.status) : null;
   const stage = pipelineStage(status?.status);
@@ -188,12 +197,25 @@ function WhatsAppTab() {
     };
   }, [groupsRelevant]);
 
+  const monitoredJids = useMemo(() => new Set(monitoredGroups.map((g) => g.jid)), [monitoredGroups]);
+
   const filteredGroups = useMemo(() => {
     if (!groups) return [];
     const query = debouncedFilter.trim().toLowerCase();
-    if (!query) return groups;
-    return groups.filter((g) => g.name.toLowerCase().includes(query));
-  }, [groups, debouncedFilter]);
+    const matching = query ? groups.filter((g) => g.name.toLowerCase().includes(query)) : groups;
+    // Groups the backend is currently monitoring float to the top — this is
+    // what's actually selected right now (surviving a disconnect or a
+    // backend restart, see monitoring_selection_store.py on the backend),
+    // so it must stay visible at a glance instead of being buried
+    // somewhere in an unordered 100+ group list. Sorted off the saved
+    // selection rather than the in-progress checkbox state, so the list
+    // doesn't jump around under the user's cursor while they edit it.
+    return [...matching].sort((a, b) => {
+      const aTop = monitoredJids.has(a.jid) ? 0 : 1;
+      const bTop = monitoredJids.has(b.jid) ? 0 : 1;
+      return aTop - bTop;
+    });
+  }, [groups, debouncedFilter, monitoredJids]);
 
   const parsedNumbers = useMemo(
     () =>
@@ -336,7 +358,7 @@ function WhatsAppTab() {
         {/* ---- QR or summary ---- */}
         <Panel className="stack stack-4" delay={90}>
           <div className="section-head__eyebrow" style={{ marginBottom: 0 }}>
-            {waitingForQr ? "Pair this device" : "At a glance"}
+            {waitingForQr ? "Pair this device" : reconnecting ? "Reconnecting" : "At a glance"}
           </div>
 
           {waitingForQr ? (
@@ -366,6 +388,18 @@ function WhatsAppTab() {
               </ol>
               <p className="faint small" style={{ textAlign: "center" }}>
                 The code refreshes automatically every few seconds — you never need to reload the page.
+              </p>
+            </div>
+          ) : reconnecting ? (
+            <div className="stack stack-3" style={{ alignItems: "center", textAlign: "center", padding: "18px 0" }}>
+              <span className="spinner" style={{ width: 26, height: 26 }} />
+              <p className="muted small" style={{ margin: 0, maxWidth: 320 }}>
+                {status?.status === "logged_out"
+                  ? "This device was logged out of WhatsApp. The backend cleared the stale session and is generating a fresh pairing QR code — it will appear here automatically."
+                  : "The link to WhatsApp dropped. Reconnection is automatic — if re-pairing turns out to be necessary, a QR code will appear here."}
+              </p>
+              <p className="faint small" style={{ margin: 0 }}>
+                Your monitored groups and numbers stay saved and will resume capturing as soon as the connection is back.
               </p>
             </div>
           ) : initialLoading ? (

@@ -1,4 +1,5 @@
 import { Fragment, useCallback, useEffect, useMemo, useRef, useState } from "react";
+import { ApiError } from "../api/client";
 import { inquiryClientApi } from "../api/inquiryClientApi";
 import { landingLeadApi } from "../api/landingLeadApi";
 import { propertyApi } from "../api/propertyApi";
@@ -52,7 +53,6 @@ export default function InquiryClientsPage() {
   const [clients, setClients] = useState<InquiryClientRecord[] | null>(null);
   const [inquiryStatus, setInquiryStatus] = useState<InquiryStatusResponse | null>(null);
   const [leads, setLeads] = useState<LandingLeadRecord[] | null>(null);
-  const [properties, setProperties] = useState<PropertyRecord[] | null>(null);
   const [error, setError] = useState<string | null>(null);
   const [lastUpdated, setLastUpdated] = useState<Date | null>(null);
   const [refreshing, setRefreshing] = useState(false);
@@ -67,6 +67,16 @@ export default function InquiryClientsPage() {
   const searchRef = useRef<HTMLInputElement>(null);
   const seenPhones = useRef<Set<string> | null>(null);
   const [freshPhones, setFreshPhones] = useState<Set<string>>(new Set());
+
+  // The property behind a "Property Interest" lead is fetched one at a time,
+  // only once its row is actually expanded — see the effect below. Bulk-
+  // fetching all properties (with every photo) on every poll just to
+  // support the rare expand was the single biggest thing making this page
+  // slow to load. A key absent from this map means "not fetched yet"; a
+  // key present with value `null` means "fetched, and it no longer exists"
+  // (deleted/never existed) — cached as such so it isn't re-requested on
+  // every render while the row stays expanded.
+  const [propertyCache, setPropertyCache] = useState<Record<string, PropertyRecord | null>>({});
 
   const [qrTick, setQrTick] = useState(0);
   const [qrLoadFailed, setQrLoadFailed] = useState(false);
@@ -91,17 +101,16 @@ export default function InquiryClientsPage() {
         // showing — same pattern the Dashboard and Landing Page screens
         // already use for their own property list, and it means switching
         // tabs never shows a stale load spinner for data that's actually
-        // sitting there ready.
-        const [clientData, statusData, leadData, propertyData] = await Promise.all([
+        // sitting there ready. The property behind a lead is deliberately
+        // NOT fetched here — see propertyCache's own comment.
+        const [clientData, statusData, leadData] = await Promise.all([
           inquiryClientApi.getClients(FETCH_LIMIT),
           inquiryClientApi.getStatus(),
           landingLeadApi.getLeads(FETCH_LIMIT),
-          propertyApi.getProperties(FETCH_LIMIT),
         ]);
         setClients(clientData);
         setInquiryStatus(statusData);
         setLeads(leadData);
-        setProperties(propertyData);
         setLastUpdated(new Date());
         setError(null);
 
@@ -146,7 +155,6 @@ export default function InquiryClientsPage() {
   const pendingCount = allClients.length - registeredCount;
 
   const allLeads = useMemo(() => leads ?? [], [leads]);
-  const allProperties = useMemo(() => properties ?? [], [properties]);
   const propertyLeadCount = useMemo(() => allLeads.filter((lead) => lead.property_record_id !== null).length, [allLeads]);
 
   // Leaving a tab collapses whatever row was open in it — returning later
@@ -155,6 +163,34 @@ export default function InquiryClientsPage() {
     setExpandedPhone(null);
     setExpandedLeadId(null);
   }, [source]);
+
+  // Fetch the one property an expanded lead is about, on demand — see
+  // propertyCache's own comment for why this replaced a bulk fetch.
+  useEffect(() => {
+    if (!expandedLeadId) return;
+    const lead = allLeads.find((l) => l.lead_id === expandedLeadId);
+    const recordId = lead?.property_record_id;
+    if (!recordId || recordId in propertyCache) return;
+    let cancelled = false;
+    propertyApi
+      .getProperty(recordId)
+      .then((full) => {
+        if (!cancelled) setPropertyCache((prev) => ({ ...prev, [recordId]: full }));
+      })
+      .catch((err) => {
+        if (cancelled) return;
+        // Only a real 404 (deleted/never existed) is cached as "gone" —
+        // a transient network error is left unfetched so re-expanding the
+        // row simply tries again, instead of permanently showing "no
+        // longer available" for what might just be a dropped request.
+        if (err instanceof ApiError && err.status === 404) {
+          setPropertyCache((prev) => ({ ...prev, [recordId]: null }));
+        }
+      });
+    return () => {
+      cancelled = true;
+    };
+  }, [expandedLeadId, allLeads, propertyCache]);
 
   const visibleClients = useMemo(() => {
     const needle = query.trim().toLowerCase();
@@ -442,7 +478,7 @@ export default function InquiryClientsPage() {
           {allLeads.length > 0 && (
             <LeadTable
               leads={allLeads}
-              properties={allProperties}
+              propertyCache={propertyCache}
               expandedLeadId={expandedLeadId}
               setExpandedLeadId={setExpandedLeadId}
             />
@@ -636,12 +672,12 @@ function formatBudgetRange(min: number | null, max: number | null): string {
  */
 function LeadTable({
   leads,
-  properties,
+  propertyCache,
   expandedLeadId,
   setExpandedLeadId,
 }: {
   leads: LandingLeadRecord[];
-  properties: PropertyRecord[];
+  propertyCache: Record<string, PropertyRecord | null>;
   expandedLeadId: string | null;
   setExpandedLeadId: (leadId: string | null) => void;
 }) {
@@ -660,9 +696,13 @@ function LeadTable({
           <tbody>
             {leads.map((lead) => {
               const isExpanded = expandedLeadId === lead.lead_id;
-              const property = lead.property_record_id
-                ? (properties.find((p) => p.record_id === lead.property_record_id) ?? null)
-                : null;
+              // Absent from the cache means "not fetched yet" (either this
+              // row has never been expanded, or the fetch is still in
+              // flight) — kept distinct from `null` ("fetched, gone") so
+              // the detail below can show a loading state instead of
+              // flashing "no longer available" first.
+              const propertyState = lead.property_record_id ? propertyCache[lead.property_record_id] : null;
+              const propertyLoading = Boolean(lead.property_record_id) && !(lead.property_record_id! in propertyCache);
               return (
                 <Fragment key={lead.lead_id}>
                   <tr
@@ -692,7 +732,7 @@ function LeadTable({
                   {isExpanded && (
                     <tr>
                       <td className="detail-cell" colSpan={4}>
-                        <LeadDetail lead={lead} property={property} />
+                        <LeadDetail lead={lead} property={propertyState} loading={propertyLoading} />
                       </td>
                     </tr>
                   )}
@@ -711,7 +751,15 @@ function LeadTable({
  * information underneath — exactly the order a human reading this would
  * want it (who is this, then what are they asking about).
  */
-function LeadDetail({ lead, property }: { lead: LandingLeadRecord; property: PropertyRecord | null }) {
+function LeadDetail({
+  lead,
+  property,
+  loading,
+}: {
+  lead: LandingLeadRecord;
+  property: PropertyRecord | null;
+  loading: boolean;
+}) {
   return (
     <div className="detail stack stack-4">
       <div className="detail__grid">
@@ -735,6 +783,10 @@ function LeadDetail({ lead, property }: { lead: LandingLeadRecord; property: Pro
       {lead.property_record_id ? (
         property ? (
           <PropertySummaryBlock property={property} />
+        ) : loading ? (
+          <div className="row-flex faint small">
+            <span className="spinner" style={{ width: 12, height: 12 }} /> Loading property…
+          </div>
         ) : (
           <Note tone="warn" icon={<IconAlert size={16} />}>
             <strong>That property is no longer available.</strong> They enquired about "

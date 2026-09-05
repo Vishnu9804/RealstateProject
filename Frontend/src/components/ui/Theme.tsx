@@ -43,7 +43,6 @@ export function ThemeToggle() {
       className="btn btn--ghost btn--icon theme-toggle"
       onClick={toggle}
       aria-label={`Switch to ${next} theme`}
-      title={`Switch to ${next} theme`}
     >
       {theme === "dark" ? <IconSun size={17} /> : <IconMoon size={17} />}
     </button>

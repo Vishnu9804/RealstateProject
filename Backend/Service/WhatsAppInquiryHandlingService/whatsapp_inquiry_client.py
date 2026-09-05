@@ -74,6 +74,11 @@ class WhatsAppInquiryClient:
         self._client: Optional[NewClient] = None
         self._pairing_watchdog: Optional[threading.Timer] = None
         self._needs_session_cleanup = False
+        # Set at the top of start() — see WhatsAppChatMessage's sibling in
+        # whatsapp_client.py for why this exists: it lets _process_message
+        # tell offline backlog (delivered as ordinary MessageEv events the
+        # moment this device reconnects) apart from genuinely new messages.
+        self._startup_cutoff: Optional[datetime] = None
 
         # Resolving a sender's real phone number (from a LID) and their
         # saved-contact name involves a lookup per message; caching by
@@ -129,6 +134,7 @@ class WhatsAppInquiryClient:
     def start(self) -> None:
         """Connects to WhatsApp. Blocks for the lifetime of the connection."""
         step_logger.step("Starting WhatsApp Inquiry Handling client")
+        self._startup_cutoff = datetime.now(timezone.utc)
         os.makedirs(os.path.dirname(SESSION_DB_PATH), exist_ok=True)
 
         self._client = NewClient(SESSION_DB_PATH)
@@ -283,6 +289,15 @@ class WhatsAppInquiryClient:
             step_logger.error(f"Failed to process an incoming inquiry message: {exc!r}")
 
     def _process_message(self, ev: MessageEv) -> None:
+        received_at = self._safe_timestamp(ev.Info.Timestamp)
+        if self._startup_cutoff is not None and received_at < self._startup_cutoff:
+            # Offline backlog delivered as ordinary MessageEv events the
+            # moment this device reconnects — see whatsapp_client.py's
+            # identical check for the full explanation. Without this, every
+            # inquiry sent while the backend was off would be reprocessed
+            # (and re-buffered/re-classified) as if it just arrived.
+            return
+
         source = ev.Info.MessageSource
 
         if source.IsGroup:
@@ -303,7 +318,7 @@ class WhatsAppInquiryClient:
             sender_name=sender_name,
             sender_saved_name=sender_saved_name,
             text=text,
-            received_at=self._safe_timestamp(ev.Info.Timestamp),
+            received_at=received_at,
         )
         self._on_message(message)
 

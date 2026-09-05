@@ -21,7 +21,7 @@ from Model.WhatsAppDataFetchingModel.group import WhatsAppGroup
 from Model.WhatsAppDataFetchingModel.personal_chat import WhatsAppPersonalChat
 from Model.WhatsAppDataFetchingModel.whatsapp_message import WhatsAppChatMessage
 from Model.WhatsAppDataFetchingModel.whatsapp_status import WhatsAppStatus
-from Service.WhatsAppDataFetchingService import area_filter_service, property_pipeline_service
+from Service.WhatsAppDataFetchingService import area_filter_service, monitoring_selection_store, property_pipeline_service
 from Service.WhatsAppDataFetchingService.message_buffer_service import MessageBufferService
 from Service.WhatsAppDataFetchingService.whatsapp_client import WhatsAppClient
 
@@ -140,10 +140,17 @@ def get_qr_code() -> Optional[bytes]:
 def submit_monitoring_selection(group_jids: List[str], personal_phone_numbers: List[str]) -> None:
     """Forwards a UI-submitted group/personal-chat selection to the running
     WhatsApp client. Raises RuntimeError if the client hasn't connected yet
-    (Controller turns that into a 409 for the caller)."""
+    (Controller turns that into a 409 for the caller).
+
+    Also persists the selection (see monitoring_selection_store) so it
+    survives a backend restart — see _restore_persisted_selection, which
+    re-applies it automatically the next time a client connects, instead of
+    leaving the operator to notice capture has stopped and reselect
+    everything by hand."""
     if _client is None:
         raise RuntimeError("WhatsApp client is not connected yet.")
     _client.submit_monitoring_selection(group_jids, personal_phone_numbers)
+    monitoring_selection_store.save(group_jids, personal_phone_numbers)
 
 
 # --- WhatsApp client callbacks ------------------------------------------------
@@ -152,6 +159,35 @@ def submit_monitoring_selection(group_jids: List[str], personal_phone_numbers: L
 def _handle_groups_ready(groups: List[WhatsAppGroup]) -> None:
     global _joined_groups
     _joined_groups = groups
+    _restore_persisted_selection()
+
+
+def _restore_persisted_selection() -> None:
+    """Re-applies the last-saved monitoring selection right after a fresh
+    client finishes fetching groups — the same point _setup_after_connect
+    would otherwise just sit at AWAITING_MONITORING_SELECTION waiting on the
+    UI. WhatsAppClient's own _setup_after_connect only calls
+    on_groups_ready once per client instance (a reconnect on the *same*
+    instance short-circuits before re-fetching), so this only ever fires
+    once per fresh client — i.e. on process startup and on every
+    reconnect-loop rebuild (crash/logout), which is exactly when the
+    in-memory selection would otherwise have been silently lost. A group
+    the account has since left is dropped automatically, since
+    submit_monitoring_selection only keeps jids present in the freshly
+    fetched group list."""
+    if _client is None:
+        return
+    saved = monitoring_selection_store.load()
+    if saved is None:
+        return
+    saved_group_jids, saved_personal_numbers = saved
+    if not saved_group_jids and not saved_personal_numbers:
+        return
+    try:
+        _client.submit_monitoring_selection(saved_group_jids, saved_personal_numbers)
+        step_logger.step("Restored the previously saved monitoring selection.")
+    except Exception as exc:  # noqa: BLE001
+        step_logger.error(f"Could not restore saved monitoring selection: {exc!r}")
 
 
 def _handle_group_selection_made(selected_groups: List[WhatsAppGroup]) -> None:

@@ -70,6 +70,17 @@ def get_properties(limit: int = 100) -> list[PropertyRecord]:
     return property_pipeline_service.get_properties(limit=limit)
 
 
+@router.get("/{record_id}", response_model=PropertyRecord)
+def get_property(record_id: str) -> PropertyRecord:
+    """The list above is deliberately photo-less (see get_properties'
+    docstring) — this is what the frontend calls to get one property's
+    actual photos, right before showing its detail or Edit dialog."""
+    record = property_pipeline_service.get_property(record_id)
+    if record is None:
+        raise HTTPException(status_code=404, detail="Property not found")
+    return record
+
+
 @router.post("", response_model=PropertyRecord, status_code=201)
 def create_property(body: PropertyContentFields) -> PropertyRecord:
     return property_pipeline_service.create_property(body.model_dump())

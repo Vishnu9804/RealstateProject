@@ -380,6 +380,34 @@ export default function DashboardPage() {
     setProperties((prev) => (prev ? prev.filter((p) => p.record_id !== recordId) : prev));
   }
 
+  // The polled list (load, above) never carries real photos — see
+  // propertyApi.getProperties's own comment — so opening a property's
+  // detail or Edit dialog fetches the one full record first and merges it
+  // into `properties`, same as any other update. A poll landing later just
+  // overwrites it back to the photo-less summary, which is fine: reopening
+  // re-fetches in a moment, and while it's open the poll never replaces
+  // `detailProperty`/`formDialog`'s own already-fetched object out from
+  // under it.
+  async function openDetail(recordId: string) {
+    try {
+      const full = await propertyApi.getProperty(recordId);
+      updateLocalProperty(recordId, full);
+      setDetailId(recordId);
+    } catch (err) {
+      toast.push({ tone: "bad", title: "Couldn't open this property", message: friendlyError(err) });
+    }
+  }
+
+  async function openEdit(property: PropertyRecord) {
+    try {
+      const full = await propertyApi.getProperty(property.record_id);
+      updateLocalProperty(property.record_id, full);
+      setFormDialog({ mode: "edit", property: full });
+    } catch (err) {
+      toast.push({ tone: "bad", title: "Couldn't open this property", message: friendlyError(err) });
+    }
+  }
+
   async function handleAccept(property: PropertyRecord) {
     try {
       const updated = await propertyApi.updateProperty(property.record_id, { needs_review: false });
@@ -666,7 +694,7 @@ export default function DashboardPage() {
             <PropertyTable
               properties={pageItems}
               query={query}
-              onOpenDetail={(property) => setDetailId(property.record_id)}
+              onOpenDetail={(property) => openDetail(property.record_id)}
               sortKey={sortKey}
               sortDir={sortDir}
               toggleSort={toggleSort}
@@ -678,19 +706,19 @@ export default function DashboardPage() {
               onAccept={handleAccept}
               onMove={(property) => setConfirmAction({ type: "move", property })}
               onDelete={(property) => setConfirmAction({ type: "delete", property })}
-              onEdit={(property) => setFormDialog({ mode: "edit", property })}
+              onEdit={(property) => openEdit(property)}
             />
           ) : (
             <PropertyCards
               properties={pageItems}
               query={query}
-              onOpenDetail={(property) => setDetailId(property.record_id)}
+              onOpenDetail={(property) => openDetail(property.record_id)}
               freshIds={freshIds}
               viewTab={viewTab}
               onAccept={handleAccept}
               onMove={(property) => setConfirmAction({ type: "move", property })}
               onDelete={(property) => setConfirmAction({ type: "delete", property })}
-              onEdit={(property) => setFormDialog({ mode: "edit", property })}
+              onEdit={(property) => openEdit(property)}
             />
           )}
           <Pager page={page} pageCount={pageCount} total={visibleProperties.length} onChange={setPage} />
@@ -716,7 +744,7 @@ export default function DashboardPage() {
           onAccept={handleAccept}
           onMove={(property) => setConfirmAction({ type: "move", property })}
           onDelete={(property) => setConfirmAction({ type: "delete", property })}
-          onEdit={(property) => setFormDialog({ mode: "edit", property })}
+          onEdit={(property) => openEdit(property)}
           onClose={() => setDetailId(null)}
         />
       )}
@@ -1575,11 +1603,14 @@ function ReviewBadge({ property }: { property: PropertyRecord }) {
  *  PropertyTable), one slot per row in the same order, so it just scrolls
  *  with the page like everything else — no JS position syncing. */
 function PropertyIndicators({ property }: { property: PropertyRecord }) {
-  const hasImages = property.image_urls.length > 0;
+  // image_count, not image_urls.length — this list's properties never carry
+  // real photos (see propertyApi.getProperties), but the count is always
+  // accurate.
+  const hasImages = property.image_count > 0;
   const hasReel = Boolean(property.instagram_reel_url);
   if (!hasImages && !hasReel) return null;
   const label = [
-    hasImages && `${property.image_urls.length} photo${property.image_urls.length === 1 ? "" : "s"}`,
+    hasImages && `${property.image_count} photo${property.image_count === 1 ? "" : "s"}`,
     hasReel && "Has an Instagram reel",
   ]
     .filter(Boolean)

@@ -55,6 +55,13 @@
   /* ---- layout ---- */
   --header-h: 68px;
   --shell-max: 1440px;
+  /* The topbar holds brand + 5 full-label nav links + status pill + search
+     + theme toggle — noticeably more content than a page's own reading
+     column needs, so it gets its own, wider cap instead of sharing
+     --shell-max: reusing that value left the bar pinned at 1440px on any
+     screen wide enough to hit the cap, which wasn't enough room and had no
+     way to grow no matter how wide the window got. */
+  --topbar-max: 1640px;
   --gutter: clamp(16px, 3.2vw, 40px);
 
   --font-sans: "Inter", "Segoe UI Variable", system-ui, -apple-system, "Segoe UI", Roboto, sans-serif;

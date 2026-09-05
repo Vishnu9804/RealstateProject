@@ -12,7 +12,7 @@ from datetime import datetime, timezone
 from typing import Any, Dict, List, Optional, Tuple
 
 from sqlalchemy import func, select
-from sqlalchemy.orm import Session
+from sqlalchemy.orm import Session, defer
 
 from Database.models import PropertyRow
 from Database.session import get_session
@@ -101,6 +101,34 @@ def get_all_properties(limit: int) -> List[EmbeddedProperty]:
         rows = list(session.execute(stmt).scalars().all())
     rows.reverse()  # oldest-first, matching the in-memory store's insertion order
     return [_to_pydantic(row) for row in rows]
+
+
+def get_all_properties_summary(limit: int) -> List[Tuple[EmbeddedProperty, int]]:
+    """Same rows as get_all_properties, minus the two columns a list view
+    never needs the CONTENTS of: `image_urls` (each entry is a data URL —
+    this column alone can run to several megabytes per row, see
+    get_landing_page_properties's own comment) and `embedding`/
+    `field_embeddings` (only ever used for vector search, never for
+    display). `defer(...)` keeps SQLAlchemy from even asking Postgres to
+    ship those bytes back for this query; `json_array_length` computes the
+    photo count server-side from the same column so the caller still gets
+    an accurate count without the pixels crossing the wire at all.
+
+    This is what backs the Properties/Landing Page/Inquiries pages' polling
+    — the thing that made them slow to load. A caller that actually needs
+    the photos (opening a property's detail or Edit dialog) calls
+    get_property(record_id) instead, which loads everything for that one
+    row."""
+    stmt = (
+        select(PropertyRow, func.json_array_length(PropertyRow.image_urls).label("image_count"))
+        .options(defer(PropertyRow.image_urls), defer(PropertyRow.embedding), defer(PropertyRow.field_embeddings))
+        .order_by(PropertyRow.id.desc())
+        .limit(limit)
+    )
+    with get_session() as session:
+        rows = [(row[0], row[1]) for row in session.execute(stmt).all()]
+    rows.reverse()  # oldest-first, matching get_all_properties
+    return [(_to_pydantic_summary(row), count) for row, count in rows]
 
 
 def get_landing_page_properties() -> List[EmbeddedProperty]:
@@ -243,5 +271,27 @@ def _to_pydantic(row: PropertyRow) -> EmbeddedProperty:
         record_id=row.record_id or f"legacy-{row.id}",
         embedding=list(row.embedding),
         field_embeddings=dict(row.field_embeddings or {}),
+        embedding_model=row.embedding_model,
+    )
+
+
+_SUMMARY_COLUMNS = tuple(name for name in _COLUMNS if name != "image_urls")
+
+
+def _to_pydantic_summary(row: PropertyRow) -> EmbeddedProperty:
+    """Like _to_pydantic, but never touches the row's deferred
+    image_urls/embedding/field_embeddings attributes — doing so would fire
+    one extra SELECT per row (SQLAlchemy lazy-loads a deferred column on
+    first access), defeating the whole point of deferring them in
+    get_all_properties_summary's query. image_urls is set to [] here; the
+    real count travels alongside as this function's caller's own tuple
+    element, computed in SQL instead."""
+    data = {name: getattr(row, name) for name in _SUMMARY_COLUMNS}
+    return EmbeddedProperty(
+        **data,
+        record_id=row.record_id or f"legacy-{row.id}",
+        image_urls=[],
+        embedding=[],
+        field_embeddings={},
         embedding_model=row.embedding_model,
     )

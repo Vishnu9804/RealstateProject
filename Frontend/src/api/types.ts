@@ -141,7 +141,13 @@ export interface PropertyRecord {
   contact_phone: string | null;
   description: string | null;
   instagram_reel_url: string | null;
+  /** Empty on the list endpoint (GET /properties) — that endpoint
+   *  deliberately never ships photo bytes, see property_repository.py's
+   *  get_all_properties_summary. Use `image_count` for a badge/count, and
+   *  fetch propertyApi.getProperty(record_id) to get the real photos. */
   image_urls: string[];
+  /** Accurate on every response, unlike image_urls above. */
+  image_count: number;
   group_name: string;
   chat_type: "group" | "personal";
   sender_name: string;

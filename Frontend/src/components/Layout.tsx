@@ -81,57 +81,59 @@ export default function Layout() {
 
       <div className="shell">
         <header className={`topbar${scrolled ? " topbar--stuck" : ""}`}>
-          <NavLink to="/" className="brand" aria-label="Home">
-            <span className="brand__mark">
-              <IconZap size={19} />
-            </span>
-            <span className="brand__text">
-              <span className="brand__name">Estate Signal</span>
-              <span className="brand__sub">WhatsApp intake</span>
-            </span>
-          </NavLink>
+          <div className="topbar__inner">
+            <NavLink to="/" className="brand" aria-label="Home">
+              <span className="brand__mark">
+                <IconZap size={19} />
+              </span>
+              <span className="brand__text">
+                <span className="brand__name">Estate Signal</span>
+                <span className="brand__sub">WhatsApp intake</span>
+              </span>
+            </NavLink>
 
-          <nav className="dock" ref={navRef} aria-label="Primary">
-            {thumb && (
-              <span
-                className="dock__thumb"
-                style={{ width: thumb.width, transform: `translateX(${thumb.left - 5}px)` }}
-                aria-hidden="true"
-              />
-            )}
-            {NAV.map((item) => {
-              const Icon = item.icon;
-              return (
-                <NavLink key={item.to} to={item.to} end={item.end} className="dock__link">
-                  <Icon size={16} />
-                  <span>{item.label}</span>
-                  {item.to === "/dashboard" && needsReview > 0 && (
-                    <span className="dock__badge" title={`${needsReview} properties need review`}>
-                      {needsReview > 99 ? "99+" : needsReview}
-                    </span>
-                  )}
-                </NavLink>
-              );
-            })}
-          </nav>
+            <nav className="dock" ref={navRef} aria-label="Primary">
+              {thumb && (
+                <span
+                  className="dock__thumb"
+                  style={{ width: thumb.width, transform: `translateX(${thumb.left - 5}px)` }}
+                  aria-hidden="true"
+                />
+              )}
+              {NAV.map((item) => {
+                const Icon = item.icon;
+                return (
+                  <NavLink key={item.to} to={item.to} end={item.end} className="dock__link">
+                    <Icon size={16} />
+                    <span>{item.label}</span>
+                    {item.to === "/dashboard" && needsReview > 0 && (
+                      <span className="dock__badge" title={`${needsReview} properties need review`}>
+                        {needsReview > 99 ? "99+" : needsReview}
+                      </span>
+                    )}
+                  </NavLink>
+                );
+              })}
+            </nav>
 
-          <span className="topbar__spacer" />
+            <span className="topbar__spacer" />
 
-          <div className="topbar__tools">
-            <span className={`pulse pulse--${pillTone}`} title={pillText} role="status">
-              <span className="pulse__orb" />
-              <span className="pulse__text">{pillText}</span>
-            </span>
+            <div className="topbar__tools">
+              <span className={`pulse pulse--${pillTone}`} title={pillText} role="status">
+                <span className="pulse__orb" />
+                <span className="pulse__text">{pillText}</span>
+              </span>
 
-            <button type="button" className="cmdk-trigger" onClick={() => setOpen(true)} aria-label="Open command palette">
-              <IconCommand size={14} />
-              <span>Search</span>
-              <kbd>⌘K</kbd>
-            </button>
+              <button type="button" className="cmdk-trigger" onClick={() => setOpen(true)} aria-label="Open command palette">
+                <IconCommand size={14} />
+                <span>Search</span>
+                <kbd>⌘K</kbd>
+              </button>
 
-            <Tip label="Toggle theme">
-              <ThemeToggle />
-            </Tip>
+              <Tip label="Toggle theme">
+                <ThemeToggle />
+              </Tip>
+            </div>
           </div>
         </header>
 

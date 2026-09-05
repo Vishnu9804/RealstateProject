@@ -33,7 +33,15 @@ export interface PropertyUpdateBody extends Partial<PropertyContentFields> {
 }
 
 export const propertyApi = {
+  /** The list view — deliberately photo-less (image_urls is always [],
+   *  image_count carries the real count) so polling this on the Properties/
+   *  Landing Page/Inquiries pages stays fast regardless of how many photos
+   *  are stored. Use getProperty below to get one property's actual photos. */
   getProperties: (limit = 500): Promise<PropertyRecord[]> => apiClient.get(`/properties?limit=${limit}`),
+  /** One property, in full — the only call that returns real image_urls.
+   *  Fetch this right before showing a property's detail or Edit dialog. */
+  getProperty: (recordId: string): Promise<PropertyRecord> =>
+    apiClient.get(`/properties/${encodeURIComponent(recordId)}`),
   createProperty: (body: PropertyContentFields): Promise<PropertyRecord> => apiClient.post(`/properties`, body),
   updateProperty: (recordId: string, body: PropertyUpdateBody): Promise<PropertyRecord> =>
     apiClient.patch(`/properties/${encodeURIComponent(recordId)}`, body),

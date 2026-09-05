@@ -24,6 +24,21 @@
   to   { opacity: 1; transform: translate3d(0, 0, 0); }
 }
 
+/* .topbar's own entrance: identical motion to slide-down, but baked around
+   its translateX(-50%) horizontal centering. An element's `animation`
+   REPLACES its static `transform` for as long as the animation applies
+   (with `both`, that's forever after it finishes) rather than composing
+   with it — so .topbar using plain slide-down meant its keyframe-driven
+   transform (translate3d(0,0,0) at rest) silently overrode the
+   translateX(-50%) that centers it, leaving it pinned with its left edge
+   at 50% of the viewport and no compensating shift: roughly half the bar
+   permanently hung off the right edge, cutting off Settings/search/theme
+   toggle regardless of viewport width or content. */
+@keyframes topbar-in {
+  from { opacity: 0; transform: translate3d(-50%, -14px, -50px); }
+  to   { opacity: 1; transform: translate3d(-50%, 0, 0); }
+}
+
 @keyframes toast-in {
   from { opacity: 0; transform: translate3d(0, 26px, -120px) rotateX(28deg); }
   to   { opacity: 1; transform: translate3d(0, 0, 0) rotateX(0deg); }

@@ -65,6 +65,18 @@ def get_all_properties(limit: int = 100) -> List[EmbeddedProperty]:
     return list(_properties[-limit:])
 
 
+def get_all_properties_summary(limit: int = 100) -> List[Tuple[EmbeddedProperty, int]]:
+    """Same rows as get_all_properties, paired with each one's photo count,
+    without the Postgres implementation ever loading the (potentially huge)
+    image_urls/embedding/field_embeddings columns for them — see
+    Database/property_repository.py's own version of this for why. The
+    in-memory fallback already holds everything in RAM, so there's nothing
+    to defer here; counting is free either way."""
+    if is_database_configured():
+        return property_repository.get_all_properties_summary(limit)
+    return [(prop, len(prop.image_urls)) for prop in _properties[-limit:]]
+
+
 def get_landing_page_properties() -> List[EmbeddedProperty]:
     """Only published (on_landing_page=true) properties — see
     Database/property_repository.py's version of this for why it's a

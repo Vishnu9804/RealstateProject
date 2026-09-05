@@ -42,7 +42,9 @@ type PageTab = "ready" | "live";
 type Category = "image" | "reel" | "both";
 
 function categoryOf(property: PropertyRecord): Category {
-  const hasImages = property.image_urls.length > 0;
+  // image_count, not image_urls.length — the polled list never carries
+  // real photos (see propertyApi.getProperties), but the count is accurate.
+  const hasImages = property.image_count > 0;
   const hasReel = Boolean(property.instagram_reel_url);
   return hasImages && hasReel ? "both" : hasImages ? "image" : "reel";
 }
@@ -107,7 +109,7 @@ export default function LandingPagePage() {
   // a landing page belongs here at all, and an unreviewed (needs_review)
   // property has no business going live before a human has looked at it.
   const qualifying = useMemo(
-    () => allProperties.filter((p) => (p.image_urls.length > 0 || p.instagram_reel_url) && !p.needs_review),
+    () => allProperties.filter((p) => (p.image_count > 0 || p.instagram_reel_url) && !p.needs_review),
     [allProperties],
   );
 
@@ -188,6 +190,29 @@ export default function LandingPagePage() {
   }
   function removeLocalProperty(recordId: string) {
     setProperties((prev) => (prev ? prev.filter((p) => p.record_id !== recordId) : prev));
+  }
+
+  // The polled list never carries real photos (see propertyApi.getProperties)
+  // — fetch the one full record before showing its detail or Edit dialog,
+  // same pattern as the Properties page.
+  async function openDetail(recordId: string) {
+    try {
+      const full = await propertyApi.getProperty(recordId);
+      updateLocalProperty(recordId, full);
+      setDetailId(recordId);
+    } catch (err) {
+      toast.push({ tone: "bad", title: "Couldn't open this property", message: friendlyError(err) });
+    }
+  }
+
+  async function openEdit(property: PropertyRecord) {
+    try {
+      const full = await propertyApi.getProperty(property.record_id);
+      updateLocalProperty(property.record_id, full);
+      setFormDialog({ property: full });
+    } catch (err) {
+      toast.push({ tone: "bad", title: "Couldn't open this property", message: friendlyError(err) });
+    }
   }
 
   async function commitSelection() {
@@ -446,11 +471,11 @@ export default function LandingPagePage() {
                         className="row"
                         tabIndex={0}
                         role="button"
-                        onClick={() => setDetailId(property.record_id)}
+                        onClick={() => openDetail(property.record_id)}
                         onKeyDown={(event) => {
                           if (event.key === "Enter" || event.key === " ") {
                             event.preventDefault();
-                            setDetailId(property.record_id);
+                            openDetail(property.record_id);
                           }
                         }}
                       >
@@ -516,7 +541,7 @@ export default function LandingPagePage() {
           onAccept={() => {}}
           onMove={(property) => setRowConfirm({ type: "move", property })}
           onDelete={(property) => setRowConfirm({ type: "delete", property })}
-          onEdit={(property) => setFormDialog({ property })}
+          onEdit={(property) => openEdit(property)}
           onClose={() => setDetailId(null)}
           selectAction={{
             selected: selected.has(detailProperty.record_id),

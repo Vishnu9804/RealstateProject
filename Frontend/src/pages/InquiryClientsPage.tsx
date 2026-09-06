@@ -1,4 +1,5 @@
 import { Fragment, useCallback, useEffect, useMemo, useRef, useState } from "react";
+import { useNavigate } from "react-router-dom";
 import { inquiryClientApi } from "../api/inquiryClientApi";
 import type { InquiryClientRecord, InquiryStatusResponse } from "../api/types";
 import { usePolling } from "../hooks/usePolling";
@@ -27,9 +28,11 @@ import {
   IconClock,
   IconInbox,
   IconMessage,
+  IconArrowRight,
   IconPin,
   IconRefresh,
   IconSearch,
+  IconSparkle,
   IconTag,
   IconUsers,
 } from "../components/ui/Icons";
@@ -42,6 +45,7 @@ type StatusFilter = "all" | "registered" | "pending_registration";
 
 export default function InquiryClientsPage() {
   const toast = useToast();
+  const navigate = useNavigate();
   const [clients, setClients] = useState<InquiryClientRecord[] | null>(null);
   const [inquiryStatus, setInquiryStatus] = useState<InquiryStatusResponse | null>(null);
   const [error, setError] = useState<string | null>(null);
@@ -339,6 +343,7 @@ export default function InquiryClientsPage() {
           expandedPhone={expandedPhone}
           setExpandedPhone={setExpandedPhone}
           freshPhones={freshPhones}
+          onViewMatches={(phone) => navigate(`/inquiries/${encodeURIComponent(phone)}/matches`)}
         />
       )}
     </div>
@@ -353,12 +358,14 @@ function ClientTable({
   expandedPhone,
   setExpandedPhone,
   freshPhones,
+  onViewMatches,
 }: {
   clients: InquiryClientRecord[];
   query: string;
   expandedPhone: string | null;
   setExpandedPhone: (phone: string | null) => void;
   freshPhones: Set<string>;
+  onViewMatches: (phone: string) => void;
 }) {
   return (
     <div className="table-frame anim-rise">
@@ -422,7 +429,7 @@ function ClientTable({
                   {isExpanded && (
                     <tr>
                       <td className="detail-cell" colSpan={9}>
-                        <ClientDetail client={client} />
+                        <ClientDetail client={client} onViewMatches={onViewMatches} />
                       </td>
                     </tr>
                   )}
@@ -438,9 +445,23 @@ function ClientTable({
 
 /* ----------------------------------------------------------------- detail */
 
-function ClientDetail({ client }: { client: InquiryClientRecord }) {
+function ClientDetail({ client, onViewMatches }: { client: InquiryClientRecord; onViewMatches: (phone: string) => void }) {
   return (
     <div className="detail">
+      <div className="row-flex" style={{ justifyContent: "flex-end" }}>
+        <Button
+          size="sm"
+          variant="ghost"
+          icon={<IconSparkle size={14} />}
+          onClick={(event) => {
+            event.stopPropagation();
+            onViewMatches(client.phone);
+          }}
+        >
+          View Matches <IconArrowRight size={12} />
+        </Button>
+      </div>
+
       {client.pending_action && (
         <Note tone="info" icon={<IconClock size={16} />}>
           Waiting on this client: <strong>{client.pending_action.replace(/_/g, " ")}</strong>

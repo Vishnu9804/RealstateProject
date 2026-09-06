@@ -83,12 +83,34 @@ def get_client_session() -> Iterator[Session]:
 
 
 def init_client_db() -> None:
-    """Creates the clients table if it doesn't already exist. Safe to call
-    on every startup — a no-op once the schema is in place. Only called
-    when is_client_database_configured() is True (see main.py's lifespan).
-    No pgvector extension needed here — unlike the property database,
-    client records carry no embeddings."""
+    """Creates the clients table (and, since the Client-Property Matching
+    feature, client_property_matches) if they don't already exist. Safe to
+    call on every startup — a no-op once the schema is in place. Only
+    called when is_client_database_configured() is True (see main.py's
+    lifespan).
+
+    create_all only creates whole tables that are missing — it never adds a
+    column to a `clients` table that already exists from a previous
+    deploy. The ALTER TABLE below is the same lightweight idempotent
+    migration stand-in Database/session.py already uses for `properties`.
+
+    pgvector extension: this database is, in practice, the same physical
+    Neon database as the property one (see Config/settings.py's
+    client_database_url comment), so `CREATE EXTENSION IF NOT EXISTS
+    vector` here is almost always a no-op — but it's included so this
+    module still works correctly if the two are ever pointed at genuinely
+    separate databases."""
+    from sqlalchemy import text
+
     from Database.client_models import ClientBase
+    from Database.client_property_match_models import ClientPropertyMatchRow  # noqa: F401 — registers the table below
+    from Service.WhatsAppDataFetchingService.embedding_service import EMBEDDING_DIMENSIONS
 
     engine = _get_engine()
+    with engine.begin() as connection:
+        connection.execute(text("CREATE EXTENSION IF NOT EXISTS vector"))
     ClientBase.metadata.create_all(engine)
+    with engine.begin() as connection:
+        connection.execute(
+            text(f"ALTER TABLE clients ADD COLUMN IF NOT EXISTS requirement_embedding vector({EMBEDDING_DIMENSIONS})")
+        )

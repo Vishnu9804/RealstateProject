@@ -1,4 +1,5 @@
 import { Fragment, useCallback, useEffect, useMemo, useRef, useState } from "react";
+import { useNavigate } from "react-router-dom";
 import { ApiError } from "../api/client";
 import { inquiryClientApi } from "../api/inquiryClientApi";
 import { landingLeadApi } from "../api/landingLeadApi";
@@ -30,9 +31,11 @@ import {
   IconClock,
   IconInbox,
   IconMessage,
+  IconArrowRight,
   IconPin,
   IconRefresh,
   IconSearch,
+  IconSparkle,
   IconTag,
   IconUsers,
 } from "../components/ui/Icons";
@@ -50,6 +53,7 @@ type Source = "form" | "property";
 
 export default function InquiryClientsPage() {
   const toast = useToast();
+  const navigate = useNavigate();
   const [clients, setClients] = useState<InquiryClientRecord[] | null>(null);
   const [inquiryStatus, setInquiryStatus] = useState<InquiryStatusResponse | null>(null);
   const [leads, setLeads] = useState<LandingLeadRecord[] | null>(null);
@@ -412,78 +416,14 @@ export default function InquiryClientsPage() {
             </Panel>
           )}
 
-          {visibleClients.length > 0 && (
-            <ClientTable
-              clients={visibleClients}
-              query={query}
-              expandedPhone={expandedPhone}
-              setExpandedPhone={setExpandedPhone}
-              freshPhones={freshPhones}
-            />
-          )}
-        </>
-      )}
-
-      {source === "property" && (
-        <>
-          {allLeads.length > 0 && (
-            <div className="stat-grid">
-              <Stat label="Total enquiries" value={allLeads.length} icon={<IconUsers size={13} />} delay={0} />
-              <Stat
-                label="About a specific property"
-                value={propertyLeadCount}
-                icon={<IconBuilding size={13} />}
-                tone="ok"
-                delay={60}
-              />
-              {propertyLeadCount < allLeads.length && (
-                <Stat
-                  label="General (Contact section)"
-                  value={allLeads.length - propertyLeadCount}
-                  icon={<IconMessage size={13} />}
-                  delay={120}
-                />
-              )}
-            </div>
-          )}
-
-          {error && (
-            <Note tone="bad" icon={<IconAlert size={17} />}>
-              <strong>Backend unreachable.</strong> {error} — the last loaded data is still shown below, and polling
-              continues in the background.
-            </Note>
-          )}
-
-          {loading && (
-            <Panel>
-              <div className="stack stack-3">
-                <div className="row-flex faint small">
-                  <span className="spinner" /> Loading website enquiries…
-                </div>
-                <SkeletonRows rows={6} />
-              </div>
-            </Panel>
-          )}
-
-          {leads !== null && allLeads.length === 0 && (
-            <Panel>
-              <EmptyState
-                icon={<IconInbox size={38} />}
-                title="No website enquiries yet"
-                body="Leads appear here the moment someone leaves their name and WhatsApp number on the public landing page — either from a property's own page, or the home page's Contact section."
-              />
-            </Panel>
-          )}
-
-          {allLeads.length > 0 && (
-            <LeadTable
-              leads={allLeads}
-              propertyCache={propertyCache}
-              expandedLeadId={expandedLeadId}
-              setExpandedLeadId={setExpandedLeadId}
-            />
-          )}
-        </>
+      {visibleClients.length > 0 && (
+        <ClientTable
+          clients={visibleClients}
+          query={query}
+          expandedPhone={expandedPhone}
+          setExpandedPhone={setExpandedPhone}
+          freshPhones={freshPhones}
+        />
       )}
     </div>
   );
@@ -497,12 +437,14 @@ function ClientTable({
   expandedPhone,
   setExpandedPhone,
   freshPhones,
+  onViewMatches,
 }: {
   clients: InquiryClientRecord[];
   query: string;
   expandedPhone: string | null;
   setExpandedPhone: (phone: string | null) => void;
   freshPhones: Set<string>;
+  onViewMatches: (phone: string) => void;
 }) {
   return (
     <div className="table-frame anim-rise">
@@ -566,7 +508,7 @@ function ClientTable({
                   {isExpanded && (
                     <tr>
                       <td className="detail-cell" colSpan={9}>
-                        <ClientDetail client={client} />
+                        <ClientDetail client={client} onViewMatches={onViewMatches} />
                       </td>
                     </tr>
                   )}
@@ -582,9 +524,23 @@ function ClientTable({
 
 /* ----------------------------------------------------------------- detail */
 
-function ClientDetail({ client }: { client: InquiryClientRecord }) {
+function ClientDetail({ client, onViewMatches }: { client: InquiryClientRecord; onViewMatches: (phone: string) => void }) {
   return (
     <div className="detail">
+      <div className="row-flex" style={{ justifyContent: "flex-end" }}>
+        <Button
+          size="sm"
+          variant="ghost"
+          icon={<IconSparkle size={14} />}
+          onClick={(event) => {
+            event.stopPropagation();
+            onViewMatches(client.phone);
+          }}
+        >
+          View Matches <IconArrowRight size={12} />
+        </Button>
+      </div>
+
       {client.pending_action && (
         <Note tone="info" icon={<IconClock size={16} />}>
           Waiting on this client: <strong>{client.pending_action.replace(/_/g, " ")}</strong>

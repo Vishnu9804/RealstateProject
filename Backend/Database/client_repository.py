@@ -68,6 +68,18 @@ def get_client_count() -> int:
         return session.execute(select(func.count()).select_from(ClientRow)).scalar_one()
 
 
+def save_requirement_embedding(phone: str, embedding: List[float]) -> None:
+    """Client-Property Matching feature: persists the whole-requirement
+    vector computed by Service/ClientPropertyMatchingService/
+    matching_service.py. A no-op if the client row doesn't exist (shouldn't
+    happen in practice — recompute_for_client always loads the client
+    first — but this is a pure storage write, not the place to raise)."""
+    with get_client_session() as session:
+        row = session.get(ClientRow, phone)
+        if row is not None:
+            row.requirement_embedding = embedding
+
+
 def _to_pydantic(row: ClientRow) -> ClientRecord:
     data = {name: getattr(row, name) for name in _COLUMNS}
     return ClientRecord(**data, created_at=row.created_at, updated_at=row.updated_at)

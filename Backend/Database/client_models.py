@@ -17,10 +17,13 @@ field-name-driven off Model/WhatsAppInquiryHandlingModel/client_record.py.
 from __future__ import annotations
 
 from datetime import datetime
-from typing import Optional
+from typing import List, Optional
 
+from pgvector.sqlalchemy import Vector
 from sqlalchemy import DateTime, Float, String, Text, func
 from sqlalchemy.orm import DeclarativeBase, Mapped, mapped_column
+
+from Service.WhatsAppDataFetchingService.embedding_service import EMBEDDING_DIMENSIONS
 
 
 class ClientBase(DeclarativeBase):
@@ -69,6 +72,21 @@ class ClientRow(ClientBase):
     budget_max_inr: Mapped[Optional[float]] = mapped_column(Float, nullable=True)
     preferred_areas: Mapped[Optional[str]] = mapped_column(String, nullable=True)
     additional_requirements: Mapped[Optional[str]] = mapped_column(Text, nullable=True)
+
+    # --- Client-Property Matching feature ---
+    # The SAME embedding model/process as PropertyRow.embedding
+    # (Database/models.py) — see Service/WhatsAppDataFetchingService/
+    # embedding_service.py, reused as-is via EMBEDDING_DIMENSIONS above so
+    # the two vectors always live in the same space. Built from
+    # Service/ClientPropertyMatchingService/client_requirement_text_builder.py's
+    # canonical text and (re)computed on every matching recompute (see
+    # Service/ClientPropertyMatchingService/matching_service.py) — never
+    # read back into the scoring pass itself, only stored here as the
+    # durable per-client vector the feature spec calls for. Nullable: a
+    # client with no requirements yet has nothing to embed.
+    requirement_embedding: Mapped[Optional[List[float]]] = mapped_column(
+        Vector(EMBEDDING_DIMENSIONS), nullable=True
+    )
 
     created_at: Mapped[datetime] = mapped_column(DateTime(timezone=True), server_default=func.now())
     updated_at: Mapped[datetime] = mapped_column(

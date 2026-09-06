@@ -122,6 +122,52 @@ export interface InquiryStatusResponse {
   client_count: number;
 }
 
+/**
+ * Mirrors Backend/Model/ClientPropertyMatchingModel — the Client-Property
+ * Matching feature's dashboard data. `field_scores` is intentionally
+ * `Record<string, number | null>` rather than a fixed shape: it's a
+ * transparency/debugging surface (see Backend/Service/
+ * ClientPropertyMatchingService/scoring.py's module docstring), not a
+ * contract the UI should hard-code field names against.
+ */
+export type MatchBucket = "high" | "medium" | "low";
+
+export interface MatchedProperty {
+  record_id: string;
+  score: number;
+  bucket: MatchBucket;
+  evidence_ratio: number;
+  is_partial_match: boolean;
+  property_category: "main" | "outsider" | "needs_review";
+  field_scores: Record<string, number | null>;
+  reason: string;
+  property_type: string | null;
+  bhk: string | null;
+  society_name: string | null;
+  area_name: string | null;
+  address: string | null;
+  price_text: string | null;
+  price_amount_inr: number | null;
+  listing_type: "Sale" | "Rent";
+  carpet_area_sqft: number | null;
+  carpet_area_unit: string | null;
+  contact_name: string | null;
+  contact_phone: string | null;
+  description: string | null;
+  review_status: "accepted" | "outsider";
+  needs_review: boolean;
+}
+
+export interface ClientMatchResult {
+  phone: string;
+  client_name: string | null;
+  has_requirements: boolean;
+  computed_at: string | null;
+  high: MatchedProperty[];
+  medium: MatchedProperty[];
+  low: MatchedProperty[];
+}
+
 export interface PropertyRecord {
   record_id: string;
   source_message_id: string;

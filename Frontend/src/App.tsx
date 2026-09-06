@@ -1,5 +1,6 @@
 import { BrowserRouter, Route, Routes } from "react-router-dom";
 import Layout from "./components/Layout";
+import ClientMatchesPage from "./pages/ClientMatchesPage";
 import ConnectionPage from "./pages/ConnectionPage";
 import DashboardPage from "./pages/DashboardPage";
 import LandingPagePage from "./pages/LandingPagePage";
@@ -39,6 +40,7 @@ export default function App() {
               <Route path="dashboard" element={<DashboardPage />} />
               <Route path="landing-page" element={<LandingPagePage />} />
               <Route path="inquiries" element={<InquiryClientsPage />} />
+              <Route path="inquiries/:phone/matches" element={<ClientMatchesPage />} />
               <Route path="settings" element={<SettingsPage />} />
             </Route>
           </Routes>

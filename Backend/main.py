@@ -74,6 +74,7 @@ if sys.platform == "win32":
     sys.stdout.reconfigure(encoding="utf-8", errors="replace")
     sys.stderr.reconfigure(encoding="utf-8", errors="replace")
 
+from Controller.ClientPropertyMatchingController.matching_controller import router as matching_router
 from Controller.WhatsAppDataFetchingController.area_filter_controller import router as area_filter_router
 from Controller.WhatsAppDataFetchingController.display_settings_controller import router as display_settings_router
 from Controller.WhatsAppDataFetchingController.duplicate_detection_controller import router as duplicate_detection_router
@@ -135,12 +136,32 @@ async def _init_client_database() -> None:
         )
 
 
+async def _startup_heartbeat() -> None:
+    """The database init below can go up to ~60-120s with zero output on a
+    cold Neon compute (see the STEP 1/2 log lines) — from the terminal that
+    looks identical to a frozen process. This purely prints a reassurance
+    line every 15s while that wait is in progress; it does not touch the
+    init logic itself and is cancelled the instant both databases are ready."""
+    elapsed = 0
+    while True:
+        await asyncio.sleep(15)
+        elapsed += 15
+        step_logger.info(
+            f"Still waiting on the database connection(s)... ({elapsed}s elapsed — "
+            "this is expected on a cold Neon start, the process is not frozen)"
+        )
+
+
 @asynccontextmanager
 async def lifespan(_app: FastAPI):
     # Two independent Neon databases — each can have its own multi-minute
     # cold-start delay if idle. Running them concurrently means the total
     # wait is whichever one is slower, not both added together.
-    await asyncio.gather(_init_property_database(), _init_client_database())
+    heartbeat = asyncio.create_task(_startup_heartbeat())
+    try:
+        await asyncio.gather(_init_property_database(), _init_client_database())
+    finally:
+        heartbeat.cancel()
 
     step_logger.step("FastAPI server is up. Launching WhatsApp client in the background...")
     whatsapp_service.start_agent_in_background()
@@ -231,6 +252,7 @@ app.include_router(duplicate_detection_router, prefix="/api")
 app.include_router(property_router, prefix="/api")
 app.include_router(whatsapp_inquiry_router, prefix="/api")
 app.include_router(inquiry_form_router, prefix="/api")
+app.include_router(matching_router, prefix="/api")
 app.include_router(instagram_router, prefix="/api")
 app.include_router(landing_page_router, prefix="/api")
 

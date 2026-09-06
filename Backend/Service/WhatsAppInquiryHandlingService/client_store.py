@@ -32,10 +32,33 @@ def get_client_by_phone(phone: str) -> Optional[ClientRecord]:
 
 
 def upsert_client(record: ClientRecord) -> ClientRecord:
+    previous = get_client_by_phone(record.phone)
+
     if is_client_database_configured():
-        return client_repository.upsert_client(record)
-    _clients[record.phone] = record
-    return record
+        saved = client_repository.upsert_client(record)
+    else:
+        _clients[record.phone] = record
+        saved = record
+
+    # Client-Property Matching feature: auto-recompute whenever a
+    # requirement field actually changed — not on every save (a
+    # pending_action toggle or a name/email-only edit re-saves the whole
+    # record too, and shouldn't trigger a pointless rescore). Lazy import
+    # + broad except so a matching failure can never break the inquiry
+    # pipeline that just successfully saved this client's data; this is
+    # the only place whatsappInquiryHandling depends on the matching
+    # feature at all.
+    try:
+        from Service.ClientPropertyMatchingService import matching_service
+
+        if matching_service.requirement_fields_changed(previous, saved):
+            matching_service.recompute_for_client(saved.phone)
+    except Exception as exc:  # noqa: BLE001
+        from Middleware import step_logger
+
+        step_logger.error(f"[Matching] Failed to auto-recompute matches for {saved.phone}: {exc!r}")
+
+    return saved
 
 
 def client_exists(phone: str) -> bool:

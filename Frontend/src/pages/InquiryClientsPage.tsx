@@ -1,14 +1,31 @@
-import { Fragment, useCallback, useEffect, useMemo, useRef, useState } from "react";
+import {
+  Fragment,
+  useCallback,
+  useEffect,
+  useMemo,
+  useRef,
+  useState,
+} from "react";
 import { useNavigate } from "react-router-dom";
 import { ApiError } from "../api/client";
 import { inquiryClientApi } from "../api/inquiryClientApi";
 import { landingLeadApi } from "../api/landingLeadApi";
 import { propertyApi } from "../api/propertyApi";
-import type { InquiryClientRecord, InquiryStatusResponse, LandingLeadRecord, PropertyRecord } from "../api/types";
+import type {
+  InquiryClientRecord,
+  InquiryStatusResponse,
+  LandingLeadRecord,
+  PropertyRecord,
+} from "../api/types";
 import { usePolling } from "../hooks/usePolling";
 import { useDebounced } from "../hooks/useUi";
 import { friendlyError } from "../lib/apiError";
-import { formatCarpetArea, formatCompactInr, formatPrice, relativeTime } from "../lib/formatters";
+import {
+  formatCarpetArea,
+  formatCompactInr,
+  formatPrice,
+  relativeTime,
+} from "../lib/formatters";
 import { describeInquiryStatus } from "../lib/inquiryStatus";
 import { statusTone } from "../lib/whatsappStatus";
 import { useToast } from "../components/ui/Toast";
@@ -55,7 +72,8 @@ export default function InquiryClientsPage() {
   const toast = useToast();
   const navigate = useNavigate();
   const [clients, setClients] = useState<InquiryClientRecord[] | null>(null);
-  const [inquiryStatus, setInquiryStatus] = useState<InquiryStatusResponse | null>(null);
+  const [inquiryStatus, setInquiryStatus] =
+    useState<InquiryStatusResponse | null>(null);
   const [leads, setLeads] = useState<LandingLeadRecord[] | null>(null);
   const [error, setError] = useState<string | null>(null);
   const [lastUpdated, setLastUpdated] = useState<Date | null>(null);
@@ -80,7 +98,9 @@ export default function InquiryClientsPage() {
   // key present with value `null` means "fetched, and it no longer exists"
   // (deleted/never existed) — cached as such so it isn't re-requested on
   // every render while the row stays expanded.
-  const [propertyCache, setPropertyCache] = useState<Record<string, PropertyRecord | null>>({});
+  const [propertyCache, setPropertyCache] = useState<
+    Record<string, PropertyRecord | null>
+  >({});
 
   const [qrTick, setQrTick] = useState(0);
   const [qrLoadFailed, setQrLoadFailed] = useState(false);
@@ -120,18 +140,26 @@ export default function InquiryClientsPage() {
 
         const incoming = new Set(clientData.map((c) => c.phone));
         if (seenPhones.current) {
-          const added = new Set([...incoming].filter((phone) => !seenPhones.current!.has(phone)));
+          const added = new Set(
+            [...incoming].filter((phone) => !seenPhones.current!.has(phone)),
+          );
           if (added.size > 0) {
             setFreshPhones(added);
             window.setTimeout(() => setFreshPhones(new Set()), 2600);
           }
         }
         seenPhones.current = incoming;
-        if (manual) toast.push({ tone: "ok", title: "Refreshed", message: `${clientData.length} client(s) loaded.` });
+        if (manual)
+          toast.push({
+            tone: "ok",
+            title: "Refreshed",
+            message: `${clientData.length} client(s) loaded.`,
+          });
       } catch (err) {
         const message = friendlyError(err);
         setError(message);
-        if (manual) toast.push({ tone: "bad", title: "Refresh failed", message });
+        if (manual)
+          toast.push({ tone: "bad", title: "Refresh failed", message });
       } finally {
         setRefreshing(false);
       }
@@ -155,11 +183,17 @@ export default function InquiryClientsPage() {
   }, []);
 
   const allClients = useMemo(() => clients ?? [], [clients]);
-  const registeredCount = useMemo(() => allClients.filter((c) => c.status === "registered").length, [allClients]);
+  const registeredCount = useMemo(
+    () => allClients.filter((c) => c.status === "registered").length,
+    [allClients],
+  );
   const pendingCount = allClients.length - registeredCount;
 
   const allLeads = useMemo(() => leads ?? [], [leads]);
-  const propertyLeadCount = useMemo(() => allLeads.filter((lead) => lead.property_record_id !== null).length, [allLeads]);
+  const propertyLeadCount = useMemo(
+    () => allLeads.filter((lead) => lead.property_record_id !== null).length,
+    [allLeads],
+  );
 
   // Leaving a tab collapses whatever row was open in it — returning later
   // shouldn't dump a visitor straight into detail they already closed.
@@ -179,7 +213,8 @@ export default function InquiryClientsPage() {
     propertyApi
       .getProperty(recordId)
       .then((full) => {
-        if (!cancelled) setPropertyCache((prev) => ({ ...prev, [recordId]: full }));
+        if (!cancelled)
+          setPropertyCache((prev) => ({ ...prev, [recordId]: full }));
       })
       .catch((err) => {
         if (cancelled) return;
@@ -199,7 +234,8 @@ export default function InquiryClientsPage() {
   const visibleClients = useMemo(() => {
     const needle = query.trim().toLowerCase();
     return allClients.filter((client) => {
-      if (statusFilter !== "all" && client.status !== statusFilter) return false;
+      if (statusFilter !== "all" && client.status !== statusFilter)
+        return false;
       if (!needle) return true;
       const haystack = [
         client.name,
@@ -225,9 +261,14 @@ export default function InquiryClientsPage() {
   }
 
   const loading = clients === null && error === null;
-  const statusDisplay = inquiryStatus ? describeInquiryStatus(inquiryStatus.status) : null;
-  const rawStatusNoteTone = statusDisplay ? statusTone(statusDisplay.tone) : "info";
-  const statusNoteTone = rawStatusNoteTone === "neutral" ? "info" : rawStatusNoteTone;
+  const statusDisplay = inquiryStatus
+    ? describeInquiryStatus(inquiryStatus.status)
+    : null;
+  const rawStatusNoteTone = statusDisplay
+    ? statusTone(statusDisplay.tone)
+    : "info";
+  const statusNoteTone =
+    rawStatusNoteTone === "neutral" ? "info" : rawStatusNoteTone;
 
   return (
     <div className="stack stack-5">
@@ -236,23 +277,30 @@ export default function InquiryClientsPage() {
           <div className="section-head__eyebrow">whatsappInquiryHandling</div>
           <h1 className="page-title">Inquiries</h1>
           <p className="section-head__sub">
-            Everyone who's reached out about a property — through the WhatsApp registration form, or by leaving
-            their name and number on the public website. Refreshes automatically.
+            Everyone who's reached out about a property — through the WhatsApp
+            registration form, or by leaving their name and number on the public
+            website. Refreshes automatically.
           </p>
         </div>
         <div className="row-flex">
           <span className="toolbar__meta">
             {refreshing ? (
               <>
-                <span className="spinner" style={{ width: 12, height: 12 }} /> Syncing…
+                <span className="spinner" style={{ width: 12, height: 12 }} />{" "}
+                Syncing…
               </>
             ) : lastUpdated ? (
               <>
-                <span className="badge__dot" style={{ color: "var(--ok)" }} /> Updated {relativeTime(lastUpdated)}
+                <span className="badge__dot" style={{ color: "var(--ok)" }} />{" "}
+                Updated {relativeTime(lastUpdated)}
               </>
             ) : null}
           </span>
-          <Button icon={<IconRefresh size={15} />} onClick={() => load(true)} busy={refreshing}>
+          <Button
+            icon={<IconRefresh size={15} />}
+            onClick={() => load(true)}
+            busy={refreshing}
+          >
             Refresh
           </Button>
         </div>
@@ -263,8 +311,14 @@ export default function InquiryClientsPage() {
         value={source}
         onChange={setSource}
         options={[
-          { value: "form", label: `Form Enquiries${allClients.length ? ` (${allClients.length})` : ""}` },
-          { value: "property", label: `Property Interest${allLeads.length ? ` (${allLeads.length})` : ""}` },
+          {
+            value: "form",
+            label: `Form Enquiries${allClients.length ? ` (${allClients.length})` : ""}`,
+          },
+          {
+            value: "property",
+            label: `Property Interest${allLeads.length ? ` (${allLeads.length})` : ""}`,
+          },
         ]}
       />
 
@@ -272,7 +326,10 @@ export default function InquiryClientsPage() {
         <>
           {waitingForQr ? (
             <Panel className="stack stack-4">
-              <div className="section-head__eyebrow" style={{ marginBottom: 0 }}>
+              <div
+                className="section-head__eyebrow"
+                style={{ marginBottom: 0 }}
+              >
                 Pair the inquiry-handling WhatsApp account
               </div>
               <div className="stack stack-4" style={{ alignItems: "center" }}>
@@ -290,12 +347,20 @@ export default function InquiryClientsPage() {
                   </div>
                 ) : (
                   <div className="qr-skeleton">
-                    <span className="spinner" style={{ width: 22, height: 22 }} />
+                    <span
+                      className="spinner"
+                      style={{ width: 22, height: 22 }}
+                    />
                     <span>Waiting for WhatsApp to generate a code…</span>
                   </div>
                 )}
-                <ol className="stack stack-2 small muted" style={{ margin: 0, paddingLeft: 18 }}>
-                  <li>Open WhatsApp on the phone that should handle inquiries.</li>
+                <ol
+                  className="stack stack-2 small muted"
+                  style={{ margin: 0, paddingLeft: 18 }}
+                >
+                  <li>
+                    Open WhatsApp on the phone that should handle inquiries.
+                  </li>
                   <li>
                     Go to <strong>Settings → Linked devices</strong>.
                   </li>
@@ -304,21 +369,23 @@ export default function InquiryClientsPage() {
                   </li>
                 </ol>
                 <p className="faint small" style={{ textAlign: "center" }}>
-                  This pairs a second, independent linked device from the Connection page's WhatsApp account —
-                  pairing one never affects the other. The code refreshes automatically; you never need to reload
-                  the page.
+                  This pairs a second, independent linked device from the
+                  Connection page's WhatsApp account — pairing one never affects
+                  the other. The code refreshes automatically; you never need to
+                  reload the page.
                 </p>
               </div>
             </Panel>
           ) : (
             statusDisplay && (
               <Note tone={statusNoteTone} icon={<IconMessage size={16} />}>
-                <strong>Inquiry bot: {statusDisplay.label}.</strong> {statusDisplay.hint}
+                <strong>Inquiry bot: {statusDisplay.label}.</strong>{" "}
+                {statusDisplay.hint}
                 {inquiryStatus && !inquiryStatus.client_database_configured && (
                   <>
                     {" "}
-                    <strong>CLIENT_DATABASE_URL is not set</strong> — client records are in-memory only and will be
-                    lost on restart.
+                    <strong>CLIENT_DATABASE_URL is not set</strong> — client
+                    records are in-memory only and will be lost on restart.
                   </>
                 )}
               </Note>
@@ -327,8 +394,19 @@ export default function InquiryClientsPage() {
 
           {allClients.length > 0 && (
             <div className="stat-grid">
-              <Stat label="Total clients" value={allClients.length} icon={<IconUsers size={13} />} delay={0} />
-              <Stat label="Registered" value={registeredCount} icon={<IconBuilding size={13} />} tone="ok" delay={60} />
+              <Stat
+                label="Total clients"
+                value={allClients.length}
+                icon={<IconUsers size={13} />}
+                delay={0}
+              />
+              <Stat
+                label="Registered"
+                value={registeredCount}
+                icon={<IconBuilding size={13} />}
+                tone="ok"
+                delay={60}
+              />
               <Stat
                 label="Pending registration"
                 value={pendingCount}
@@ -366,7 +444,10 @@ export default function InquiryClientsPage() {
               options={[
                 { value: "all", label: "All" },
                 { value: "registered", label: "Registered" },
-                { value: "pending_registration", label: `Pending${pendingCount ? ` (${pendingCount})` : ""}` },
+                {
+                  value: "pending_registration",
+                  label: `Pending${pendingCount ? ` (${pendingCount})` : ""}`,
+                },
               ]}
             />
 
@@ -379,8 +460,9 @@ export default function InquiryClientsPage() {
 
           {error && (
             <Note tone="bad" icon={<IconAlert size={17} />}>
-              <strong>Backend unreachable.</strong> {error} — the last loaded data is still shown below, and polling
-              continues in the background.
+              <strong>Backend unreachable.</strong> {error} — the last loaded
+              data is still shown below, and polling continues in the
+              background.
             </Note>
           )}
 
@@ -416,14 +498,87 @@ export default function InquiryClientsPage() {
             </Panel>
           )}
 
-      {visibleClients.length > 0 && (
-        <ClientTable
-          clients={visibleClients}
-          query={query}
-          expandedPhone={expandedPhone}
-          setExpandedPhone={setExpandedPhone}
-          freshPhones={freshPhones}
-        />
+          {visibleClients.length > 0 && (
+            <ClientTable
+              clients={visibleClients}
+              query={query}
+              expandedPhone={expandedPhone}
+              setExpandedPhone={setExpandedPhone}
+              freshPhones={freshPhones}
+              onViewMatches={(phone) =>
+                navigate(`/inquiries/${encodeURIComponent(phone)}/matches`)
+              }
+            />
+          )}
+        </>
+      )}
+
+      {source === "property" && (
+        <>
+          {allLeads.length > 0 && (
+            <div className="stat-grid">
+              <Stat
+                label="Total enquiries"
+                value={allLeads.length}
+                icon={<IconUsers size={13} />}
+                delay={0}
+              />
+              <Stat
+                label="About a specific property"
+                value={propertyLeadCount}
+                icon={<IconBuilding size={13} />}
+                tone="ok"
+                delay={60}
+              />
+              {propertyLeadCount < allLeads.length && (
+                <Stat
+                  label="General (Contact section)"
+                  value={allLeads.length - propertyLeadCount}
+                  icon={<IconMessage size={13} />}
+                  delay={120}
+                />
+              )}
+            </div>
+          )}
+
+          {error && (
+            <Note tone="bad" icon={<IconAlert size={17} />}>
+              <strong>Backend unreachable.</strong> {error} — the last loaded
+              data is still shown below, and polling continues in the
+              background.
+            </Note>
+          )}
+
+          {loading && (
+            <Panel>
+              <div className="stack stack-3">
+                <div className="row-flex faint small">
+                  <span className="spinner" /> Loading website enquiries…
+                </div>
+                <SkeletonRows rows={6} />
+              </div>
+            </Panel>
+          )}
+
+          {leads !== null && allLeads.length === 0 && (
+            <Panel>
+              <EmptyState
+                icon={<IconInbox size={38} />}
+                title="No website enquiries yet"
+                body="Leads appear here the moment someone leaves their name and WhatsApp number on the public landing page — either from a property's own page, or the home page's Contact section."
+              />
+            </Panel>
+          )}
+
+          {allLeads.length > 0 && (
+            <LeadTable
+              leads={allLeads}
+              propertyCache={propertyCache}
+              expandedLeadId={expandedLeadId}
+              setExpandedLeadId={setExpandedLeadId}
+            />
+          )}
+        </>
       )}
     </div>
   );
@@ -469,13 +624,19 @@ function ClientTable({
               return (
                 <Fragment key={client.phone}>
                   <tr
-                    className={["row", isExpanded && "row--open", freshPhones.has(client.phone) && "row--new"]
+                    className={[
+                      "row",
+                      isExpanded && "row--open",
+                      freshPhones.has(client.phone) && "row--new",
+                    ]
                       .filter(Boolean)
                       .join(" ")}
                     tabIndex={0}
                     role="button"
                     aria-expanded={isExpanded}
-                    onClick={() => setExpandedPhone(isExpanded ? null : client.phone)}
+                    onClick={() =>
+                      setExpandedPhone(isExpanded ? null : client.phone)
+                    }
                     onKeyDown={(event) => {
                       if (event.key === "Enter" || event.key === " ") {
                         event.preventDefault();
@@ -486,7 +647,10 @@ function ClientTable({
                     <td>
                       <ClientStatusBadge client={client} />
                     </td>
-                    <td className="cell-truncate cell-strong" title={client.name ?? undefined}>
+                    <td
+                      className="cell-truncate cell-strong"
+                      title={client.name ?? undefined}
+                    >
                       <Highlight text={client.name ?? "—"} query={query} />
                     </td>
                     <td className="cell-truncate">
@@ -496,19 +660,33 @@ function ClientTable({
                     <td>{client.property_type ?? "—"}</td>
                     <td>{client.bhk ?? "—"}</td>
                     <td className="cell-num" style={{ textAlign: "right" }}>
-                      {formatBudgetRange(client.budget_min_inr, client.budget_max_inr)}
+                      {formatBudgetRange(
+                        client.budget_min_inr,
+                        client.budget_max_inr,
+                      )}
                     </td>
-                    <td className="cell-truncate" title={client.preferred_areas ?? undefined}>
-                      <Highlight text={client.preferred_areas ?? "—"} query={query} />
+                    <td
+                      className="cell-truncate"
+                      title={client.preferred_areas ?? undefined}
+                    >
+                      <Highlight
+                        text={client.preferred_areas ?? "—"}
+                        query={query}
+                      />
                     </td>
                     <td className="cell-num" style={{ whiteSpace: "nowrap" }}>
-                      {client.updated_at ? relativeTime(new Date(client.updated_at)) : "—"}
+                      {client.updated_at
+                        ? relativeTime(new Date(client.updated_at))
+                        : "—"}
                     </td>
                   </tr>
                   {isExpanded && (
                     <tr>
                       <td className="detail-cell" colSpan={9}>
-                        <ClientDetail client={client} onViewMatches={onViewMatches} />
+                        <ClientDetail
+                          client={client}
+                          onViewMatches={onViewMatches}
+                        />
                       </td>
                     </tr>
                   )}
@@ -524,7 +702,13 @@ function ClientTable({
 
 /* ----------------------------------------------------------------- detail */
 
-function ClientDetail({ client, onViewMatches }: { client: InquiryClientRecord; onViewMatches: (phone: string) => void }) {
+function ClientDetail({
+  client,
+  onViewMatches,
+}: {
+  client: InquiryClientRecord;
+  onViewMatches: (phone: string) => void;
+}) {
   return (
     <div className="detail">
       <div className="row-flex" style={{ justifyContent: "flex-end" }}>
@@ -543,7 +727,8 @@ function ClientDetail({ client, onViewMatches }: { client: InquiryClientRecord; 
 
       {client.pending_action && (
         <Note tone="info" icon={<IconClock size={16} />}>
-          Waiting on this client: <strong>{client.pending_action.replace(/_/g, " ")}</strong>
+          Waiting on this client:{" "}
+          <strong>{client.pending_action.replace(/_/g, " ")}</strong>
         </Note>
       )}
 
@@ -564,10 +749,16 @@ function ClientDetail({ client, onViewMatches }: { client: InquiryClientRecord; 
         <div className="detail__block">
           <div className="detail__k">Timeline</div>
           <div className="detail__v">
-            First contacted {client.created_at ? relativeTime(new Date(client.created_at)) : "—"}
+            First contacted{" "}
+            {client.created_at
+              ? relativeTime(new Date(client.created_at))
+              : "—"}
           </div>
           <div className="faint small" style={{ marginTop: 4 }}>
-            Last updated {client.updated_at ? relativeTime(new Date(client.updated_at)) : "—"}
+            Last updated{" "}
+            {client.updated_at
+              ? relativeTime(new Date(client.updated_at))
+              : "—"}
           </div>
         </div>
 
@@ -576,7 +767,9 @@ function ClientDetail({ client, onViewMatches }: { client: InquiryClientRecord; 
             <div className="detail__k">
               <IconPin size={11} /> Budget
             </div>
-            <div className="detail__v">{formatBudgetRange(client.budget_min_inr, client.budget_max_inr)}</div>
+            <div className="detail__v">
+              {formatBudgetRange(client.budget_min_inr, client.budget_max_inr)}
+            </div>
           </div>
         )}
 
@@ -603,7 +796,10 @@ function ClientDetail({ client, onViewMatches }: { client: InquiryClientRecord; 
 function ClientStatusBadge({ client }: { client: InquiryClientRecord }) {
   const registered = client.status === "registered";
   return (
-    <Badge tone={registered ? "ok" : "warn"} title={client.pending_action ?? undefined}>
+    <Badge
+      tone={registered ? "ok" : "warn"}
+      title={client.pending_action ?? undefined}
+    >
       {registered ? "Registered" : "Pending"}
     </Badge>
   );
@@ -611,7 +807,8 @@ function ClientStatusBadge({ client }: { client: InquiryClientRecord }) {
 
 function formatBudgetRange(min: number | null, max: number | null): string {
   if (min === null && max === null) return "—";
-  if (min !== null && max !== null) return `${formatCompactInr(min)} – ${formatCompactInr(max)}`;
+  if (min !== null && max !== null)
+    return `${formatCompactInr(min)} – ${formatCompactInr(max)}`;
   if (min !== null) return `${formatCompactInr(min)}+`;
   return `Up to ${formatCompactInr(max as number)}`;
 }
@@ -657,16 +854,24 @@ function LeadTable({
               // flight) — kept distinct from `null` ("fetched, gone") so
               // the detail below can show a loading state instead of
               // flashing "no longer available" first.
-              const propertyState = lead.property_record_id ? propertyCache[lead.property_record_id] : null;
-              const propertyLoading = Boolean(lead.property_record_id) && !(lead.property_record_id! in propertyCache);
+              const propertyState = lead.property_record_id
+                ? propertyCache[lead.property_record_id]
+                : null;
+              const propertyLoading =
+                Boolean(lead.property_record_id) &&
+                !(lead.property_record_id! in propertyCache);
               return (
                 <Fragment key={lead.lead_id}>
                   <tr
-                    className={["row", isExpanded && "row--open"].filter(Boolean).join(" ")}
+                    className={["row", isExpanded && "row--open"]
+                      .filter(Boolean)
+                      .join(" ")}
                     tabIndex={0}
                     role="button"
                     aria-expanded={isExpanded}
-                    onClick={() => setExpandedLeadId(isExpanded ? null : lead.lead_id)}
+                    onClick={() =>
+                      setExpandedLeadId(isExpanded ? null : lead.lead_id)
+                    }
                     onKeyDown={(event) => {
                       if (event.key === "Enter" || event.key === " ") {
                         event.preventDefault();
@@ -678,17 +883,28 @@ function LeadTable({
                     <td className="cell-truncate">
                       <Copyable text={lead.whatsapp_number} />
                     </td>
-                    <td className="cell-truncate" title={lead.property_label ?? undefined}>
-                      {lead.property_label ?? <span className="faint">General enquiry</span>}
+                    <td
+                      className="cell-truncate"
+                      title={lead.property_label ?? undefined}
+                    >
+                      {lead.property_label ?? (
+                        <span className="faint">General enquiry</span>
+                      )}
                     </td>
                     <td className="cell-num" style={{ whiteSpace: "nowrap" }}>
-                      {lead.created_at ? relativeTime(new Date(lead.created_at)) : "—"}
+                      {lead.created_at
+                        ? relativeTime(new Date(lead.created_at))
+                        : "—"}
                     </td>
                   </tr>
                   {isExpanded && (
                     <tr>
                       <td className="detail-cell" colSpan={4}>
-                        <LeadDetail lead={lead} property={propertyState} loading={propertyLoading} />
+                        <LeadDetail
+                          lead={lead}
+                          property={propertyState}
+                          loading={propertyLoading}
+                        />
                       </td>
                     </tr>
                   )}
@@ -729,9 +945,14 @@ function LeadDetail({
 
         <div className="detail__block">
           <div className="detail__k">Submitted</div>
-          <div className="detail__v">{lead.created_at ? relativeTime(new Date(lead.created_at)) : "—"}</div>
+          <div className="detail__v">
+            {lead.created_at ? relativeTime(new Date(lead.created_at)) : "—"}
+          </div>
           <div className="faint small" style={{ marginTop: 4 }}>
-            From the public website — {lead.property_record_id ? "a property page" : "the Contact section"}
+            From the public website —{" "}
+            {lead.property_record_id
+              ? "a property page"
+              : "the Contact section"}
           </div>
         </div>
       </div>
@@ -741,17 +962,20 @@ function LeadDetail({
           <PropertySummaryBlock property={property} />
         ) : loading ? (
           <div className="row-flex faint small">
-            <span className="spinner" style={{ width: 12, height: 12 }} /> Loading property…
+            <span className="spinner" style={{ width: 12, height: 12 }} />{" "}
+            Loading property…
           </div>
         ) : (
           <Note tone="warn" icon={<IconAlert size={16} />}>
-            <strong>That property is no longer available.</strong> They enquired about "
-            {lead.property_label ?? "a property"}", which has since been edited, unpublished, or deleted.
+            <strong>That property is no longer available.</strong> They enquired
+            about "{lead.property_label ?? "a property"}", which has since been
+            edited, unpublished, or deleted.
           </Note>
         )
       ) : (
         <Note tone="info" icon={<IconMessage size={16} />}>
-          Submitted from the site's general Contact section — not tied to any one listing.
+          Submitted from the site's general Contact section — not tied to any
+          one listing.
         </Note>
       )}
     </div>
@@ -765,7 +989,9 @@ function LeadDetail({
  * it's the client's own team looking, not a stranger).
  */
 function PropertySummaryBlock({ property }: { property: PropertyRecord }) {
-  const location = [property.area_name, property.address].filter(Boolean).join(" · ");
+  const location = [property.area_name, property.address]
+    .filter(Boolean)
+    .join(" · ");
 
   return (
     <div className="stack stack-3">
@@ -775,7 +1001,10 @@ function PropertySummaryBlock({ property }: { property: PropertyRecord }) {
         <div className="detail__gallery">
           {property.image_urls.map((src, index) => (
             <div key={index} className="detail__photo">
-              <img src={src} alt={`${property.society_name ?? "Property"} photo ${index + 1}`} />
+              <img
+                src={src}
+                alt={`${property.society_name ?? "Property"} photo ${index + 1}`}
+              />
             </div>
           ))}
         </div>
@@ -784,7 +1013,10 @@ function PropertySummaryBlock({ property }: { property: PropertyRecord }) {
       <div className="detail__grid">
         <div className="detail__block">
           <div className="detail__k">Listing</div>
-          <div className="detail__v">{[property.bhk, property.property_type].filter(Boolean).join(" ") || "—"}</div>
+          <div className="detail__v">
+            {[property.bhk, property.property_type].filter(Boolean).join(" ") ||
+              "—"}
+          </div>
           <div className="faint small" style={{ marginTop: 4 }}>
             {property.society_name ?? property.area_name ?? "—"}
           </div>
@@ -792,15 +1024,24 @@ function PropertySummaryBlock({ property }: { property: PropertyRecord }) {
 
         <div className="detail__block">
           <div className="detail__k">Price</div>
-          <div className="detail__v">{formatPrice(property.price_text, property.price_amount_inr)}</div>
+          <div className="detail__v">
+            {formatPrice(property.price_text, property.price_amount_inr)}
+          </div>
           <div style={{ marginTop: 6 }}>
-            <Badge tone={property.listing_type === "Rent" ? "info" : "ok"}>{property.listing_type}</Badge>
+            <Badge tone={property.listing_type === "Rent" ? "info" : "ok"}>
+              {property.listing_type}
+            </Badge>
           </div>
         </div>
 
         <div className="detail__block">
           <div className="detail__k">Carpet area</div>
-          <div className="detail__v">{formatCarpetArea(property.carpet_area_sqft, property.carpet_area_unit)}</div>
+          <div className="detail__v">
+            {formatCarpetArea(
+              property.carpet_area_sqft,
+              property.carpet_area_unit,
+            )}
+          </div>
         </div>
 
         {location && (

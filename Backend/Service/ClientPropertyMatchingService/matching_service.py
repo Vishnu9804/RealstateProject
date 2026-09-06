@@ -14,7 +14,7 @@ together into the two operations the Controller layer needs:
 
 Mirrors Service/WhatsAppDataFetchingService/property_vector_store.py's
 in-memory-fallback-vs-Postgres split, so this feature behaves the same way
-with or without CLIENT_DATABASE_URL configured, like every other feature
+with or without DATABASE_URL configured, like every other feature
 here.
 """
 
@@ -54,7 +54,7 @@ _REQUIREMENT_FIELDS = (
 # grows well past this.
 _MAX_PROPERTIES_SCORED = 5000
 
-# In-memory fallback only — untouched whenever CLIENT_DATABASE_URL is set.
+# In-memory fallback only — untouched whenever DATABASE_URL is set.
 _score_cache: Dict[str, List[MatchScore]] = {}
 _computed_at_cache: Dict[str, datetime] = {}
 

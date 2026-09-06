@@ -1,6 +1,6 @@
 """Postgres implementation of the match-score cache — the production
 backend behind Service/ClientPropertyMatchingService/matching_service.py
-once CLIENT_DATABASE_URL is set. In-memory fallback lives in
+once DATABASE_URL is set. In-memory fallback lives in
 matching_service.py itself, the same split every other feature's store
 uses (see Service/WhatsAppDataFetchingService/property_vector_store.py).
 """

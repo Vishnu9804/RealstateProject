@@ -1,4 +1,8 @@
-"""SQLAlchemy engine/session setup for the Postgres + pgvector database.
+"""SQLAlchemy engine/session setup for the single Postgres + pgvector
+database the whole app shares — both the property-listing tables
+(whatsappDataFetching) and the client-records tables (whatsappInquiryHandling,
+see Database/client_session.py, which reuses this module's engine/session
+rather than opening a second connection to the same database).
 
 Only initializes when Config.settings.database_url is set. Until the final
 "connect the database" step, DATABASE_URL is intentionally empty — every
@@ -85,9 +89,24 @@ def get_session() -> Iterator[Session]:
 
 def init_db() -> None:
     """Enables the pgvector extension and creates any tables that don't
-    already exist. Safe to call on every startup — a no-op once the schema
-    is in place. Only called when is_database_configured() is True (see
-    main.py's lifespan).
+    already exist — for BOTH features that use this database: the
+    property-listing tables (Database/models.py, Database/landing_page_models.py)
+    and the client-records tables (Database/client_models.py,
+    Database/client_property_match_models.py, owned by whatsappInquiryHandling).
+    Safe to call on every startup — a no-op once the schema is in place.
+    Only called when is_database_configured() is True (see main.py's
+    lifespan).
+
+    This is deliberately the ONLY place in the project that runs
+    CREATE EXTENSION / create_all / these ALTER TABLE statements. It used to
+    be split across this module and Database/client_session.py, each opening
+    its own connection and running its own `CREATE EXTENSION IF NOT EXISTS
+    vector` — since both pointed at the same physical database and were
+    kicked off concurrently (main.py's lifespan), Postgres's IF NOT EXISTS
+    check isn't safe against true concurrency, so one of the two would
+    intermittently lose a race and raise a duplicate-key error on a fresh
+    database. Running everything from one function, sequentially, removes
+    the race by construction rather than by catching the error.
 
     create_all only creates whole tables that are missing — it never adds a
     column to a `properties` table that already exists from a previous
@@ -106,10 +125,24 @@ def init_db() -> None:
     # so without this line that table is silently never created.
     from Database import landing_page_models  # noqa: F401
 
+    # Same import-for-side-effect reasoning, for the client-records tables:
+    # ClientBase is a second declarative base (kept separate from Base so
+    # the two features' models can never accidentally collide), but both
+    # sets of tables live in this same database and are created here, in
+    # this one function, so table creation never has a second call site.
+    from Database.client_models import ClientBase
+    from Database.client_property_match_models import ClientPropertyMatchRow  # noqa: F401
+    from Service.WhatsAppDataFetchingService.embedding_service import EMBEDDING_DIMENSIONS
+
     engine = _get_engine()
     with engine.begin() as connection:
         connection.execute(text("CREATE EXTENSION IF NOT EXISTS vector"))
     Base.metadata.create_all(engine)
+    ClientBase.metadata.create_all(engine)
+    with engine.begin() as connection:
+        connection.execute(
+            text(f"ALTER TABLE clients ADD COLUMN IF NOT EXISTS requirement_embedding vector({EMBEDDING_DIMENSIONS})")
+        )
     with engine.begin() as connection:
         connection.execute(text("ALTER TABLE properties ADD COLUMN IF NOT EXISTS price_per_unit_text VARCHAR"))
         connection.execute(

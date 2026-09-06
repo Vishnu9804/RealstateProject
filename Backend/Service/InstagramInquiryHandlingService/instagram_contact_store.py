@@ -2,9 +2,9 @@
 WhatsAppInquiryHandlingService/client_store.py's role and shape exactly.
 Callers never know or care which backend is active underneath:
 
-  - CLIENT_DATABASE_URL unset: falls back to an in-memory dict, keyed by
+  - DATABASE_URL unset: falls back to an in-memory dict, keyed by
     Instagram user id.
-  - CLIENT_DATABASE_URL set: delegates to Database/instagram_contact_repository.py.
+  - DATABASE_URL set: delegates to Database/instagram_contact_repository.py.
 
 Also owns the processed-event idempotency guard (is_event_processed/
 mark_event_processed) — small enough, and tied closely enough to the same

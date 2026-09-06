@@ -6,9 +6,8 @@ module docstring).
 
 Uses the SAME ClientBase/engine as Database/client_models.py rather than a
 third connection pool: this table is phone-keyed and always queried
-alongside `clients`, and both already live in the identical Neon database
-(Config/settings.py's client_database_url is, in practice, the same
-connection string as database_url) — a third engine here would just be
+alongside `clients`, and both already live in the one shared database
+(Config/settings.py's database_url) — a third engine here would just be
 another pool to the same Postgres instance for no benefit.
 
 Only score data is stored here — never the matched property's own display

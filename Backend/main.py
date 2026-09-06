@@ -85,7 +85,6 @@ from Controller.WhatsAppInquiryHandlingController.whatsapp_inquiry_controller im
 from Controller.InstagramInquiryHandlingController.instagram_controller import router as instagram_router
 from Controller.LandingPageController.landing_page_controller import router as landing_page_router
 from Config.settings import get_settings
-from Database.client_session import init_client_db, is_client_database_configured
 from Database.session import init_db, is_database_configured
 from Middleware.logging_config import configure_logging
 from Middleware import step_logger
@@ -96,7 +95,11 @@ from Service.InstagramInquiryHandlingService import instagram_connection_service
 configure_logging()
 
 
-async def _init_property_database() -> None:
+async def _init_database() -> None:
+    """Single init path for the one shared database — see
+    Database/session.py's init_db() docstring for why property tables and
+    client-records tables are created from that one function rather than
+    two independent ones running concurrently."""
     if is_database_configured():
         step_logger.step(
             "DATABASE_URL is set — initializing the database and loading saved settings... "
@@ -104,62 +107,45 @@ async def _init_property_database() -> None:
             "genuinely take a couple of minutes on this first connection — that's normal, not a freeze)"
         )
         # to_thread, not a direct call: these are blocking network calls, and
-        # running them on the event loop thread would stall the OTHER
-        # database's init below from making any progress until this one
-        # finished — exactly the sequential wait this is meant to avoid.
+        # running them on the event loop thread would stall the heartbeat
+        # task below from ever getting a turn to print its reassurance line.
         await asyncio.to_thread(init_db)
         await asyncio.to_thread(area_filter_service.load_from_database)
         await asyncio.to_thread(display_settings_service.load_from_database)
         await asyncio.to_thread(duplicate_detection_service.load_from_database)
         await asyncio.to_thread(instagram_connection_service.load_from_database)
-        step_logger.success("Database ready — properties and settings will persist across restarts.")
+        step_logger.success(
+            "Database ready — properties, client records, and settings will persist across restarts."
+        )
     else:
         step_logger.info(
             "DATABASE_URL is not set — running with in-memory storage only. Nothing is lost while the "
-            "server stays up, but properties and settings reset on restart until a database is connected."
-        )
-
-
-async def _init_client_database() -> None:
-    if is_client_database_configured():
-        step_logger.step(
-            "CLIENT_DATABASE_URL is set — initializing the client database... "
-            "(same possible multi-minute cold-start wait as the property database, if it's a "
-            "separate idle Neon branch — running concurrently with it, not waiting for it first)"
-        )
-        await asyncio.to_thread(init_client_db)
-        step_logger.success("Client database ready — inquiry-handling client records will persist across restarts.")
-    else:
-        step_logger.info(
-            "CLIENT_DATABASE_URL is not set — whatsappInquiryHandling client records will use in-memory "
-            "storage only until it's configured."
+            "server stays up, but properties, client records, and settings reset on restart until a "
+            "database is connected."
         )
 
 
 async def _startup_heartbeat() -> None:
-    """The database init below can go up to ~60-120s with zero output on a
-    cold Neon compute (see the STEP 1/2 log lines) — from the terminal that
+    """The database init above can go up to ~60-120s with zero output on a
+    cold Neon compute (see the STEP 1 log line) — from the terminal that
     looks identical to a frozen process. This purely prints a reassurance
     line every 15s while that wait is in progress; it does not touch the
-    init logic itself and is cancelled the instant both databases are ready."""
+    init logic itself and is cancelled the instant the database is ready."""
     elapsed = 0
     while True:
         await asyncio.sleep(15)
         elapsed += 15
         step_logger.info(
-            f"Still waiting on the database connection(s)... ({elapsed}s elapsed — "
+            f"Still waiting on the database connection... ({elapsed}s elapsed — "
             "this is expected on a cold Neon start, the process is not frozen)"
         )
 
 
 @asynccontextmanager
 async def lifespan(_app: FastAPI):
-    # Two independent Neon databases — each can have its own multi-minute
-    # cold-start delay if idle. Running them concurrently means the total
-    # wait is whichever one is slower, not both added together.
     heartbeat = asyncio.create_task(_startup_heartbeat())
     try:
-        await asyncio.gather(_init_property_database(), _init_client_database())
+        await _init_database()
     finally:
         heartbeat.cancel()
 

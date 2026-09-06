@@ -45,12 +45,17 @@ class Settings(BaseSettings):
     # stage (Agent/WhatsAppDataFetchingAgent/property_structurer.py).
     gemini_api_key: str = ""
     gemini_model: str = "gemini-2.5-flash-lite"
+    # Single Postgres+pgvector database for the whole app — both the
+    # property-listing data (whatsappDataFetching) and the client records
+    # (whatsappInquiryHandling, Database/client_session.py) live in this one
+    # database, under separate tables. There used to be a second
+    # `client_database_url` variable here, but it was always set to the
+    # same connection string in practice; keeping two names for one value
+    # only invited them to drift apart, and having two code paths open two
+    # connections to the same database at startup was the direct cause of a
+    # race condition creating the pgvector extension. See Database/session.py's
+    # init_db() — the single place all tables (both features') are created.
     database_url: str = ""
-    # Separate Neon Postgres database for whatsappInquiryHandling's client
-    # records (Database/client_session.py) — deliberately independent from
-    # `database_url` above (the property-listing database used by
-    # whatsappDataFetching), so the two features' data can never collide.
-    client_database_url: str = ""
     # Has a working default so `.env` only needs the two secrets above —
     # override with a ZAI_MODEL env var if a different model is wanted.
     # Switched from Gemini to GLM-4.7-FlashX (Z.ai) — meaningfully cheaper

@@ -1,6 +1,6 @@
 """Postgres implementation of the client store — the production backend
 behind Service/WhatsAppInquiryHandlingService/client_store.py once
-CLIENT_DATABASE_URL is set. Same contract as the in-memory version it sits
+DATABASE_URL is set. Same contract as the in-memory version it sits
 alongside: get_client_by_phone, upsert_client, get_all_clients,
 get_client_count. Callers never call this module directly.
 """

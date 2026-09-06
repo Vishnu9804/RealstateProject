@@ -1,6 +1,6 @@
 """Postgres implementation of the Instagram-contact store — the production
 backend behind Service/InstagramInquiryHandlingService/instagram_contact_store.py
-once CLIENT_DATABASE_URL is set. Mirrors Database/client_repository.py's
+once DATABASE_URL is set. Mirrors Database/client_repository.py's
 shape exactly (get_by_id, upsert, get_all, count), plus a small,
 independent set of functions for InstagramProcessedEventRow — the polling
 service's idempotency guard, unrelated to any one contact.

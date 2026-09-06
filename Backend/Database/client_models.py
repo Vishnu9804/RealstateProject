@@ -1,10 +1,10 @@
-"""SQLAlchemy ORM model for the separate client database (Neon Postgres) —
-whatsappInquiryHandling's own database, distinct from the property-listing
-database used by whatsappDataFetching (Database/models.py,
-Database/session.py). A dedicated Base/engine/session (see
-client_session.py) rather than reusing the existing ones, precisely so this
-feature's data — and any future schema changes to it — can never collide
-with or be affected by the property pipeline's database.
+"""SQLAlchemy ORM model for whatsappInquiryHandling's client-records tables —
+these live in the same Postgres database as the property-listing tables
+(Database/models.py), but under a dedicated declarative Base (see
+client_session.py, which reuses Database/session.py's engine/session rather
+than opening a second connection) precisely so this feature's tables — and
+any future schema changes to them — can never collide with the property
+pipeline's own models.
 
 Field list is a reasonable starting point for "client info + property
 requirements" per the feature spec; it will very likely grow once the

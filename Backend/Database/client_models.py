@@ -73,6 +73,22 @@ class ClientRow(ClientBase):
     preferred_areas: Mapped[Optional[str]] = mapped_column(String, nullable=True)
     additional_requirements: Mapped[Optional[str]] = mapped_column(Text, nullable=True)
 
+    # --- AgentManagement feature ---
+    # Not a real FK to `agents` — set only after Service/AgentManagementService/
+    # agent_store.py's create_agent has already run, but kept as a loose
+    # string reference the same way client_property_matches.property_record_id
+    # references a row in the OTHER declarative base (Database/models.py) —
+    # here both tables share ClientBase, a real ForeignKey would work, but a
+    # loose reference is what this codebase already does for "the assigned
+    # thing might not exist anymore" fields, and an agent being deleted must
+    # never be able to fail a client write. None means "no agent assigned yet".
+    assigned_agent_id: Mapped[Optional[str]] = mapped_column(String, nullable=True)
+    # Set once the "Send both on WhatsApp" hand-off action actually fires
+    # (see Service/WhatsAppInquiryHandlingService/client_store.py's
+    # mark_handoff_sent) — audit trail for "was this client's site-visit
+    # hand-off message ever sent", not touched by anything else.
+    handoff_sent_at: Mapped[Optional[datetime]] = mapped_column(DateTime(timezone=True), nullable=True)
+
     # --- Client-Property Matching feature ---
     # The SAME embedding model/process as PropertyRow.embedding
     # (Database/models.py) — see Service/WhatsAppDataFetchingService/

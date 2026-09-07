@@ -7,6 +7,7 @@ as every other controller in this project.
 from fastapi import APIRouter, HTTPException
 
 from Model.ClientPropertyMatchingModel.client_match_result import ClientMatchResult
+from Model.ClientPropertyMatchingModel.match_counts import MatchCounts
 from Service.ClientPropertyMatchingService import matching_service
 
 router = APIRouter(prefix="/matching", tags=["matching"])
@@ -21,6 +22,14 @@ def get_client_matches(phone: str) -> ClientMatchResult:
     if result is None:
         raise HTTPException(status_code=404, detail="Client not found")
     return result
+
+
+@router.get("/clients/{phone}/counts", response_model=MatchCounts)
+def get_client_match_counts(phone: str) -> MatchCounts:
+    """AgentManagement feature: cheap per-bucket counts for the Inquiries
+    table's Matches column — see matching_service.get_match_counts for why
+    this exists separately from get_client_matches above."""
+    return MatchCounts(**matching_service.get_match_counts(phone))
 
 
 @router.post("/clients/{phone}/recompute", response_model=ClientMatchResult)

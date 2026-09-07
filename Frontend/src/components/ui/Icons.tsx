@@ -262,6 +262,25 @@ export const IconImage = svg(
   </>,
 );
 
+/** A single person with a check mark — used only for the Agents nav tab,
+ *  distinct from IconUsers (the group icon "Inquiries" already uses). */
+export const IconUserCheck = svg(
+  <>
+    <path d="M13 20v-1.5a4 4 0 0 0-4-4H6a4 4 0 0 0-4 4V20" />
+    <circle cx="7.5" cy="7" r="3.4" />
+    <path d="m16 13.5 2 2 4-4" />
+  </>,
+);
+
+/** A paper airplane — used only for "Send both on WhatsApp" in
+ *  HandoffDialog.tsx. */
+export const IconSend = svg(
+  <>
+    <path d="m21.5 2.5-19 8.3 7.6 3.1" />
+    <path d="M21.5 2.5 15 21.5l-4.9-7.6 11.4-11.4Z" />
+  </>,
+);
+
 export const IconInstagram = svg(
   <>
     <rect x="3" y="3" width="18" height="18" rx="5.5" />

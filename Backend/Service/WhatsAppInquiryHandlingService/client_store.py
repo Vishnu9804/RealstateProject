@@ -15,6 +15,7 @@ client records are held — nothing else keeps a second copy to keep in sync.
 
 from __future__ import annotations
 
+from datetime import datetime, timezone
 from typing import Dict, List, Optional
 
 from Database import client_repository
@@ -75,3 +76,25 @@ def get_client_count() -> int:
     if is_client_database_configured():
         return client_repository.get_client_count()
     return len(_clients)
+
+
+def assign_agent(phone: str, agent_id: Optional[str]) -> Optional[ClientRecord]:
+    """AgentManagement feature: sets (or clears, with agent_id=None) which
+    agent is handling this client's site visit. Goes through upsert_client
+    like every other client write — assigned_agent_id isn't one of the
+    requirement fields upsert_client checks, so this never triggers a
+    pointless Client-Property Matching recompute."""
+    record = get_client_by_phone(phone)
+    if record is None:
+        return None
+    return upsert_client(record.model_copy(update={"assigned_agent_id": agent_id}))
+
+
+def mark_handoff_sent(phone: str) -> Optional[ClientRecord]:
+    """AgentManagement feature: records that the "Send both on WhatsApp"
+    hand-off action fired for this client — an audit trail, not a trigger
+    for anything else."""
+    record = get_client_by_phone(phone)
+    if record is None:
+        return None
+    return upsert_client(record.model_copy(update={"handoff_sent_at": datetime.now(timezone.utc)}))

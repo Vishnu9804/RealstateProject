@@ -308,7 +308,38 @@
 .badge--warn { color: var(--warn); border-color: color-mix(in oklab, var(--warn) 38%, transparent); background: color-mix(in oklab, var(--warn) 13%, transparent); }
 .badge--bad  { color: var(--bad);  border-color: color-mix(in oklab, var(--bad) 36%, transparent);  background: color-mix(in oklab, var(--bad) 12%, transparent); }
 .badge--info { color: var(--info); border-color: color-mix(in oklab, var(--info) 34%, transparent); background: color-mix(in oklab, var(--info) 12%, transparent); }
+.badge--accent { color: var(--accent); border-color: color-mix(in oklab, var(--accent) 34%, transparent); background: color-mix(in oklab, var(--accent) 12%, transparent); }
 .badge--live .badge__dot { animation: breathe 1.8s var(--ease-in-out) infinite; }
+
+/* ---- avatar ------------------------------------------------------------ */
+.avatar {
+  display: inline-flex;
+  align-items: center;
+  justify-content: center;
+  flex: none;
+  border-radius: 50%;
+  font-weight: 700;
+  color: #0b0d16;
+  box-shadow: var(--elev-0);
+}
+
+/* ---- matches pill: AgentManagement feature's "N properties" button ---- */
+.pill-accent {
+  display: inline-flex;
+  align-items: center;
+  gap: 6px;
+  border: none;
+  padding: 5px 12px;
+  border-radius: var(--r-pill);
+  background: var(--accent-gradient);
+  color: #fff;
+  font-size: 12.5px;
+  font-weight: 650;
+  white-space: nowrap;
+  cursor: pointer;
+  transition: transform var(--t-fast) var(--ease-out), box-shadow var(--t-fast) var(--ease-out);
+}
+.pill-accent:hover { transform: translateY(-1px); box-shadow: var(--elev-2); }
 
 .chip {
   display: inline-flex;

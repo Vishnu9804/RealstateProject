@@ -1,11 +1,13 @@
 import { BrowserRouter, Route, Routes } from "react-router-dom";
 import Layout from "./components/Layout";
+import AgentsPage from "./pages/AgentsPage";
 import ClientMatchesPage from "./pages/ClientMatchesPage";
 import ConnectionPage from "./pages/ConnectionPage";
 import DashboardPage from "./pages/DashboardPage";
 import LandingPagePage from "./pages/LandingPagePage";
 import InquiryClientsPage from "./pages/InquiryClientsPage";
 import InquiryFormPage from "./pages/InquiryFormPage";
+import SelectPropertyPage from "./pages/SelectPropertyPage";
 import SettingsPage from "./pages/SettingsPage";
 import { ThemeProvider } from "./components/ui/Theme";
 import { ToastProvider } from "./components/ui/Toast";
@@ -41,6 +43,8 @@ export default function App() {
               <Route path="landing-page" element={<LandingPagePage />} />
               <Route path="inquiries" element={<InquiryClientsPage />} />
               <Route path="inquiries/:phone/matches" element={<ClientMatchesPage />} />
+              <Route path="select-property" element={<SelectPropertyPage />} />
+              <Route path="agents" element={<AgentsPage />} />
               <Route path="settings" element={<SettingsPage />} />
             </Route>
           </Routes>

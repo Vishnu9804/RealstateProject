@@ -106,8 +106,76 @@ export interface InquiryClientRecord {
   budget_max_inr: number | null;
   preferred_areas: string | null;
   additional_requirements: string | null;
+  /** AgentManagement feature — which agent (if any) is handling this
+   *  client's site visit, and whether the WhatsApp hand-off messages were
+   *  ever sent. See Backend/Database/client_models.py's own comment. */
+  assigned_agent_id: string | null;
+  handoff_sent_at: string | null;
   created_at: string | null;
   updated_at: string | null;
+}
+
+/**
+ * Mirrors Backend/Model/AgentManagementModel/agent_record.py — the
+ * AgentManagement feature's field team.
+ */
+export interface AgentRecord {
+  agent_id: string;
+  name: string;
+  phone: string;
+  coverage_areas: string[];
+  monthly_visits: number;
+  created_at: string | null;
+  updated_at: string | null;
+}
+
+/** One of an agent's ACTIVE VISITS — a specific property for a specific
+ *  client, not just "this client". A client with two properties assigned
+ *  to the same agent appears here twice, once per property, since that's
+ *  two site visits to coordinate, not one. */
+export interface AssignedClientSummary {
+  phone: string;
+  name: string | null;
+  budget_min_inr: number | null;
+  budget_max_inr: number | null;
+  property_record_id: string;
+  property_label: string;
+}
+
+/** Mirrors Backend/Model/AgentManagementModel/visit_record.py — one
+ *  completed site visit, a permanent history row (not a mutable status on
+ *  the client). agent_name/client_name/property_label are snapshots taken
+ *  at completion time, so this keeps reading correctly even if that agent
+ *  is later deleted or that client's name is edited. */
+export interface VisitRecord {
+  visit_id: string;
+  agent_id: string;
+  agent_name: string;
+  client_phone: string;
+  client_name: string | null;
+  property_record_id: string | null;
+  property_label: string | null;
+  notes: string | null;
+  completed_at: string | null;
+}
+
+/** What the Agents page actually renders — an AgentRecord plus its active
+ *  visits and completed-visit history, both joined at read time on the
+ *  backend. `active_clients.length` is a real active-VISIT count, not a
+ *  distinct-client count. */
+export interface AgentSummary extends AgentRecord {
+  active_clients: AssignedClientSummary[];
+  completed_visits: VisitRecord[];
+}
+
+/** Mirrors Backend/Model/AgentManagementModel/handoff_templates.py — the
+ *  Settings page's editable WhatsApp hand-off message templates. Tokens
+ *  like "{client_name}" are filled in on the frontend (see
+ *  lib/handoffTemplate.ts) right before sending; the backend only stores
+ *  and returns the raw template text. */
+export interface HandoffTemplates {
+  agent_template: string;
+  client_template: string;
 }
 
 /** Mirrors Backend/Service/WhatsAppInquiryHandlingService/whatsapp_inquiry_service.py's get_status() dict. */
@@ -156,6 +224,15 @@ export interface MatchedProperty {
   description: string | null;
   review_status: "accepted" | "outsider";
   needs_review: boolean;
+}
+
+/** Mirrors Backend/Model/ClientPropertyMatchingModel/match_counts.py —
+ *  the cheap, count-only read used by the Inquiries table's Matches
+ *  column (see matchingApi.getMatchCounts). */
+export interface MatchCounts {
+  high: number;
+  medium: number;
+  low: number;
 }
 
 export interface ClientMatchResult {

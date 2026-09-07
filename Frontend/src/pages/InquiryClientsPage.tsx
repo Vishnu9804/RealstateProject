@@ -10,11 +10,13 @@ import { useNavigate } from "react-router-dom";
 import { ApiError } from "../api/client";
 import { inquiryClientApi } from "../api/inquiryClientApi";
 import { landingLeadApi } from "../api/landingLeadApi";
+import { matchingApi } from "../api/matchingApi";
 import { propertyApi } from "../api/propertyApi";
 import type {
   InquiryClientRecord,
   InquiryStatusResponse,
   LandingLeadRecord,
+  MatchCounts,
   PropertyRecord,
 } from "../api/types";
 import { usePolling } from "../hooks/usePolling";
@@ -48,14 +50,18 @@ import {
   IconClock,
   IconInbox,
   IconMessage,
-  IconArrowRight,
   IconPin,
   IconRefresh,
   IconSearch,
-  IconSparkle,
   IconTag,
   IconUsers,
 } from "../components/ui/Icons";
+
+function pipelineStatus(client: InquiryClientRecord, matchCount: number | null): "assigned" | "matched" | "new" {
+  if (client.assigned_agent_id) return "assigned";
+  if (matchCount !== null && matchCount > 0) return "matched";
+  return "new";
+}
 
 const REFRESH_INTERVAL_MS = 8000;
 const QR_POLL_INTERVAL_MS = 3000;
@@ -101,6 +107,18 @@ export default function InquiryClientsPage() {
   const [propertyCache, setPropertyCache] = useState<
     Record<string, PropertyRecord | null>
   >({});
+
+  // AgentManagement feature: the field team (for the Agent column) and, per
+  // client, the cheap per-bucket match count (for the Matches pill + the
+  // pipeline Status badge) — matchingApi.getMatchCounts, NOT getMatches,
+  // since this runs for every visible client and the full match result
+  // enriches every match with its property's current display fields (an
+  // expensive join this column has no use for). matchResultsUpdatedAt is a
+  // ref, not state — it just remembers which client.updated_at each cached
+  // count was fetched for, so a client whose requirements haven't changed
+  // since is never re-fetched on every 8s poll.
+  const [matchCounts, setMatchCounts] = useState<Record<string, MatchCounts>>({});
+  const matchCountsUpdatedAt = useRef<Record<string, string>>({});
 
   const [qrTick, setQrTick] = useState(0);
   const [qrLoadFailed, setQrLoadFailed] = useState(false);
@@ -253,6 +271,41 @@ export default function InquiryClientsPage() {
       return haystack.includes(needle);
     });
   }, [allClients, query, statusFilter]);
+
+  // AgentManagement feature: fetch (cheap, count-only — see
+  // matchingApi.getMatchCounts) the match count for any client whose
+  // updated_at has moved past what was last fetched for it. Runs once per
+  // load(), not on every render, since matchCountsUpdatedAt is a ref.
+  useEffect(() => {
+    const stale = allClients.filter((c) => matchCountsUpdatedAt.current[c.phone] !== (c.updated_at ?? ""));
+    if (stale.length === 0) return;
+    let cancelled = false;
+    Promise.all(
+      stale.map((c) =>
+        matchingApi
+          .getMatchCounts(c.phone)
+          .then((counts) => ({ phone: c.phone, updatedAt: c.updated_at ?? "", counts }))
+          .catch(() => null),
+      ),
+    ).then((fetched) => {
+      if (cancelled) return;
+      setMatchCounts((prev) => {
+        const next = { ...prev };
+        for (const item of fetched) if (item) next[item.phone] = item.counts;
+        return next;
+      });
+      for (const item of fetched) if (item) matchCountsUpdatedAt.current[item.phone] = item.updatedAt;
+    });
+    return () => {
+      cancelled = true;
+    };
+  }, [allClients]);
+
+  function matchCountFor(phone: string): number | null {
+    const counts = matchCounts[phone];
+    if (!counts) return null;
+    return counts.high + counts.medium + counts.low;
+  }
 
   const filtersActive = query.trim().length > 0 || statusFilter !== "all";
   function resetAll() {
@@ -508,6 +561,7 @@ export default function InquiryClientsPage() {
               onViewMatches={(phone) =>
                 navigate(`/inquiries/${encodeURIComponent(phone)}/matches`)
               }
+              matchCountFor={matchCountFor}
             />
           )}
         </>
@@ -593,6 +647,7 @@ function ClientTable({
   setExpandedPhone,
   freshPhones,
   onViewMatches,
+  matchCountFor,
 }: {
   clients: InquiryClientRecord[];
   query: string;
@@ -600,6 +655,7 @@ function ClientTable({
   setExpandedPhone: (phone: string | null) => void;
   freshPhones: Set<string>;
   onViewMatches: (phone: string) => void;
+  matchCountFor: (phone: string) => number | null;
 }) {
   return (
     <div className="table-frame anim-rise">
@@ -616,6 +672,8 @@ function ClientTable({
               <th style={{ textAlign: "right" }}>Budget</th>
               <th>Areas</th>
               <th>Updated</th>
+              <th>Matches</th>
+              <th>Status</th>
             </tr>
           </thead>
           <tbody>
@@ -679,14 +737,20 @@ function ClientTable({
                         ? relativeTime(new Date(client.updated_at))
                         : "—"}
                     </td>
+                    <td onClick={(event) => event.stopPropagation()}>
+                      <MatchesCell
+                        matchCount={matchCountFor(client.phone)}
+                        onOpen={() => onViewMatches(client.phone)}
+                      />
+                    </td>
+                    <td>
+                      <PipelineStatusBadge status={pipelineStatus(client, matchCountFor(client.phone))} />
+                    </td>
                   </tr>
                   {isExpanded && (
                     <tr>
-                      <td className="detail-cell" colSpan={9}>
-                        <ClientDetail
-                          client={client}
-                          onViewMatches={onViewMatches}
-                        />
+                      <td className="detail-cell" colSpan={11}>
+                        <ClientDetail client={client} />
                       </td>
                     </tr>
                   )}
@@ -702,29 +766,9 @@ function ClientTable({
 
 /* ----------------------------------------------------------------- detail */
 
-function ClientDetail({
-  client,
-  onViewMatches,
-}: {
-  client: InquiryClientRecord;
-  onViewMatches: (phone: string) => void;
-}) {
+function ClientDetail({ client }: { client: InquiryClientRecord }) {
   return (
     <div className="detail">
-      <div className="row-flex" style={{ justifyContent: "flex-end" }}>
-        <Button
-          size="sm"
-          variant="ghost"
-          icon={<IconSparkle size={14} />}
-          onClick={(event) => {
-            event.stopPropagation();
-            onViewMatches(client.phone);
-          }}
-        >
-          View Matches <IconArrowRight size={12} />
-        </Button>
-      </div>
-
       {client.pending_action && (
         <Note tone="info" icon={<IconClock size={16} />}>
           Waiting on this client:{" "}
@@ -791,6 +835,24 @@ function ClientDetail({
       )}
     </div>
   );
+}
+
+/* ---------------------------------------------------- AgentManagement UI */
+
+function MatchesCell({ matchCount, onOpen }: { matchCount: number | null; onOpen: () => void }) {
+  if (matchCount === null) return <span className="faint small">—</span>;
+  if (matchCount === 0) return <span className="faint small">No matches</span>;
+  return (
+    <button type="button" className="pill-accent" onClick={onOpen}>
+      {matchCount} {matchCount === 1 ? "property" : "properties"}
+    </button>
+  );
+}
+
+function PipelineStatusBadge({ status }: { status: "assigned" | "matched" | "new" }) {
+  if (status === "assigned") return <Badge tone="ok">Assigned</Badge>;
+  if (status === "matched") return <Badge tone="accent">Matched</Badge>;
+  return <Badge tone="info">New</Badge>;
 }
 
 function ClientStatusBadge({ client }: { client: InquiryClientRecord }) {

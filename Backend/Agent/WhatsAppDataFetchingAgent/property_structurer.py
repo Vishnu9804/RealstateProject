@@ -29,6 +29,7 @@ glm_extraction_schema.py double as that validator.
 from __future__ import annotations
 
 import json
+import math
 import re
 import time
 from typing import List, Optional
@@ -745,6 +746,131 @@ def _parse_price_text_to_inr(text: str) -> Optional[float]:
     return value * _SCALE_MULTIPLIERS[scale] if scale else value
 
 
+
+# Ground-truth cross-check for the per-unit rate, matched directly against
+# the broker's own raw wording (a number, an optional explicit scale word,
+# then a "per <unit>"/"/ <unit>" phrase) rather than anything the LLM itself
+# computed. Per-unit rates are exactly where a small/fast model's scale
+# judgment (lakh vs thousand vs bare rupees) is least reliable: a plain
+# "₹6,500 Per Sq. Ft." carries no scale word at all, and GLM has been
+# observed inventing one anyway (treating it as "6.5L per sq ft" — a clean
+# 100x error that then propagates into a wildly wrong total once
+# _fill_missing_price_or_area multiplies it by the area). Unlike totals,
+# which brokers almost always spell out with an explicit Lakh/Crore word,
+# per-unit rates are routinely written as bare numbers, so this pattern is
+# common enough to be worth guarding deterministically rather than trusting
+# the LLM's transcription.
+_UNIT_PHRASE_PATTERNS = {
+    "sqft": r"sq\.?\s*ft\.?|sqft|square\s*feet",
+    "vaar": r"vaar|gaj|sq\.?\s*yard|square\s*yard",
+    "vigha": r"vigha",
+}
+_NUMBER_SCALE_PATTERN = (
+    r"(?P<num>\d[\d,]*(?:\.\d+)?)\s*(?P<scale>cr|crore|crores|lac|lacs|lakh|lakhs|thousand|l|k)?\b"
+)
+
+
+def _extract_per_unit_rate_from_text(text: Optional[str], unit: Optional[str]) -> Optional[float]:
+    """Deterministically re-derives the per-unit rate straight from the raw
+    message text for whichever unit (sqft/vaar/vigha) this property actually
+    used, independent of the LLM's own price_per_unit_text/
+    price_per_unit_amount_inr. Returns None when the unit is missing/
+    unrecognized or no "<number><scale?> per/ <unit>" pattern is found in the
+    text — callers must treat that as "no cross-check available", not as
+    evidence the LLM's figure is wrong."""
+    if not text or unit not in _UNIT_PHRASE_PATTERNS:
+        return None
+    pattern = re.compile(
+        _NUMBER_SCALE_PATTERN + r"\s*(?:per\s+|/\s*)(?:" + _UNIT_PHRASE_PATTERNS[unit] + r")",
+        re.IGNORECASE,
+    )
+    match = pattern.search(text)
+    if not match:
+        return None
+    value = float(match.group("num").replace(",", ""))
+    scale = (match.group("scale") or "").lower()
+    return value * _SCALE_MULTIPLIERS[scale] if scale else value
+
+
+# Ground-truth cross-check for a SCALED total price (price_text ending in
+# cr/L/lakh/k/...) — the same class of bug as the per-unit rate above, but
+# on the total instead. A total the LLM writes as bare digits with no scale
+# word ("8500000") carries no scale-confusion risk and is never checked
+# here; the danger is specifically the LLM attaching a lakh/crore/k
+# multiplier that has no basis in the message at all — observed producing a
+# price_text/price_amount_inr pair for a message that never states a total
+# price to begin with (only a per-unit rate), where the "total" is pure
+# invention despite the prompt explicitly forbidding that. Scale is
+# mandatory in this pattern (unlike _NUMBER_SCALE_PATTERN above) because a
+# bare-digit total is exactly the safe case this check must leave alone.
+_SCALED_TOTAL_PATTERN = (
+    r"(?P<num>\d[\d,]*(?:\.\d+)?)\s*(?P<scale>cr|crore|crores|lac|lacs|lakh|lakhs|thousand|l|k)\b"
+)
+_SCALED_PRICE_TEXT_RE = re.compile(
+    r"(?:cr|crore|crores|lac|lacs|lakh|lakhs|thousand|l|k)\s*$", re.IGNORECASE
+)
+
+
+def _find_total_price_candidates(text: Optional[str]) -> List[float]:
+    """Every standalone <number><scale word> mention in the raw message
+    text that is NOT part of a per-unit ('per sqft'/'/vaar'/...) phrase —
+    the set of plausible TOTAL price amounts actually written in the
+    message. Empty when the message never states a scaled total at all
+    (e.g. it only ever quotes a per-unit rate), which is exactly the signal
+    _verify_total_price_against_text uses to catch a hallucinated total."""
+    if not text:
+        return []
+    pattern = re.compile(
+        _SCALED_TOTAL_PATTERN + r"(?!\s*(?:per\s+|/\s*)(?:" + "|".join(_UNIT_PHRASE_PATTERNS.values()) + r"))",
+        re.IGNORECASE,
+    )
+    return [
+        float(match.group("num").replace(",", "")) * _SCALE_MULTIPLIERS[match.group("scale").lower()]
+        for match in pattern.finditer(text)
+    ]
+
+
+def _verify_total_price_against_text(prop: StructuredProperty) -> None:
+    """Cross-checks a SCALED total price against the raw message text (see
+    _find_total_price_candidates). A total with no scale suffix is left
+    untouched — there's no multiplier for the LLM to have gotten wrong.
+
+    - If the message does state a standalone total and the LLM's figure
+      disagrees, the text's own value wins (same rationale as the per-unit
+      check: it's what the broker actually typed).
+    - If the LLM's total has NO basis anywhere in the text — the message
+      never states a total at all, only e.g. a per-unit rate — the LLM
+      invented it despite being told never to guess. Clear price_text/
+      price_amount_inr so _fill_missing_price_or_area derives the real
+      total deterministically from area x per-unit rate instead of a
+      fabricated number surviving into the stored record.
+    """
+    if prop.price_amount_inr is None or not _SCALED_PRICE_TEXT_RE.search(prop.price_text or ""):
+        return
+
+    candidates = _find_total_price_candidates(prop.message_text)
+    if any(math.isclose(prop.price_amount_inr, candidate, rel_tol=0.01) for candidate in candidates):
+        return
+
+    if candidates:
+        best = min(candidates, key=lambda candidate: abs(candidate - prop.price_amount_inr))
+        step_logger.warn(
+            f"Total price for message {prop.source_message_id!r} disagreed with the raw message text "
+            f"(LLM gave {prop.price_amount_inr:,.0f}, text says {best:,.0f}) — using the text-grounded value."
+        )
+        prop.price_amount_inr = best
+        prop.price_text = _format_compact_inr(best)
+    else:
+        step_logger.warn(
+            f"Total price for message {prop.source_message_id!r} ({prop.price_text!r} / "
+            f"{prop.price_amount_inr:,.0f} INR) has no basis anywhere in the raw message text — the LLM "
+            "invented a total that was never actually stated. Clearing it so it derives deterministically "
+            "from area x per-unit rate instead."
+        )
+        prop.price_amount_inr = None
+        prop.price_text = None
+
+
 def _sanitize_and_parse_prices(prop: StructuredProperty) -> None:
     """Deterministic safety net over the LLM's PRICE FIELDS separation, run
     right after structuring — never trusts the LLM's total-vs-per-unit split
@@ -762,6 +888,18 @@ def _sanitize_and_parse_prices(prop: StructuredProperty) -> None:
        writes a clean, parseable price string without also filling the
        numeric field, which would otherwise silently block the area/rate/
        total derivation from having the two inputs it needs.
+    3. Cross-check the resulting per-unit rate against a fresh parse of the
+       raw message text (_extract_per_unit_rate_from_text). When the two
+       disagree, the raw text wins — it's what the broker actually typed,
+       while the LLM's number/scale is a transcription that can silently
+       apply the wrong magnitude (see _extract_per_unit_rate_from_text's
+       docstring). This also repairs price_per_unit_text so it stays
+       consistent with the corrected amount.
+    4. Same idea for a SCALED total price (_verify_total_price_against_text)
+       — cross-check it against the raw text, and clear it entirely if it
+       has no basis there at all (the LLM invented a total for a message
+       that only ever stated a per-unit rate), letting the deterministic
+       area x rate derivation below fill in the real one instead.
     """
     if _PER_UNIT_HINT_RE.search(prop.price_text or ""):
         if not prop.price_per_unit_text:
@@ -773,6 +911,24 @@ def _sanitize_and_parse_prices(prop: StructuredProperty) -> None:
         prop.price_amount_inr = _parse_price_text_to_inr(prop.price_text)
     if prop.price_per_unit_amount_inr is None and prop.price_per_unit_text:
         prop.price_per_unit_amount_inr = _parse_price_text_to_inr(prop.price_per_unit_text)
+
+    _verify_total_price_against_text(prop)
+
+    grounded_rate = _extract_per_unit_rate_from_text(prop.message_text, prop.carpet_area_unit)
+    if (
+        grounded_rate is not None
+        and grounded_rate > 0
+        and prop.price_per_unit_amount_inr is not None
+        and not math.isclose(grounded_rate, prop.price_per_unit_amount_inr, rel_tol=0.01)
+    ):
+        step_logger.warn(
+            f"Per-unit rate for message {prop.source_message_id!r} disagreed with the raw message text "
+            f"(LLM gave {prop.price_per_unit_amount_inr:,.0f}/{prop.carpet_area_unit}, text says "
+            f"{grounded_rate:,.0f}/{prop.carpet_area_unit}) — using the text-grounded value. This is almost "
+            "always the LLM mis-scaling a bare number (e.g. reading '6,500 per sq ft' as '6.5L per sq ft')."
+        )
+        prop.price_per_unit_amount_inr = grounded_rate
+        prop.price_per_unit_text = f"{_format_compact_inr(grounded_rate)}/{prop.carpet_area_unit}"
 
 
 def _format_compact_inr(amount: float) -> str:

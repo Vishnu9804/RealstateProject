@@ -31,12 +31,18 @@ _MAX_STORED_PROPERTIES = 1000
 
 # In-memory fallback only — untouched whenever a database is configured.
 _properties: List[EmbeddedProperty] = []
+# Bumped on every in-memory add/update/delete — the fallback's equivalent of
+# PropertyRow.updated_at, since EmbeddedProperty itself carries no timestamp.
+# Only ever read by get_properties_version below.
+_version_counter = 0
 
 
 def add_property(prop: EmbeddedProperty) -> None:
     if is_database_configured():
         property_repository.add_property(prop)
         return
+    global _version_counter
+    _version_counter += 1
     _properties.append(prop)
     if len(_properties) > _MAX_STORED_PROPERTIES:
         del _properties[: len(_properties) - _MAX_STORED_PROPERTIES]
@@ -94,6 +100,17 @@ def get_property_count() -> int:
     return len(_properties)
 
 
+def get_properties_version() -> str:
+    """A single comparable string the polling pages can hold onto and diff
+    against — see Database/property_repository.py's get_properties_version
+    for what backs it in DB mode. Callers never need to parse this, only
+    check it for equality against what they last saw."""
+    if is_database_configured():
+        count, latest = property_repository.get_properties_version()
+        return f"{count}:{latest.isoformat() if latest else '0'}"
+    return f"{len(_properties)}:{_version_counter}"
+
+
 # In-memory fallback only, for get/set_instagram_media_pk below — mirrors
 # _properties in spirit but keyed separately since instagram_media_pk is
 # deliberately not a field on EmbeddedProperty itself (see Database/models.py's
@@ -123,6 +140,17 @@ def get_property(record_id: str) -> Optional[EmbeddedProperty]:
     return None
 
 
+def find_by_source_message_id(source_message_id: str, limit: int = 5) -> List[EmbeddedProperty]:
+    """Every property (there can be more than one — see
+    StructuredProperty.record_id's own comment on why source_message_id
+    isn't unique per property) that came from the same WhatsApp message.
+    Only used to recover a legacy duplicate-review flag's matched candidate
+    from free text — see property_pipeline_service._resolve_legacy_duplicate_match."""
+    if is_database_configured():
+        return property_repository.find_by_source_message_id(source_message_id, limit)
+    return [prop for prop in _properties if prop.source_message_id == source_message_id][:limit]
+
+
 def update_property(
     record_id: str,
     review_status: Optional[str] = None,
@@ -146,6 +174,7 @@ def update_property(
             on_landing_page=on_landing_page,
             qualified_at=qualified_at,
         )
+    global _version_counter
     for prop in _properties:
         if prop.record_id == record_id:
             if review_status is not None:
@@ -167,6 +196,7 @@ def update_property(
                 prop.landing_page_updated_at = datetime.now(timezone.utc)
             if qualified_at is not None:
                 prop.qualified_at = qualified_at
+            _version_counter += 1
             return prop
     return None
 
@@ -174,8 +204,10 @@ def update_property(
 def delete_property(record_id: str) -> bool:
     if is_database_configured():
         return property_repository.delete_property(record_id)
+    global _version_counter
     for index, prop in enumerate(_properties):
         if prop.record_id == record_id:
             del _properties[index]
+            _version_counter += 1
             return True
     return False

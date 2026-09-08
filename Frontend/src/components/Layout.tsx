@@ -65,7 +65,7 @@ export default function Layout() {
             {
               id: "stat-summary",
               label: `${status.structured_property_count} properties captured`,
-              hint: `${status.needs_review_property_count} need review · ${status.duplicate_property_count} duplicates skipped`,
+              hint: `${status.needs_review_property_count} need review · ${status.duplicate_property_count} flagged as likely duplicates`,
               group: "Status",
               icon: <IconZap size={16} />,
               run: () => {},

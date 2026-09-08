@@ -4,7 +4,9 @@ import { Link, useParams } from "react-router-dom";
 import { matchingApi } from "../api/matchingApi";
 import { propertyApi } from "../api/propertyApi";
 import type { ClientMatchResult, MatchBucket, MatchedProperty, PropertyRecord } from "../api/types";
+import { useAppStatus } from "../state/StatusProvider";
 import { friendlyError } from "../lib/apiError";
+import { getCachedPropertyList, setCachedPropertyList } from "../lib/propertyListCache";
 import { formatCarpetArea, formatPrice, formatPricePerUnit, relativeTime } from "../lib/formatters";
 import { sourceDetail, sourceLabel } from "../lib/propertyFilters";
 import { useToast } from "../components/ui/Toast";
@@ -47,6 +49,8 @@ export default function ClientMatchesPage() {
   const [movingId, setMovingId] = useState<string | null>(null);
   const [selectedMatch, setSelectedMatch] = useState<MatchedProperty | null>(null);
 
+  const { status: appStatus } = useAppStatus();
+
   const load = useCallback(async () => {
     try {
       setResult(await matchingApi.getMatches(phone));
@@ -58,18 +62,29 @@ export default function ClientMatchesPage() {
     }
     // Full property records (source message, sender, timestamps, ...) for
     // the detail dialog — reuses the existing Properties-dashboard endpoint
-    // as-is. Fetched separately and allowed to fail quietly: the dialog
-    // still works from the match's own fields if this list isn't available.
+    // as-is, and shares its cache (lib/propertyListCache.ts) with the
+    // Properties/Landing Page pages: still fetched every time this page is
+    // opened (this is a one-shot page, not polled, so there's no ongoing
+    // version check to lean on instead), but a cache hit means the dialog
+    // has real data to show immediately while that fetch is in flight
+    // rather than sitting blank. Fetched separately and allowed to fail
+    // quietly: the dialog still works from the match's own fields if this
+    // list isn't available.
     try {
-      setProperties(await propertyApi.getProperties(500));
+      const data = await propertyApi.getProperties(500);
+      setProperties(data);
+      setCachedPropertyList(data, appStatus?.properties_version ?? null);
     } catch {
       setProperties(null);
     }
-  }, [phone]);
+  }, [phone, appStatus?.properties_version]);
 
   useEffect(() => {
+    const cached = getCachedPropertyList();
+    if (cached) setProperties(cached.data);
     void load();
-  }, [load]);
+    // eslint-disable-next-line react-hooks/exhaustive-deps
+  }, [phone]);
 
   async function handleRefresh() {
     setRecomputing(true);

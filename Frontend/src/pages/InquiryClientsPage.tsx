@@ -28,7 +28,10 @@ import {
 } from "../lib/formatters";
 import { describeInquiryStatus } from "../lib/inquiryStatus";
 import { statusTone } from "../lib/whatsappStatus";
+import { getCachedClients, getCachedLeads, setCachedClients, setCachedLeads } from "../lib/inquiryListCache";
+import { getCachedPropertyDetail, setCachedPropertyDetail } from "../lib/propertyDetailCache";
 import { useToast } from "../components/ui/Toast";
+import ConfirmDialog from "../components/ui/ConfirmDialog";
 import {
   Badge,
   Button,
@@ -50,6 +53,7 @@ import {
   IconMessage,
   IconArrowRight,
   IconPin,
+  IconPlus,
   IconRefresh,
   IconSearch,
   IconSparkle,
@@ -89,6 +93,11 @@ export default function InquiryClientsPage() {
   const searchRef = useRef<HTMLInputElement>(null);
   const seenPhones = useRef<Set<string> | null>(null);
   const [freshPhones, setFreshPhones] = useState<Set<string>>(new Set());
+  // Last clients_version/leads_version this page actually fetched a list
+  // for — see load() below. null means "never fetched yet", which always
+  // forces a fetch regardless of what the version says.
+  const lastClientsVersion = useRef<string | null>(null);
+  const lastLeadsVersion = useRef<string | null>(null);
 
   // The property behind a "Property Interest" lead is fetched one at a time,
   // only once its row is actually expanded — see the effect below. Bulk-
@@ -106,6 +115,46 @@ export default function InquiryClientsPage() {
   const [qrLoadFailed, setQrLoadFailed] = useState(false);
   const waitingForQr = inquiryStatus?.status === "waiting_for_qr_scan";
 
+  // "+ Add" — manually register a client who hasn't messaged in yet (a
+  // walk-in, a phone call, a referral). Mints the exact same token-
+  // authenticated registration form link the WhatsApp welcome message
+  // sends, and opens it in a new tab — from there it's indistinguishable
+  // from the normal flow: fill it in on the client's behalf, or hand/send
+  // that link to the client so they fill it in themselves.
+  const [addOpen, setAddOpen] = useState(false);
+  const [addPhone, setAddPhone] = useState("");
+  const [addBusy, setAddBusy] = useState(false);
+  const [addError, setAddError] = useState<string | null>(null);
+
+  function openAddDialog() {
+    setAddPhone("");
+    setAddError(null);
+    setAddOpen(true);
+  }
+
+  async function handleCreateManualLink() {
+    if (!addPhone.trim()) {
+      setAddError("Enter a phone number.");
+      return;
+    }
+    setAddBusy(true);
+    setAddError(null);
+    try {
+      const result = await inquiryClientApi.createManualLink(addPhone.trim());
+      window.open(result.url, "_blank", "noopener,noreferrer");
+      setAddOpen(false);
+      toast.push({
+        tone: "ok",
+        title: "Form opened",
+        message: `Registration form opened for ${result.phone} in a new tab.`,
+      });
+    } catch (err) {
+      setAddError(friendlyError(err));
+    } finally {
+      setAddBusy(false);
+    }
+  }
+
   // Only polled while a scan is actually being waited on — pointless to
   // keep refreshing a QR image once pairing is done or hasn't started yet.
   usePolling(
@@ -121,39 +170,62 @@ export default function InquiryClientsPage() {
     async (manual = false) => {
       setRefreshing(true);
       try {
-        // Fetched together, on the same poll, regardless of which tab is
-        // showing — same pattern the Dashboard and Landing Page screens
-        // already use for their own property list, and it means switching
-        // tabs never shows a stale load spinner for data that's actually
-        // sitting there ready. The property behind a lead is deliberately
-        // NOT fetched here — see propertyCache's own comment.
-        const [clientData, statusData, leadData] = await Promise.all([
-          inquiryClientApi.getClients(FETCH_LIMIT),
-          inquiryClientApi.getStatus(),
-          landingLeadApi.getLeads(FETCH_LIMIT),
-        ]);
-        setClients(clientData);
+        // The status call is cheap (mostly in-memory counters plus two small
+        // aggregate queries) and runs every tick. clients_version/
+        // leads_version on it are what changed with this fix: the two heavy
+        // list fetches below (up to 500 rows each) now only fire when their
+        // version actually differs from what this page last fetched, or on
+        // a manual refresh — not unconditionally on every tick regardless of
+        // whether anything changed. The property behind a lead is
+        // deliberately NOT fetched here either way — see propertyCache's
+        // own comment.
+        const statusData = await inquiryClientApi.getStatus();
         setInquiryStatus(statusData);
-        setLeads(leadData);
-        setLastUpdated(new Date());
         setError(null);
 
-        const incoming = new Set(clientData.map((c) => c.phone));
-        if (seenPhones.current) {
-          const added = new Set(
-            [...incoming].filter((phone) => !seenPhones.current!.has(phone)),
-          );
-          if (added.size > 0) {
-            setFreshPhones(added);
-            window.setTimeout(() => setFreshPhones(new Set()), 2600);
+        const needsClients =
+          manual ||
+          lastClientsVersion.current === null ||
+          lastClientsVersion.current !== statusData.clients_version;
+        const needsLeads =
+          manual ||
+          lastLeadsVersion.current === null ||
+          lastLeadsVersion.current !== statusData.leads_version;
+
+        const [clientData, leadData] = await Promise.all([
+          needsClients ? inquiryClientApi.getClients(FETCH_LIMIT) : Promise.resolve(null),
+          needsLeads ? landingLeadApi.getLeads(FETCH_LIMIT) : Promise.resolve(null),
+        ]);
+
+        if (clientData !== null) {
+          setClients(clientData);
+          lastClientsVersion.current = statusData.clients_version;
+          setCachedClients(clientData, statusData.clients_version);
+
+          const incoming = new Set(clientData.map((c) => c.phone));
+          if (seenPhones.current) {
+            const added = new Set(
+              [...incoming].filter((phone) => !seenPhones.current!.has(phone)),
+            );
+            if (added.size > 0) {
+              setFreshPhones(added);
+              window.setTimeout(() => setFreshPhones(new Set()), 2600);
+            }
           }
+          seenPhones.current = incoming;
         }
-        seenPhones.current = incoming;
+        if (leadData !== null) {
+          setLeads(leadData);
+          lastLeadsVersion.current = statusData.leads_version;
+          setCachedLeads(leadData, statusData.leads_version);
+        }
+
+        setLastUpdated(new Date());
         if (manual)
           toast.push({
             tone: "ok",
             title: "Refreshed",
-            message: `${clientData.length} client(s) loaded.`,
+            message: `${(clientData ?? []).length} client(s) loaded.`,
           });
       } catch (err) {
         const message = friendlyError(err);
@@ -166,6 +238,27 @@ export default function InquiryClientsPage() {
     },
     [toast],
   );
+
+  // A cache hit paints both lists instantly on mount (e.g. returning to this
+  // page shortly after leaving it) with no network request — usePolling's
+  // own first tick just below still runs immediately either way, but its
+  // status check (cheap) is now what decides whether the two heavy list
+  // fetches are actually needed, exactly like every other tick.
+  useEffect(() => {
+    const cachedClients = getCachedClients();
+    if (cachedClients) {
+      setClients(cachedClients.data);
+      lastClientsVersion.current = cachedClients.version;
+      seenPhones.current = new Set(cachedClients.data.map((c) => c.phone));
+    }
+    const cachedLeads = getCachedLeads();
+    if (cachedLeads) {
+      setLeads(cachedLeads.data);
+      lastLeadsVersion.current = cachedLeads.version;
+    }
+    if (cachedClients || cachedLeads) setLastUpdated(new Date());
+    // eslint-disable-next-line react-hooks/exhaustive-deps
+  }, []);
 
   usePolling(() => load(false), REFRESH_INTERVAL_MS);
 
@@ -204,17 +297,27 @@ export default function InquiryClientsPage() {
 
   // Fetch the one property an expanded lead is about, on demand — see
   // propertyCache's own comment for why this replaced a bulk fetch.
+  // lib/propertyDetailCache.ts (shared with the Properties and Landing Page
+  // pages) is checked first — if that property was recently opened from
+  // either of those, expanding it here costs no request at all.
   useEffect(() => {
     if (!expandedLeadId) return;
     const lead = allLeads.find((l) => l.lead_id === expandedLeadId);
     const recordId = lead?.property_record_id;
     if (!recordId || recordId in propertyCache) return;
+    const shared = getCachedPropertyDetail(recordId);
+    if (shared) {
+      setPropertyCache((prev) => ({ ...prev, [recordId]: shared }));
+      return;
+    }
     let cancelled = false;
     propertyApi
       .getProperty(recordId)
       .then((full) => {
-        if (!cancelled)
+        if (!cancelled) {
           setPropertyCache((prev) => ({ ...prev, [recordId]: full }));
+          setCachedPropertyDetail(full);
+        }
       })
       .catch((err) => {
         if (cancelled) return;
@@ -296,6 +399,9 @@ export default function InquiryClientsPage() {
               </>
             ) : null}
           </span>
+          <Button icon={<IconPlus size={15} />} variant="primary" onClick={openAddDialog}>
+            Add
+          </Button>
           <Button
             icon={<IconRefresh size={15} />}
             onClick={() => load(true)}
@@ -579,6 +685,53 @@ export default function InquiryClientsPage() {
             />
           )}
         </>
+      )}
+
+      {addOpen && (
+        <ConfirmDialog
+          title="Add a client manually"
+          confirmLabel="Open form"
+          busy={addBusy}
+          onConfirm={handleCreateManualLink}
+          onClose={() => !addBusy && setAddOpen(false)}
+          body={
+            <div className="stack stack-3">
+              <p className="section-head__sub" style={{ margin: 0 }}>
+                For a walk-in, phone call, or referral who hasn't messaged the
+                inquiry WhatsApp number yet. This opens the exact same
+                registration form a WhatsApp welcome message links to, in a
+                new tab — fill it in yourself, or send that link to the
+                client so they can fill it in.
+              </p>
+              <div className="field">
+                <label className="field__label" htmlFor="manual-add-phone">
+                  Client's WhatsApp number
+                </label>
+                <input
+                  id="manual-add-phone"
+                  type="tel"
+                  className="input"
+                  autoFocus
+                  value={addPhone}
+                  onChange={(e) => setAddPhone(e.target.value)}
+                  onKeyDown={(e) => {
+                    if (e.key === "Enter") {
+                      e.preventDefault();
+                      void handleCreateManualLink();
+                    }
+                  }}
+                  placeholder="e.g. 9876543210"
+                  disabled={addBusy}
+                />
+              </div>
+              {addError && (
+                <Note tone="bad" icon={<IconAlert size={16} />}>
+                  {addError}
+                </Note>
+              )}
+            </div>
+          }
+        />
       )}
     </div>
   );

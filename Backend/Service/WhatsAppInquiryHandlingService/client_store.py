@@ -23,6 +23,9 @@ from Model.WhatsAppInquiryHandlingModel.client_record import ClientRecord
 
 # In-memory fallback only — untouched whenever the client database is configured.
 _clients: Dict[str, ClientRecord] = {}
+# Bumped on every in-memory upsert — the fallback's equivalent of
+# ClientRow.updated_at. Only ever read by get_clients_version below.
+_version_counter = 0
 
 
 def get_client_by_phone(phone: str) -> Optional[ClientRecord]:
@@ -37,6 +40,8 @@ def upsert_client(record: ClientRecord) -> ClientRecord:
     if is_client_database_configured():
         saved = client_repository.upsert_client(record)
     else:
+        global _version_counter
+        _version_counter += 1
         _clients[record.phone] = record
         saved = record
 
@@ -75,3 +80,14 @@ def get_client_count() -> int:
     if is_client_database_configured():
         return client_repository.get_client_count()
     return len(_clients)
+
+
+def get_clients_version() -> str:
+    """A single comparable string the Inquiries page holds onto and diffs
+    against, so it only re-fetches the full client list when something
+    actually changed — see property_vector_store.get_properties_version for
+    the same pattern applied to properties."""
+    if is_client_database_configured():
+        count, latest = client_repository.get_clients_version()
+        return f"{count}:{latest.isoformat() if latest else '0'}"
+    return f"{len(_clients)}:{_version_counter}"

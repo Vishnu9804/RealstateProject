@@ -72,6 +72,7 @@ _COLUMNS = (
     "review_status",
     "needs_review",
     "review_notes",
+    "duplicate_of_record_id",
     "on_landing_page",
     "landing_page_updated_at",
     "qualified_at",
@@ -155,6 +156,18 @@ def get_property_count() -> int:
         return session.execute(select(func.count()).select_from(PropertyRow)).scalar_one()
 
 
+def get_properties_version() -> Tuple[int, Optional[datetime]]:
+    """A count plus the newest `updated_at`, nothing else — the cheap change
+    signal the polling pages (Properties/Landing Page/Inquiries) compare
+    against so they only re-fetch/re-transfer the full list when something
+    actually changed, instead of every few seconds regardless. Both values
+    come from a single aggregate query that never touches image_urls/
+    embedding, so this costs Postgres about as little as a row count does."""
+    with get_session() as session:
+        count, latest = session.execute(select(func.count(), func.max(PropertyRow.updated_at))).one()
+        return count, latest
+
+
 def get_instagram_media_pk(record_id: str) -> Optional[str]:
     with get_session() as session:
         row = _find_row(session, record_id)
@@ -172,6 +185,13 @@ def get_property(record_id: str) -> Optional[EmbeddedProperty]:
     with get_session() as session:
         row = _find_row(session, record_id)
         return _to_pydantic(row) if row is not None else None
+
+
+def find_by_source_message_id(source_message_id: str, limit: int = 5) -> List[EmbeddedProperty]:
+    stmt = select(PropertyRow).where(PropertyRow.source_message_id == source_message_id).limit(limit)
+    with get_session() as session:
+        rows = list(session.execute(stmt).scalars().all())
+    return [_to_pydantic(row) for row in rows]
 
 
 def update_property(

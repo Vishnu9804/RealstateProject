@@ -12,29 +12,37 @@ and — for properties that get stored — they are the exact vectors that end
 up in the store (later: pgvector). Nothing downstream ever re-embeds or
 recomputes them.
 
-Duplicate detection has three outcomes (see Model/duplicate_verdict.py):
-  - HIGH_CONFIDENCE_DUPLICATE: skipped, not stored.
+Duplicate detection has three outcomes (see Model/duplicate_verdict.py), and
+NONE of them ever discards a property — a wrong auto-skip silently loses
+real data with no way to recover it, which is strictly worse than asking a
+human to glance at an extra row:
+  - HIGH_CONFIDENCE_DUPLICATE: still stored, flagged needs_review=True (same
+    review queue as UNCERTAIN) with review_notes and duplicate_of_record_id
+    pointing at the specific existing property it matched, so a human makes
+    the final call instead of the algorithm silently deleting a listing on
+    its own.
   - HIGH_CONFIDENCE_NEW: stored as a normal property, needs_review=False.
-  - UNCERTAIN: still stored (never silently discarded — it's real data),
-    but flagged with needs_review=True and review_notes explaining why, so
-    nothing gets lost while still surfacing the ambiguity for a human to
-    resolve later.
+  - UNCERTAIN: stored, flagged with needs_review=True, review_notes
+    explaining why, and duplicate_of_record_id pointing at the candidate it
+    was uncertain against (when the uncertainty came from a specific
+    candidate rather than e.g. thin evidence generally).
 
 needs_review is independent of review_status ("accepted" vs "outsider",
 i.e. which of the Main/Outsider tabs a property belongs to) — a property
 can arrive here already review_status="outsider", set by the LLM
 structuring stage (Agent/WhatsAppDataFetchingAgent/property_structurer.py)
 when it falls outside every client-selected area, and separately be
-flagged needs_review=True by an UNCERTAIN duplicate verdict. Both flags are
-shown at once; a human resolving the review flag (see accept_property
-below) never changes which tab (Main/Outsider) the property is in. A
-HIGH_CONFIDENCE_DUPLICATE outsider is still skipped like any other
-duplicate — being outside the service area doesn't make an exact repeat
-worth storing twice.
+flagged needs_review=True by an UNCERTAIN or HIGH_CONFIDENCE_DUPLICATE
+verdict. Both flags are shown at once; a human resolving the review flag
+(see update_property below) never changes which tab (Main/Outsider) the
+property is in — resolving needs_review and picking Main/Outsider happen
+together only when a human explicitly does both (see the Needs review
+dialog's Move to Main / Move to Outsider actions).
 """
 
 from __future__ import annotations
 
+import re
 import uuid
 from datetime import datetime, timezone
 from typing import Any, Dict, List, Optional
@@ -92,12 +100,23 @@ def handle_batch_ready(batch: List[WhatsAppChatMessage]) -> None:
         if result.verdict == DuplicateVerdict.HIGH_CONFIDENCE_DUPLICATE:
             duplicate_count_this_batch += 1
             _duplicate_count += 1
-            step_logger.info(
-                f"Duplicate property skipped (source message {embedded.source_message_id!r}): {result.reason}"
+            # Flagged for review instead of skipped — an algorithm being
+            # "sure" is still a guess, and a wrong skip here would delete a
+            # real listing with no trace and no way for a human to catch it.
+            # See the module docstring above.
+            duplicate_reason = (
+                f"High-confidence duplicate of message {result.matched_source_message_id!r}: {result.reason}"
             )
-            continue
-
-        if result.verdict == DuplicateVerdict.UNCERTAIN:
+            embedded.needs_review = True
+            embedded.duplicate_of_record_id = result.matched_record_id
+            embedded.review_notes = (
+                f"{embedded.review_notes} | {duplicate_reason}" if embedded.review_notes else duplicate_reason
+            )
+            step_logger.warn(
+                f"High-confidence duplicate flagged for review, not skipped (source message "
+                f"{embedded.source_message_id!r}): {result.reason}"
+            )
+        elif result.verdict == DuplicateVerdict.UNCERTAIN:
             uncertain_count_this_batch += 1
             _uncertain_count += 1
             # needs_review is independent of review_status (Main/Outsider) —
@@ -110,6 +129,7 @@ def handle_batch_ready(batch: List[WhatsAppChatMessage]) -> None:
             # real regression, not just a cosmetic one.
             duplicate_reason = f"Possible duplicate of message {result.matched_source_message_id!r}: {result.reason}"
             embedded.needs_review = True
+            embedded.duplicate_of_record_id = result.matched_record_id
             embedded.review_notes = (
                 f"{embedded.review_notes} | {duplicate_reason}" if embedded.review_notes else duplicate_reason
             )
@@ -125,8 +145,9 @@ def handle_batch_ready(batch: List[WhatsAppChatMessage]) -> None:
 
     step_logger.success(
         f"Batch processed: {accepted_count} propert{'y' if accepted_count == 1 else 'ies'} stored "
-        f"({uncertain_count_this_batch} flagged for review, {outsider_count_this_batch} outsider), "
-        f"{duplicate_count_this_batch} duplicate(s) skipped, out of {len(batch)} message(s)"
+        f"({uncertain_count_this_batch + duplicate_count_this_batch} flagged for review — "
+        f"{duplicate_count_this_batch} high-confidence duplicate(s), {uncertain_count_this_batch} uncertain — "
+        f"{outsider_count_this_batch} outsider), out of {len(batch)} message(s)"
     )
 
 
@@ -160,11 +181,71 @@ def get_property(record_id: str) -> Optional[PropertyRecord]:
     """The single-record counterpart to get_properties — full content,
     photos included. Backs GET /properties/{record_id}."""
     prop = property_vector_store.get_property(record_id)
-    return _to_record(prop) if prop is not None else None
+    if prop is None:
+        return None
+    _resolve_legacy_duplicate_match(prop)
+    return _to_record(prop)
+
+
+# Matches the message id duplicate_detection_service embeds into review_notes
+# for both HIGH_CONFIDENCE_DUPLICATE ("High-confidence duplicate of message
+# '...'") and UNCERTAIN ("Possible duplicate of message '...'") — see
+# handle_batch_ready above for exactly where these strings are built.
+_MATCHED_MESSAGE_ID_PATTERN = re.compile(r"duplicate of message '([^']+)'")
+
+
+def _resolve_legacy_duplicate_match(prop: EmbeddedProperty) -> None:
+    """Best-effort recovery for rows flagged before duplicate_of_record_id
+    existed as a field: the specific candidate they were matched against was
+    only ever recorded as free text inside review_notes (a source message
+    id), never as a structured, directly-fetchable reference. Without this,
+    the Needs review dialog's Comparison tab has nothing to show for any
+    property flagged before this field was added, even though the exact
+    match is right there in the text.
+
+    Pulls the message id back out of review_notes and looks up a property
+    that came from that same message, patching `prop.duplicate_of_record_id`
+    in place — never persisted, so this costs nothing on the hot polling
+    path (get_properties never calls this) and simply re-resolves on every
+    detail-dialog open. A property flagged going forward already has this
+    field set directly by handle_batch_ready, so this is purely a bridge for
+    older rows, not the normal path."""
+    if prop.duplicate_of_record_id or not prop.needs_review or not prop.review_notes:
+        return
+    match = _MATCHED_MESSAGE_ID_PATTERN.search(prop.review_notes)
+    if not match:
+        return
+    source_message_id = match.group(1)
+    candidates = [
+        candidate
+        for candidate in property_vector_store.find_by_source_message_id(source_message_id)
+        if candidate.record_id != prop.record_id
+    ]
+    if not candidates:
+        return
+    if len(candidates) == 1:
+        prop.duplicate_of_record_id = candidates[0].record_id
+        return
+    # A single WhatsApp message can yield more than one property (see
+    # StructuredProperty.record_id's own comment) — when it does, the message
+    # id alone doesn't say which of them was the actual match. Re-run the
+    # same field-level scoring duplicate detection used at flag time (see
+    # duplicate_detection_service.check_duplicate) against each candidate and
+    # pick the highest-scoring one, rather than an arbitrary one.
+    settings = duplicate_detection_service.get_settings()
+    best = max(
+        candidates,
+        key=lambda candidate: duplicate_detection_service._score_candidate(prop, candidate, settings)[0],
+    )
+    prop.duplicate_of_record_id = best.record_id
 
 
 def get_property_count() -> int:
     return property_vector_store.get_property_count()
+
+
+def get_properties_version() -> str:
+    return property_vector_store.get_properties_version()
 
 
 def create_property(content_fields: Dict[str, Any]) -> PropertyRecord:

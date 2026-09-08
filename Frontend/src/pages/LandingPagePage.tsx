@@ -1,7 +1,7 @@
-import { useCallback, useEffect, useMemo, useState } from "react";
+import { useCallback, useEffect, useMemo, useRef, useState } from "react";
 import { propertyApi } from "../api/propertyApi";
 import type { PropertyRecord } from "../api/types";
-import { usePolling } from "../hooks/usePolling";
+import { useAppStatus } from "../state/StatusProvider";
 import { usePersistentState } from "../hooks/useUi";
 import { friendlyError } from "../lib/apiError";
 import { formatCarpetArea, formatPrice, formatPricePerUnit, relativeTime } from "../lib/formatters";
@@ -14,6 +14,17 @@ import {
   type ColumnFilter,
   type FilterState,
 } from "../lib/propertyFilters";
+import {
+  getCachedPropertyList,
+  patchCachedProperty,
+  removeCachedProperty,
+  setCachedPropertyList,
+} from "../lib/propertyListCache";
+import {
+  getCachedPropertyDetail,
+  invalidateCachedPropertyDetail,
+  setCachedPropertyDetail,
+} from "../lib/propertyDetailCache";
 import { useToast } from "../components/ui/Toast";
 import FilterPopover from "../components/ui/FilterPopover";
 import ConfirmDialog from "../components/ui/ConfirmDialog";
@@ -34,7 +45,6 @@ import { IconAlert, IconCheck, IconImage, IconInbox, IconInstagram, IconRefresh 
  * purpose, so switching between the two never feels like a different tool.
  */
 
-const REFRESH_INTERVAL_MS = 8000;
 const FETCH_LIMIT = 500;
 const PAGE_SIZE = 20;
 
@@ -76,6 +86,10 @@ export default function LandingPagePage() {
   const [rowConfirm, setRowConfirm] = useState<{ type: "move" | "delete"; property: PropertyRecord } | null>(null);
   const [rowBusy, setRowBusy] = useState(false);
 
+  const { status: appStatus } = useAppStatus();
+  const appStatusRef = useRef(appStatus);
+  appStatusRef.current = appStatus;
+
   const load = useCallback(
     async (manual = false) => {
       setRefreshing(true);
@@ -84,6 +98,7 @@ export default function LandingPagePage() {
         setProperties(data);
         setLastUpdated(new Date());
         setError(null);
+        setCachedPropertyList(data, appStatusRef.current?.properties_version ?? null);
         if (manual) toast.push({ tone: "ok", title: "Refreshed", message: `${data.length} properties loaded.` });
       } catch (err) {
         const message = friendlyError(err);
@@ -96,7 +111,39 @@ export default function LandingPagePage() {
     [toast],
   );
 
-  usePolling(() => load(false), REFRESH_INTERVAL_MS);
+  // Same change-driven refresh as DashboardPage.tsx: an in-memory cache hit
+  // (this page's own, or left behind by the Properties page — both read the
+  // identical list, see lib/propertyListCache.ts) paints instantly with no
+  // network request; the version-watch effect below then either confirms
+  // it's current (no fetch) or fetches once if it's stale. No cache hit
+  // falls back to the unconditional fetch this always did. Both pages also
+  // share one status heartbeat (StatusProvider) instead of each running its
+  // own independent timer, so a real change is only ever detected once.
+  const lastPropertiesVersion = useRef<string | null>(null);
+
+  useEffect(() => {
+    const cached = getCachedPropertyList();
+    if (cached) {
+      setProperties(cached.data);
+      setLastUpdated(new Date(cached.fetchedAt));
+      lastPropertiesVersion.current = cached.version;
+      return;
+    }
+    void load(false);
+    // eslint-disable-next-line react-hooks/exhaustive-deps
+  }, []);
+
+  useEffect(() => {
+    const version = appStatus?.properties_version;
+    if (version === undefined) return;
+    if (lastPropertiesVersion.current === null) {
+      lastPropertiesVersion.current = version;
+      return;
+    }
+    if (lastPropertiesVersion.current === version) return;
+    lastPropertiesVersion.current = version;
+    void load(false);
+  }, [appStatus?.properties_version, load]);
 
   // Switching tabs starts a fresh selection — "selected" means something
   // different on each one (about to send vs. about to remove), so carrying
@@ -187,15 +234,27 @@ export default function LandingPagePage() {
 
   function updateLocalProperty(recordId: string, next: PropertyRecord) {
     setProperties((prev) => (prev ? prev.map((p) => (p.record_id === recordId ? next : p)) : prev));
+    patchCachedProperty(recordId, next);
+    setCachedPropertyDetail(next);
   }
   function removeLocalProperty(recordId: string) {
     setProperties((prev) => (prev ? prev.filter((p) => p.record_id !== recordId) : prev));
+    removeCachedProperty(recordId);
+    invalidateCachedPropertyDetail(recordId);
   }
 
   // The polled list never carries real photos (see propertyApi.getProperties)
   // — fetch the one full record before showing its detail or Edit dialog,
-  // same pattern as the Properties page.
+  // same pattern as the Properties page. lib/propertyDetailCache.ts is
+  // shared with it (and with the Inquiries page), so a property opened
+  // there recently is reused here with no fetch and no re-downloaded photos.
   async function openDetail(recordId: string) {
+    const cached = getCachedPropertyDetail(recordId);
+    if (cached) {
+      updateLocalProperty(recordId, cached);
+      setDetailId(recordId);
+      return;
+    }
     try {
       const full = await propertyApi.getProperty(recordId);
       updateLocalProperty(recordId, full);
@@ -206,6 +265,12 @@ export default function LandingPagePage() {
   }
 
   async function openEdit(property: PropertyRecord) {
+    const cached = getCachedPropertyDetail(property.record_id);
+    if (cached) {
+      updateLocalProperty(property.record_id, cached);
+      setFormDialog({ property: cached });
+      return;
+    }
     try {
       const full = await propertyApi.getProperty(property.record_id);
       updateLocalProperty(property.record_id, full);
@@ -538,7 +603,6 @@ export default function LandingPagePage() {
         <PropertyDetailDialog
           property={detailProperty}
           viewTab={detailProperty.review_status === "outsider" ? "outsider" : "main"}
-          onAccept={() => {}}
           onMove={(property) => setRowConfirm({ type: "move", property })}
           onDelete={(property) => setRowConfirm({ type: "delete", property })}
           onEdit={(property) => openEdit(property)}

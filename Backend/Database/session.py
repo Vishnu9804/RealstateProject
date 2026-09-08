@@ -180,3 +180,9 @@ def init_db() -> None:
             text("ALTER TABLE properties ADD COLUMN IF NOT EXISTS landing_page_updated_at TIMESTAMPTZ")
         )
         connection.execute(text("ALTER TABLE properties ADD COLUMN IF NOT EXISTS qualified_at TIMESTAMPTZ"))
+        connection.execute(
+            text("ALTER TABLE properties ADD COLUMN IF NOT EXISTS duplicate_of_record_id VARCHAR")
+        )
+        connection.execute(
+            text("ALTER TABLE properties ADD COLUMN IF NOT EXISTS updated_at TIMESTAMPTZ NOT NULL DEFAULT now()")
+        )

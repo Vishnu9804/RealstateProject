@@ -87,6 +87,15 @@ class StructuredProperty(BaseModel):
     # already says, unchanged. ---
     needs_review: bool = False
     review_notes: Optional[str] = None
+    # --- set alongside needs_review whenever the duplicate-detection stage
+    # (Service/WhatsAppDataFetchingService/duplicate_detection_service.py) found a specific
+    # existing property this one might be a duplicate of — HIGH_CONFIDENCE_DUPLICATE
+    # or UNCERTAIN with a matched candidate. record_id of that OTHER property
+    # (never this one's own), so the review UI can fetch it and show a
+    # side-by-side comparison. None when flagged for an unrelated reason
+    # (e.g. outside every client-selected area, with no duplicate candidate
+    # involved) — the review UI falls back to a plain explanation then. ---
+    duplicate_of_record_id: Optional[str] = None
 
     # --- the Landing Page page's own state — never set by the LLM, and not
     # part of the Add/Edit dialog either (see PropertyContentFields): these

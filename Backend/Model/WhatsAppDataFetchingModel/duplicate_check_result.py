@@ -20,6 +20,10 @@ class DuplicateCheckResult(BaseModel):
     weighted_score: Optional[float] = None
     evidence_ratio: Optional[float] = None
     matched_source_message_id: Optional[str] = None
+    # The matched candidate's record_id (unique per property, unlike
+    # matched_source_message_id — see StructuredProperty.record_id) — what
+    # the review UI actually fetches to show a side-by-side comparison.
+    matched_record_id: Optional[str] = None
     field_scores: Dict[str, Optional[float]] = {}
     contradictions: List[str] = []
     reason: str

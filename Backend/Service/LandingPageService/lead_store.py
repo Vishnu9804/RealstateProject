@@ -45,3 +45,16 @@ def get_lead_count() -> int:
     if is_database_configured():
         return landing_lead_repository.get_lead_count()
     return len(_leads)
+
+
+def get_leads_version() -> str:
+    """A single comparable string the Inquiries page holds onto and diffs
+    against, so it only re-fetches the full leads list when a new one has
+    actually arrived — see property_vector_store.get_properties_version for
+    the same pattern applied to properties. Leads are append-only, so the
+    in-memory list's own length is already a valid, permanently-correct
+    signal — no separate counter needed here."""
+    if is_database_configured():
+        count, latest = landing_lead_repository.get_leads_version()
+        return f"{count}:{latest.isoformat() if latest else '0'}"
+    return f"{len(_leads)}"

@@ -14,15 +14,17 @@ from __future__ import annotations
 
 import threading
 import time
-from typing import List, Optional
+from typing import List, Optional, Tuple
 
 from Config.settings import get_settings
 from Database.client_session import is_client_database_configured
 from Middleware import step_logger
 from Model.WhatsAppInquiryHandlingModel.inquiry_message import InquiryChatMessage
 from Model.WhatsAppInquiryHandlingModel.inquiry_status import WhatsAppInquiryStatus
-from Service.WhatsAppInquiryHandlingService import client_store, inquiry_pipeline_service, outbound_messenger
+from Service.LandingPageService import lead_store
+from Service.WhatsAppInquiryHandlingService import client_store, form_token_service, inquiry_pipeline_service, outbound_messenger
 from Service.WhatsAppInquiryHandlingService.inquiry_buffer_service import InquiryBufferService
+from Service.WhatsAppInquiryHandlingService.phone_utils import normalize_phone
 from Service.WhatsAppInquiryHandlingService.whatsapp_inquiry_client import WhatsAppInquiryClient
 
 _MAX_STORED_MESSAGES = 500
@@ -96,6 +98,14 @@ def get_status() -> dict:
         "non_property_message_count": inquiry_pipeline_service.get_non_property_count(),
         "client_database_configured": is_client_database_configured(),
         "client_count": client_store.get_client_count(),
+        # Cheap change signals for the Inquiries page: this status poll
+        # already runs every tick, so piggybacking these here means the page
+        # can skip re-fetching the (potentially large) clients/leads lists
+        # unless one of these actually changed since the last tick — same
+        # pattern as WhatsAppDataFetchingService/whatsapp_service.py's
+        # properties_version.
+        "clients_version": client_store.get_clients_version(),
+        "leads_version": lead_store.get_leads_version(),
     }
 
 
@@ -107,6 +117,29 @@ def get_qr_code() -> Optional[bytes]:
     """Latest pairing QR code as PNG bytes, or None if there isn't one right
     now (not generated yet, already paired, or already scanned)."""
     return _latest_qr_png
+
+
+def create_manual_form_link(raw_phone: str) -> Optional[Tuple[str, str]]:
+    """Mints the exact same token-authenticated registration/update form
+    link normally sent by the WhatsApp welcome message (see
+    inquiry_pipeline_service._build_form_link) — but on demand, for the
+    Inquiries page's "+ Add" button, so staff can register a client who
+    hasn't messaged in yet (a walk-in, a phone call, a referral) by opening
+    that link themselves and either filling it in on the client's behalf or
+    handing/sending it to the client to fill in directly. Reuses the
+    "whatsapp" channel end to end: submitting it saves a normal ClientRecord
+    and triggers the same WhatsApp confirmation message, so a manually-added
+    client is indistinguishable from one who messaged in first.
+
+    Returns None if `raw_phone` isn't a valid phone number — the caller
+    turns that into a 400, since there's no identity to bind a token to
+    otherwise. On success, returns (normalized_phone, url)."""
+    phone = normalize_phone(raw_phone)
+    if phone is None:
+        return None
+    token = form_token_service.issue_token(channel="whatsapp", identity=phone)
+    base = get_settings().inquiry_form_base_url.rstrip("/")
+    return phone, f"{base}/{token}"
 
 
 # --- WhatsApp client callbacks ------------------------------------------------

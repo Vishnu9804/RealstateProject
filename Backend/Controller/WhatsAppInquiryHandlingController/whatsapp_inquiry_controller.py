@@ -4,12 +4,22 @@ this module only translates HTTP <-> Service.
 """
 
 from fastapi import APIRouter, HTTPException, Response
+from pydantic import BaseModel
 
 from Model.WhatsAppInquiryHandlingModel.client_record import ClientRecord
 from Model.WhatsAppInquiryHandlingModel.inquiry_message import InquiryChatMessage
 from Service.WhatsAppInquiryHandlingService import client_store, whatsapp_inquiry_service
 
 router = APIRouter(prefix="/whatsapp-inquiry", tags=["whatsapp-inquiry"])
+
+
+class ManualLinkRequest(BaseModel):
+    phone: str
+
+
+class ManualLinkResponse(BaseModel):
+    url: str
+    phone: str
 
 
 @router.get("/status")
@@ -39,6 +49,20 @@ def get_messages(limit: int = 100) -> list[InquiryChatMessage]:
 @router.get("/clients", response_model=list[ClientRecord])
 def get_clients(limit: int = 100) -> list[ClientRecord]:
     return client_store.get_all_clients(limit=limit)
+
+
+@router.post("/manual-link", response_model=ManualLinkResponse)
+def create_manual_link(request: ManualLinkRequest) -> ManualLinkResponse:
+    """Mints a registration/update form link for a phone number typed in by
+    staff on the Inquiries page's "+ Add" button — the same link/form a
+    client would get from the WhatsApp welcome message, for someone who
+    hasn't messaged in yet (walk-in, phone call, referral). See
+    whatsapp_inquiry_service.create_manual_form_link."""
+    result = whatsapp_inquiry_service.create_manual_form_link(request.phone)
+    if result is None:
+        raise HTTPException(status_code=400, detail="That doesn't look like a valid phone number.")
+    phone, url = result
+    return ManualLinkResponse(url=url, phone=phone)
 
 
 @router.get("/clients/{phone}", response_model=ClientRecord)

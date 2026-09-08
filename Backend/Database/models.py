@@ -95,6 +95,11 @@ class PropertyRow(Base):
     # when a human accepts the property out of the review queue ---
     needs_review: Mapped[bool] = mapped_column(Boolean, nullable=False, default=False, server_default="false")
     review_notes: Mapped[Optional[str]] = mapped_column(Text, nullable=True)
+    # record_id of the OTHER property this one might be a duplicate of — see
+    # StructuredProperty.duplicate_of_record_id. Not a foreign key: the
+    # matched property can itself later be deleted, and a dangling reference
+    # here is harmless (the review UI just fails to load it).
+    duplicate_of_record_id: Mapped[Optional[str]] = mapped_column(String, nullable=True)
 
     # --- the Landing Page page's own state — see StructuredProperty's own
     # comment on these three for what each one means and who sets it ---
@@ -108,6 +113,14 @@ class PropertyRow(Base):
     embedding_model: Mapped[str] = mapped_column(String, nullable=False)
 
     created_at: Mapped[datetime] = mapped_column(DateTime(timezone=True), server_default=func.now())
+    # Bumped by Postgres on every UPDATE (onupdate=func.now()), not just on
+    # insert — the cheap "count + max(updated_at)" signal the polling pages
+    # compare against (see property_repository.get_properties_version) needs
+    # this to catch in-place edits (Accept, Move, the Edit dialog, the
+    # Landing Page Send/Remove toggle), which created_at alone never would.
+    updated_at: Mapped[datetime] = mapped_column(
+        DateTime(timezone=True), server_default=func.now(), onupdate=func.now()
+    )
 
 
 class AppSettingRow(Base):

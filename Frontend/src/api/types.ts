@@ -18,6 +18,12 @@ export interface WhatsAppStatusResponse {
   duplicate_property_count: number;
   needs_review_property_count: number;
   outsider_property_count: number;
+  /** Opaque "did the property list change" token — a count + latest-edit
+   *  timestamp under the hood, but callers only ever compare it for
+   *  equality against what they last saw. Bumps on any add/edit/move/
+   *  delete. Powers the Properties/Landing Page pages' change-driven
+   *  refresh. */
+  properties_version: string;
 }
 
 export interface WhatsAppGroup {
@@ -110,6 +116,17 @@ export interface InquiryClientRecord {
   updated_at: string | null;
 }
 
+/**
+ * Mirrors Backend/Controller/WhatsAppInquiryHandlingController/
+ * whatsapp_inquiry_controller.py's ManualLinkResponse — the registration
+ * form link minted on demand for the Inquiries page's "+ Add" button (see
+ * InquiryClientsPage.tsx), for a client who hasn't messaged in yet.
+ */
+export interface ManualLinkResponse {
+  url: string;
+  phone: string;
+}
+
 /** Mirrors Backend/Service/WhatsAppInquiryHandlingService/whatsapp_inquiry_service.py's get_status() dict. */
 export interface InquiryStatusResponse {
   status: string;
@@ -120,6 +137,10 @@ export interface InquiryStatusResponse {
   non_property_message_count: number;
   client_database_configured: boolean;
   client_count: number;
+  /** Same idea as WhatsAppStatusResponse.properties_version, for the
+   *  Inquiries page's own two lists. */
+  clients_version: string;
+  leads_version: string;
 }
 
 /**
@@ -204,6 +225,12 @@ export interface PropertyRecord {
   review_status: "accepted" | "outsider";
   needs_review: boolean;
   review_notes: string | null;
+  /** record_id of the OTHER property this one might be a duplicate of —
+   *  set by the duplicate-detection stage alongside needs_review. Null when
+   *  flagged for an unrelated reason (e.g. outside every client-selected
+   *  area, with no duplicate candidate involved). Used to fetch and show a
+   *  side-by-side comparison in the Needs review dialog's Comparison tab. */
+  duplicate_of_record_id: string | null;
   formatted_timestamp: string;
   /** The Landing Page page's own state — see Backend/Model/.../
    *  structured_property.py's own comment on these three. */

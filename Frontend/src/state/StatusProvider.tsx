@@ -31,7 +31,16 @@ interface StatusContextValue {
 
 const StatusContext = createContext<StatusContextValue | null>(null);
 
-const POLL_INTERVAL_MS = 3000;
+// 3s was overkill for a connection-status pill and, being global (this
+// poll runs on every internal page, all day, regardless of which screen is
+// open), was the single largest source of continuous database round-trips
+// in the app. 7s is still comfortably "live" for a status indicator, and
+// now this same tick also carries properties_version (see whatsapp_service.
+// get_status on the backend) — the Properties/Landing Page pages read it
+// from this context instead of running their own independent poll, so
+// slowing this down doesn't just cut this poll's own volume, it caps how
+// often those pages can even notice a change.
+const POLL_INTERVAL_MS = 7000;
 
 export function useAppStatus(): StatusContextValue {
   const context = useContext(StatusContext);

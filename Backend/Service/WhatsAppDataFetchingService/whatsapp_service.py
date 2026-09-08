@@ -103,8 +103,19 @@ def get_status() -> dict:
         "buffered_message_count": _message_buffer.pending_count() if _message_buffer else 0,
         "structured_property_count": property_pipeline_service.get_property_count(),
         "duplicate_property_count": property_pipeline_service.get_duplicate_count(),
-        "needs_review_property_count": property_pipeline_service.get_uncertain_count(),
+        # High-confidence duplicates are flagged into the same review queue
+        # as uncertain matches now (see property_pipeline_service.handle_batch_ready)
+        # rather than being skipped, so both counters feed this total.
+        "needs_review_property_count": (
+            property_pipeline_service.get_uncertain_count() + property_pipeline_service.get_duplicate_count()
+        ),
         "outsider_property_count": property_pipeline_service.get_outsider_count(),
+        # Cheap change signal for the Properties/Landing Page pages: this
+        # status poll already runs continuously (StatusProvider, shared
+        # across every internal page), so piggybacking the version here
+        # means those pages can skip re-fetching the full property list on
+        # every tick and only do it when this value actually changes.
+        "properties_version": property_pipeline_service.get_properties_version(),
     }
 
 

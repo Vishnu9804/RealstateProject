@@ -7,7 +7,8 @@ get_client_count. Callers never call this module directly.
 
 from __future__ import annotations
 
-from typing import List, Optional
+from datetime import datetime
+from typing import List, Optional, Tuple
 
 from sqlalchemy import func, select
 
@@ -66,6 +67,16 @@ def get_all_clients(limit: int) -> List[ClientRecord]:
 def get_client_count() -> int:
     with get_client_session() as session:
         return session.execute(select(func.count()).select_from(ClientRow)).scalar_one()
+
+
+def get_clients_version() -> Tuple[int, Optional[datetime]]:
+    """Same idea as Database/property_repository.py's get_properties_version
+    — a count plus the newest updated_at (already stamped by ClientRow's own
+    onupdate=func.now()), so the Inquiries page can skip re-fetching the
+    whole client list on ticks where nothing changed."""
+    with get_client_session() as session:
+        count, latest = session.execute(select(func.count(), func.max(ClientRow.updated_at))).one()
+        return count, latest
 
 
 def save_requirement_embedding(phone: str, embedding: List[float]) -> None:

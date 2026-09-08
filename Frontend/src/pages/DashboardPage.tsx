@@ -2,10 +2,22 @@ import { useCallback, useEffect, useMemo, useRef, useState } from "react";
 import { createPortal } from "react-dom";
 import { propertyApi } from "../api/propertyApi";
 import type { PropertyRecord } from "../api/types";
-import { usePolling } from "../hooks/usePolling";
+import { useAppStatus } from "../state/StatusProvider";
 import { useDebounced, usePersistentState } from "../hooks/useUi";
 import { friendlyError } from "../lib/apiError";
 import { formatCarpetArea, formatPrice, formatPricePerUnit, relativeTime } from "../lib/formatters";
+import {
+  addCachedProperty,
+  getCachedPropertyList,
+  patchCachedProperty,
+  removeCachedProperty,
+  setCachedPropertyList,
+} from "../lib/propertyListCache";
+import {
+  getCachedPropertyDetail,
+  invalidateCachedPropertyDetail,
+  setCachedPropertyDetail,
+} from "../lib/propertyDetailCache";
 import {
   compileFilters,
   countActiveFilters,
@@ -66,7 +78,6 @@ import {
  *  home) opened via its own button and left via Accept. */
 export type ViewTab = "main" | "outsider" | "needsReview";
 
-const REFRESH_INTERVAL_MS = 8000;
 const FETCH_LIMIT = 500;
 
 /**
@@ -170,6 +181,14 @@ export default function DashboardPage() {
   const seenIds = useRef<Set<string> | null>(null);
   const [freshIds, setFreshIds] = useState<Set<string>>(new Set());
 
+  // Mirrors the latest status context value without needing it as a `load`
+  // dependency — load() reads whatever version is current at the moment its
+  // fetch resolves, purely to label the cache entry it writes; it never
+  // needs to re-run just because a render happened.
+  const { status: appStatus } = useAppStatus();
+  const appStatusRef = useRef(appStatus);
+  appStatusRef.current = appStatus;
+
   const load = useCallback(
     async (manual = false) => {
       setRefreshing(true);
@@ -178,6 +197,7 @@ export default function DashboardPage() {
         setProperties(data);
         setLastUpdated(new Date());
         setError(null);
+        setCachedPropertyList(data, appStatusRef.current?.properties_version ?? null);
 
         const incoming = new Set(data.map((p) => p.record_id));
         if (seenIds.current) {
@@ -200,7 +220,42 @@ export default function DashboardPage() {
     [toast],
   );
 
-  usePolling(() => load(false), REFRESH_INTERVAL_MS);
+  // On mount: an in-memory cache hit (left behind by this same page, or by
+  // the Landing Page page — both read the identical list, see
+  // lib/propertyListCache.ts) paints instantly with zero network request.
+  // The version-watch effect below then either confirms it's still current
+  // (no fetch at all) or fetches once if it turns out stale. No cache hit
+  // falls back to the unconditional fetch this always did.
+  const lastPropertiesVersion = useRef<string | null>(null);
+
+  useEffect(() => {
+    const cached = getCachedPropertyList();
+    if (cached) {
+      setProperties(cached.data);
+      setLastUpdated(new Date(cached.fetchedAt));
+      seenIds.current = new Set(cached.data.map((p) => p.record_id));
+      lastPropertiesVersion.current = cached.version;
+      return;
+    }
+    void load(false);
+    // Intentionally mount-only — the effect below drives every subsequent load.
+    // eslint-disable-next-line react-hooks/exhaustive-deps
+  }, []);
+
+  useEffect(() => {
+    const version = appStatus?.properties_version;
+    if (version === undefined) return;
+    if (lastPropertiesVersion.current === null) {
+      // First observation with no prior cache — the mount effect above
+      // already fetched current data at roughly the same time, so just
+      // start tracking from here rather than triggering a redundant fetch.
+      lastPropertiesVersion.current = version;
+      return;
+    }
+    if (lastPropertiesVersion.current === version) return;
+    lastPropertiesVersion.current = version;
+    void load(false);
+  }, [appStatus?.properties_version, load]);
 
   // "/" jumps to search from anywhere on the page — the single most-used
   // control should never require aiming at it.
@@ -372,23 +427,40 @@ export default function DashboardPage() {
     setColumnFilter("listingType", { kind: "values", selected: [value] });
   }
 
+  // Every mutation in this page (Accept/Move/Edit save/Delete/Add) funnels
+  // through updateLocalProperty/removeLocalProperty below — patching the
+  // shared list cache (lib/propertyListCache.ts) right here, once, means
+  // every call site gets it for free instead of remembering it individually.
   function updateLocalProperty(recordId: string, next: PropertyRecord) {
     setProperties((prev) => (prev ? prev.map((p) => (p.record_id === recordId ? next : p)) : prev));
+    patchCachedProperty(recordId, next);
+    setCachedPropertyDetail(next);
   }
 
   function removeLocalProperty(recordId: string) {
     setProperties((prev) => (prev ? prev.filter((p) => p.record_id !== recordId) : prev));
+    removeCachedProperty(recordId);
+    invalidateCachedPropertyDetail(recordId);
   }
 
   // The polled list (load, above) never carries real photos — see
   // propertyApi.getProperties's own comment — so opening a property's
-  // detail or Edit dialog fetches the one full record first and merges it
-  // into `properties`, same as any other update. A poll landing later just
-  // overwrites it back to the photo-less summary, which is fine: reopening
-  // re-fetches in a moment, and while it's open the poll never replaces
-  // `detailProperty`/`formDialog`'s own already-fetched object out from
-  // under it.
+  // detail or Edit dialog needs the one full record first. lib/
+  // propertyDetailCache.ts is checked before hitting the network — it's
+  // shared with the Landing Page and Inquiries pages, so reopening a
+  // property recently viewed from any of them skips the fetch entirely (and
+  // with it, re-downloading that property's photos). A poll landing later
+  // just overwrites `properties` back to the photo-less summary, which is
+  // fine: reopening re-fetches (or re-reads the cache) in a moment, and
+  // while it's open the poll never replaces `detailProperty`/`formDialog`'s
+  // own already-fetched object out from under it.
   async function openDetail(recordId: string) {
+    const cached = getCachedPropertyDetail(recordId);
+    if (cached) {
+      updateLocalProperty(recordId, cached);
+      setDetailId(recordId);
+      return;
+    }
     try {
       const full = await propertyApi.getProperty(recordId);
       updateLocalProperty(recordId, full);
@@ -399,6 +471,12 @@ export default function DashboardPage() {
   }
 
   async function openEdit(property: PropertyRecord) {
+    const cached = getCachedPropertyDetail(property.record_id);
+    if (cached) {
+      updateLocalProperty(property.record_id, cached);
+      setFormDialog({ mode: "edit", property: cached });
+      return;
+    }
     try {
       const full = await propertyApi.getProperty(property.record_id);
       updateLocalProperty(property.record_id, full);
@@ -420,6 +498,29 @@ export default function DashboardPage() {
       });
     } catch (err) {
       toast.push({ tone: "bad", title: "Couldn't accept property", message: friendlyError(err) });
+    }
+  }
+
+  /** Needs review's own resolution step: unlike the plain Accept above
+   *  (which clears needs_review but leaves review_status untouched), this
+   *  both clears the review flag AND places the property into whichever of
+   *  Main/Outsider the reviewer picked, in one request — see the Needs
+   *  review dialog's Move to Main / Move to Outsider buttons. */
+  async function handleResolveReview(property: PropertyRecord, targetStatus: "accepted" | "outsider") {
+    try {
+      const updated = await propertyApi.updateProperty(property.record_id, {
+        review_status: targetStatus,
+        needs_review: false,
+      });
+      updateLocalProperty(property.record_id, updated);
+      setDetailId(null);
+      toast.push({
+        tone: "ok",
+        title: "Moved",
+        message: `Moved into ${targetStatus === "outsider" ? "Outsider" : "Main"}.`,
+      });
+    } catch (err) {
+      toast.push({ tone: "bad", title: "Couldn't move property", message: friendlyError(err) });
     }
   }
 
@@ -741,7 +842,7 @@ export default function DashboardPage() {
         <PropertyDetailDialog
           property={detailProperty}
           viewTab={viewTab}
-          onAccept={handleAccept}
+          onResolveReview={handleResolveReview}
           onMove={(property) => setConfirmAction({ type: "move", property })}
           onDelete={(property) => setConfirmAction({ type: "delete", property })}
           onEdit={(property) => openEdit(property)}
@@ -758,6 +859,8 @@ export default function DashboardPage() {
             if (mode === "add") {
               setProperties((prev) => (prev ? [...prev, saved] : [saved]));
               seenIds.current?.add(saved.record_id);
+              addCachedProperty(saved);
+              setCachedPropertyDetail(saved);
             } else {
               updateLocalProperty(saved.record_id, saved);
             }
@@ -1297,7 +1400,7 @@ function RowActions({
 export function PropertyDetailDialog({
   property,
   viewTab,
-  onAccept,
+  onResolveReview,
   onMove,
   onDelete,
   onEdit,
@@ -1306,7 +1409,12 @@ export function PropertyDetailDialog({
 }: {
   property: PropertyRecord;
   viewTab: ViewTab;
-  onAccept: (property: PropertyRecord) => void;
+  /** Only set by the Properties page — backs the Needs review dialog's Move
+   *  to Main / Move to Outsider buttons (clears needs_review AND sets
+   *  review_status in one request). Undefined on the Landing Page page,
+   *  which never shows a property with needs_review=true in the first
+   *  place (see its own viewTab prop, always "main"/"outsider" there). */
+  onResolveReview?: (property: PropertyRecord, targetStatus: "accepted" | "outsider") => void;
   onMove: (property: PropertyRecord) => void;
   onDelete: (property: PropertyRecord) => void;
   onEdit: (property: PropertyRecord) => void;
@@ -1323,6 +1431,18 @@ export function PropertyDetailDialog({
   // only closes the whole detail dialog once no photo is open.
   const [lightboxIndex, setLightboxIndex] = useState<number | null>(null);
   const photoCount = property.image_urls.length;
+
+  // Needs review's own two-tab layout — Details (everything the dialog has
+  // always shown) and Compare (the flagged property side-by-side with
+  // whichever existing property it might be a duplicate of), so the raw
+  // scoring reason (accurate, but meaningless to read) never has to be the
+  // only way to judge a flag. Reset to Details on every property switch —
+  // reopening the dialog on a different row should never silently land on
+  // the previous row's tab. Main/Outsider properties never show this — see
+  // ReviewBadge's own "only Needs review carries this ambiguity" logic.
+  const [activeTab, setActiveTab] = useState<"details" | "compare">("details");
+  useEffect(() => setActiveTab("details"), [property.record_id]);
+  const showTabs = property.needs_review;
 
   useEffect(() => {
     const onKeyDown = (event: KeyboardEvent) => {
@@ -1381,6 +1501,20 @@ export function PropertyDetailDialog({
         </div>
 
         <div className="detail-modal__body">
+          {showTabs && (
+            <Segmented<"details" | "compare">
+              ariaLabel="Property details or comparison"
+              value={activeTab}
+              onChange={setActiveTab}
+              options={[
+                { value: "details", label: "Details" },
+                { value: "compare", label: "Compare" },
+              ]}
+            />
+          )}
+
+          {(!showTabs || activeTab === "details") && (
+            <>
           {photoCount > 0 && (
             <div className="detail__gallery">
               {property.image_urls.map((src, index) => (
@@ -1490,6 +1624,10 @@ export function PropertyDetailDialog({
             </div>
             <div className="detail__msg">{property.message_text}</div>
           </div>
+            </>
+          )}
+
+          {showTabs && activeTab === "compare" && <ComparisonPane flagged={property} />}
         </div>
 
         <div className="detail-modal__foot">
@@ -1497,32 +1635,45 @@ export function PropertyDetailDialog({
             Close
           </Button>
           <span className="row-flex" style={{ marginLeft: "auto", gap: 10 }}>
-            {viewTab === "needsReview" && (
-              <Button icon={<IconCheck size={14} />} onClick={() => onAccept(property)}>
-                Accept
-              </Button>
+            {/* Needs review resolves itself by explicitly picking a home
+                tab — no separate Accept step, and no dynamic single
+                "Move to X" that only ever offers one direction. */}
+            {viewTab === "needsReview" ? (
+              <>
+                <Button icon={<IconCheck size={14} />} onClick={() => onResolveReview?.(property, "accepted")}>
+                  Move to Main
+                </Button>
+                <Button
+                  variant="ghost"
+                  icon={<IconMove size={14} />}
+                  onClick={() => onResolveReview?.(property, "outsider")}
+                >
+                  Move to Outsider
+                </Button>
+              </>
+            ) : (
+              <>
+                {selectAction && (
+                  <Button
+                    variant="ghost"
+                    className={`select-toggle-btn${selectAction.selected ? ` select-toggle-btn--${selectAction.tone}` : ""}`}
+                    icon={<IconCheck size={14} />}
+                    onClick={() => {
+                      selectAction.onToggle();
+                      onClose();
+                    }}
+                  >
+                    {selectAction.selected ? "Selected" : "Select"}
+                  </Button>
+                )}
+                <Button variant="ghost" icon={<IconEdit size={14} />} onClick={() => onEdit(property)}>
+                  Edit
+                </Button>
+                <Button variant="ghost" icon={<IconMove size={14} />} onClick={() => onMove(property)}>
+                  Move to {movesTo}
+                </Button>
+              </>
             )}
-            {selectAction && (
-              <Button
-                variant="ghost"
-                className={`select-toggle-btn${selectAction.selected ? ` select-toggle-btn--${selectAction.tone}` : ""}`}
-                icon={<IconCheck size={14} />}
-                onClick={() => {
-                  selectAction.onToggle();
-                  onClose();
-                }}
-              >
-                {selectAction.selected ? "Selected" : "Select"}
-              </Button>
-            )}
-            {viewTab !== "needsReview" && (
-              <Button variant="ghost" icon={<IconEdit size={14} />} onClick={() => onEdit(property)}>
-                Edit
-              </Button>
-            )}
-            <Button variant="ghost" icon={<IconMove size={14} />} onClick={() => onMove(property)}>
-              Move to {movesTo}
-            </Button>
             <Button className="btn--danger" icon={<IconTrash size={14} />} onClick={() => onDelete(property)}>
               Delete
             </Button>
@@ -1571,6 +1722,131 @@ export function PropertyDetailDialog({
     )}
     </>,
     document.body,
+  );
+}
+
+/** The Needs review dialog's Compare tab: the flagged property side-by-side
+ *  with whichever existing property duplicate detection actually matched it
+ *  against (property.duplicate_of_record_id) — a plain field-by-field table
+ *  reads at a glance, unlike the scoring reason text (accurate, but built
+ *  for debugging the algorithm, not for a human deciding what to do). When
+ *  there's no matched candidate (flagged for an unrelated reason, e.g.
+ *  outside every client-selected area), there's nothing to compare against,
+ *  so this falls back to just explaining why. */
+function ComparisonPane({ flagged }: { flagged: PropertyRecord }) {
+  const [matched, setMatched] = useState<PropertyRecord | null>(null);
+  const [status, setStatus] = useState<"none" | "loading" | "loaded" | "error">(
+    flagged.duplicate_of_record_id ? "loading" : "none",
+  );
+
+  useEffect(() => {
+    const recordId = flagged.duplicate_of_record_id;
+    if (!recordId) {
+      setStatus("none");
+      setMatched(null);
+      return;
+    }
+    const cached = getCachedPropertyDetail(recordId);
+    if (cached) {
+      setMatched(cached);
+      setStatus("loaded");
+      return;
+    }
+    let cancelled = false;
+    setStatus("loading");
+    propertyApi
+      .getProperty(recordId)
+      .then((full) => {
+        if (cancelled) return;
+        setCachedPropertyDetail(full);
+        setMatched(full);
+        setStatus("loaded");
+      })
+      .catch(() => {
+        if (!cancelled) setStatus("error");
+      });
+    return () => {
+      cancelled = true;
+    };
+  }, [flagged.duplicate_of_record_id]);
+
+  if (status === "none") {
+    return (
+      <Note tone="info" icon={<IconAlert size={16} />}>
+        <strong>No specific property to compare against.</strong>{" "}
+        {flagged.review_notes ?? "This property wasn't flagged as a possible duplicate of anything in particular."}
+      </Note>
+    );
+  }
+
+  if (status === "loading") {
+    return (
+      <div className="row-flex faint small">
+        <span className="spinner" /> Loading the possible match…
+      </div>
+    );
+  }
+
+  if (status === "error" || !matched) {
+    return (
+      <Note tone="bad" icon={<IconAlert size={16} />}>
+        Couldn't load the possible match — it may have been deleted since this property was flagged.
+      </Note>
+    );
+  }
+
+  const rows: { label: string; value: (p: PropertyRecord) => string }[] = [
+    { label: "Society", value: (p) => p.society_name ?? "—" },
+    { label: "Area", value: (p) => p.area_name ?? "—" },
+    { label: "Address", value: (p) => p.address ?? "—" },
+    { label: "BHK", value: (p) => p.bhk ?? "—" },
+    { label: "Property type", value: (p) => p.property_type ?? "—" },
+    { label: "Sale / Rent", value: (p) => p.listing_type },
+    { label: "Carpet area", value: (p) => formatCarpetArea(p.carpet_area_sqft, p.carpet_area_unit) },
+    { label: "Price", value: (p) => formatPrice(p.price_text, p.price_amount_inr) },
+    { label: "Price / unit", value: (p) => formatPricePerUnit(p.price_per_unit_text, p.price_per_unit_amount_inr) },
+    { label: "Contact name", value: (p) => p.contact_name ?? "—" },
+    { label: "Contact phone", value: (p) => p.contact_phone ?? "—" },
+    { label: "Description", value: (p) => p.description ?? "—" },
+    { label: "Source", value: (p) => `${sourceLabel(p)} · ${p.chat_type === "group" ? "Group" : "Personal"}` },
+    { label: "Received", value: (p) => p.formatted_timestamp },
+  ];
+
+  return (
+    <div className="stack stack-3">
+      {flagged.review_notes && (
+        <Note tone="warn" icon={<IconAlert size={16} />}>
+          {flagged.review_notes}
+        </Note>
+      )}
+      <div className="table-scroll">
+        <table className="table compare-table">
+          <thead>
+            <tr>
+              <th>Field</th>
+              <th>This property (Needs review)</th>
+              <th>Existing property (possible duplicate)</th>
+            </tr>
+          </thead>
+          <tbody>
+            {rows.map((row) => {
+              const a = row.value(flagged);
+              const b = row.value(matched);
+              const comparable = a !== "—" && b !== "—";
+              const differs = comparable && a.trim().toLowerCase() !== b.trim().toLowerCase();
+              const cellStyle = differs ? { color: "var(--warn)", fontWeight: 600 } : undefined;
+              return (
+                <tr key={row.label}>
+                  <td className="cell-strong">{row.label}</td>
+                  <td style={cellStyle}>{a}</td>
+                  <td style={cellStyle}>{b}</td>
+                </tr>
+              );
+            })}
+          </tbody>
+        </table>
+      </div>
+    </div>
   );
 }
 

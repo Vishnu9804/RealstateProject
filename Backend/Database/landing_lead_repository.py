@@ -11,7 +11,8 @@ see Database/landing_page_models.py for why.
 
 from __future__ import annotations
 
-from typing import List
+from datetime import datetime
+from typing import List, Optional, Tuple
 
 from sqlalchemy import func, select
 
@@ -46,6 +47,16 @@ def get_all_leads(limit: int = 100) -> List[LandingLeadRecord]:
 def get_lead_count() -> int:
     with get_session() as session:
         return session.execute(select(func.count()).select_from(LandingLeadRow)).scalar_one()
+
+
+def get_leads_version() -> Tuple[int, Optional[datetime]]:
+    """Same idea as Database/property_repository.py's get_properties_version.
+    Leads are append-only (no edit/delete endpoint exists), so created_at
+    alone is a valid, permanently-correct change signal here — no updated_at
+    column needed."""
+    with get_session() as session:
+        count, latest = session.execute(select(func.count(), func.max(LandingLeadRow.created_at))).one()
+        return count, latest
 
 
 def _to_pydantic(row: LandingLeadRow) -> LandingLeadRecord:

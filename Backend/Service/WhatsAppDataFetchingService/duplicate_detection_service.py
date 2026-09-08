@@ -113,6 +113,7 @@ def check_duplicate(new_property: EmbeddedProperty) -> DuplicateCheckResult:
                 weighted_score=weighted_score,
                 evidence_ratio=evidence_ratio,
                 matched_source_message_id=candidate.source_message_id,
+                matched_record_id=candidate.record_id,
                 field_scores=field_scores,
                 contradictions=[],
                 reason="",

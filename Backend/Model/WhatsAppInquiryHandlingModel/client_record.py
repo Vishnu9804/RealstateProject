@@ -27,5 +27,10 @@ class ClientRecord(BaseModel):
     preferred_areas: Optional[str] = None
     additional_requirements: Optional[str] = None
 
+    # --- AgentManagement feature --- mirrors Database/client_models.py's
+    # ClientRow field-for-field, same as every other field on this model.
+    assigned_agent_id: Optional[str] = None
+    handoff_sent_at: Optional[datetime] = None
+
     created_at: Optional[datetime] = None
     updated_at: Optional[datetime] = None

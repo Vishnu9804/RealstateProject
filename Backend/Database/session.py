@@ -132,6 +132,14 @@ def init_db() -> None:
     # this one function, so table creation never has a second call site.
     from Database.client_models import ClientBase
     from Database.client_property_match_models import ClientPropertyMatchRow  # noqa: F401
+
+    # Same import-for-side-effect reasoning again, for the AgentManagement
+    # feature's tables — AgentRow and AgentVisitRow also live on ClientBase
+    # (see Database/agent_models.py's own docstring on why).
+    from Database.agent_assignment_models import AgentAssignmentRow  # noqa: F401
+    from Database.agent_models import AgentRow  # noqa: F401
+    from Database.agent_visit_models import AgentVisitRow  # noqa: F401
+    from Database.manual_property_models import ManualPropertyRow  # noqa: F401
     from Service.WhatsAppDataFetchingService.embedding_service import EMBEDDING_DIMENSIONS
 
     engine = _get_engine()
@@ -186,3 +194,14 @@ def init_db() -> None:
         connection.execute(
             text("ALTER TABLE properties ADD COLUMN IF NOT EXISTS updated_at TIMESTAMPTZ NOT NULL DEFAULT now()")
         )
+    with engine.begin() as connection:
+        # AgentManagement feature: which agent (if any) is handling this
+        # client's site visit, and whether the WhatsApp hand-off messages
+        # were ever sent for them.
+        connection.execute(text("ALTER TABLE clients ADD COLUMN IF NOT EXISTS assigned_agent_id VARCHAR"))
+        connection.execute(text("ALTER TABLE clients ADD COLUMN IF NOT EXISTS handoff_sent_at TIMESTAMPTZ"))
+        # Which property a completed visit was actually about — added after
+        # agent_visits already existed in production, so both are nullable
+        # for rows written before this column existed.
+        connection.execute(text("ALTER TABLE agent_visits ADD COLUMN IF NOT EXISTS property_record_id VARCHAR"))
+        connection.execute(text("ALTER TABLE agent_visits ADD COLUMN IF NOT EXISTS property_label VARCHAR"))

@@ -129,7 +129,34 @@ class WhatsAppInquiryClient:
             return True
         except Exception as exc:  # noqa: BLE001
             step_logger.error(f"Failed to send WhatsApp message to {phone}: {exc!r}")
+            if "not connected" in str(exc).lower():
+                self._force_reconnect_after_dead_websocket()
             return False
+
+    def _force_reconnect_after_dead_websocket(self) -> None:
+        """A send can fail with "websocket not connected" while the
+        underlying TCP/websocket connection has died silently — observed in
+        practice without neonize ever firing DisconnectedEv, which is what
+        every other reconnect path here (pairing timeout, logout) relies on.
+        Left alone, `client.start()`'s blocking `connect()` call never
+        returns, so whatsapp_inquiry_service._run_client's reconnect loop
+        never gets control back and every future send fails the same way
+        until the whole server is restarted by hand — for a feature whose
+        entire point is sending messages (the AgentManagement hand-off,
+        the registration welcome message), that's the one failure mode that
+        must self-heal.
+
+        `stop()` is the same mechanism `_pairing_timed_out` and
+        `_handle_logged_out` already use to force `connect()` to return: the
+        session/device pairing itself is still valid here (this isn't a
+        logout), so the reconnect loop's next attempt reconnects silently
+        with the existing session — no fresh QR needed."""
+        step_logger.warn("Inquiry Handling WhatsApp websocket appears dead — forcing a reconnect.")
+        if self._client is not None:
+            try:
+                self._client.stop()
+            except Exception as exc:  # noqa: BLE001
+                step_logger.warn(f"Error stopping client after a dead-websocket send failure: {exc!r}")
 
     def start(self) -> None:
         """Connects to WhatsApp. Blocks for the lifetime of the connection."""

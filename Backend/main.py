@@ -74,6 +74,7 @@ if sys.platform == "win32":
     sys.stdout.reconfigure(encoding="utf-8", errors="replace")
     sys.stderr.reconfigure(encoding="utf-8", errors="replace")
 
+from Controller.AgentManagementController.agent_controller import router as agent_router
 from Controller.ClientPropertyMatchingController.matching_controller import router as matching_router
 from Controller.WhatsAppDataFetchingController.area_filter_controller import router as area_filter_router
 from Controller.WhatsAppDataFetchingController.display_settings_controller import router as display_settings_router
@@ -88,6 +89,8 @@ from Config.settings import get_settings
 from Database.session import init_db, is_database_configured
 from Middleware.logging_config import configure_logging
 from Middleware import step_logger
+from Service.AgentManagementService import handoff_template_service
+from Service.ClientPropertyMatchingService import scheduled_recompute_service
 from Service.WhatsAppDataFetchingService import area_filter_service, display_settings_service, duplicate_detection_service, whatsapp_service
 from Service.WhatsAppInquiryHandlingService import whatsapp_inquiry_service
 from Service.InstagramInquiryHandlingService import instagram_connection_service, instagram_polling_service
@@ -114,6 +117,7 @@ async def _init_database() -> None:
         await asyncio.to_thread(display_settings_service.load_from_database)
         await asyncio.to_thread(duplicate_detection_service.load_from_database)
         await asyncio.to_thread(instagram_connection_service.load_from_database)
+        await asyncio.to_thread(handoff_template_service.load_from_database)
         step_logger.success(
             "Database ready — properties, client records, and settings will persist across restarts."
         )
@@ -174,6 +178,11 @@ async def lifespan(_app: FastAPI):
     # docstring) — safe to start unconditionally alongside the keepalive
     # loop, no stagger needed for the same reason as above.
     instagram_polling_service.start_background_polling()
+    # Client-Property Matching feature: daily 6 AM IST re-run of the full
+    # matching pipeline for every existing client, so properties added since
+    # a client last had their requirements changed still get matched against
+    # them. Inert until the first 6 AM IST tick, so safe to start unconditionally.
+    scheduled_recompute_service.start_daily_recompute_in_background()
     yield
     # The WhatsApp/Instagram clients above run on daemon threads blocked
     # inside native (cgo) calls into the whatsmeow/neonize Go library —
@@ -241,6 +250,7 @@ app.include_router(inquiry_form_router, prefix="/api")
 app.include_router(matching_router, prefix="/api")
 app.include_router(instagram_router, prefix="/api")
 app.include_router(landing_page_router, prefix="/api")
+app.include_router(agent_router, prefix="/api")
 
 
 @app.get("/")

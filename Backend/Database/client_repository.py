@@ -29,6 +29,8 @@ _COLUMNS = (
     "budget_max_inr",
     "preferred_areas",
     "additional_requirements",
+    "assigned_agent_id",
+    "handoff_sent_at",
 )
 
 

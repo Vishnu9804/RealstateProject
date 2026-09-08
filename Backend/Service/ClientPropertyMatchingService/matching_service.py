@@ -94,6 +94,21 @@ def get_cached_result(phone: str) -> Optional[ClientMatchResult]:
     return _build_result(client, scores, computed_at)
 
 
+def get_match_counts(phone: str) -> Dict[str, int]:
+    """AgentManagement feature: how many matches are in each bucket, without
+    the expense get_cached_result pays to enrich every match with its
+    property's current display fields (property_vector_store.get_all_properties
+    loads the whole properties table, embeddings included). Used by the
+    Inquiries table's Matches column, which needs this for every visible
+    client on every poll — get_cached_result would make that eager cost far
+    too high for what is otherwise just a badge with a number on it."""
+    scores, _ = _read_scores(phone)
+    counts = {"high": 0, "medium": 0, "low": 0}
+    for score in scores:
+        counts[score.bucket.value] += 1
+    return counts
+
+
 def has_requirements(client: ClientRecord) -> bool:
     return any(
         [

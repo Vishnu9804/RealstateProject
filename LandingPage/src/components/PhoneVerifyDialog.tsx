@@ -1,0 +1,299 @@
+import { useCallback, useEffect, useRef, useState, type ClipboardEvent, type KeyboardEvent } from "react";
+import { phoneVerificationApi } from "../api/phoneVerificationApi";
+import { ApiError } from "../api/client";
+import { IconAlert, IconClose, IconWhatsApp } from "./Icons";
+
+const CODE_LENGTH = 4;
+const RESEND_SECONDS = 30;
+
+/**
+ * The 4-digit code dialog.
+ *
+ * It exists because of one specific thing going wrong: on the public site
+ * the only identity a visitor has is the number they type, and a typed
+ * number can be anybody's. Someone entering a number that isn't theirs —
+ * by mistake or otherwise — puts a stranger's phone on our enquiry, sends
+ * that stranger our messages, and (worse) would have let them read back
+ * whatever we already hold for it. A code sent to the number, typed back
+ * here, is the smallest thing that rules all of that out.
+ *
+ * Speed is the whole design brief, because this stands between a visitor
+ * and the form they actually came to fill in:
+ *
+ *  - The request fires from an effect on mount, so the code is already on
+ *    its way while the boxes are still painting. The backend stores the
+ *    code and returns immediately, sending the WhatsApp message on its own
+ *    thread — nothing here waits on WhatsApp.
+ *  - The message leads with the code, so it is readable straight from the
+ *    notification without opening the chat.
+ *  - Typing (or pasting, or an autofill) advances box to box on its own, so
+ *    the only thing left to do once all four are filled is press Done.
+ *
+ * Checking only happens on that Done click (or Enter) — never mid-typing —
+ * so a visitor who is still correcting a digit never sees a stray "wrong
+ * code" flash from a code that was momentarily complete but wrong.
+ *
+ * The one thing it will not do is trap someone: if we have no linked
+ * WhatsApp number to send from, `onUnavailable` fires and the site carries
+ * on unverified rather than dead-ending a real enquiry over our own
+ * plumbing being down.
+ */
+export default function PhoneVerifyDialog({
+  phone,
+  onVerified,
+  onUnavailable,
+  onClose,
+}: {
+  /** As typed. The backend canonicalises it and returns the E.164 form. */
+  phone: string;
+  onVerified: (verifiedPhone: string, token: string, expiresInSeconds: number) => void;
+  /** No WhatsApp connection available to send a code from — the caller
+   *  lets the visitor continue without verifying. */
+  onUnavailable: () => void;
+  /** "Change number" / Escape / backdrop — the number is left unverified. */
+  onClose: () => void;
+}) {
+  const [digits, setDigits] = useState<string[]>(() => Array(CODE_LENGTH).fill(""));
+  const [sending, setSending] = useState(true);
+  const [checking, setChecking] = useState(false);
+  const [error, setError] = useState<string | null>(null);
+  const [note, setNote] = useState<string | null>(null);
+  const [secondsLeft, setSecondsLeft] = useState(RESEND_SECONDS);
+
+  const boxRefs = useRef<Array<HTMLInputElement | null>>([]);
+  // Guards the mount-time send against React 18's double-invoked effects in
+  // development — sending a real WhatsApp message twice is not a dev-only
+  // annoyance, it is two notifications on a stranger's phone.
+  const requested = useRef(false);
+  // Both live in refs as well as state: the auto-submit fires from inside a
+  // keystroke handler and must never act on a stale snapshot.
+  const verifying = useRef(false);
+  const verifiedAlready = useRef(false);
+
+  const sendCode = useCallback(
+    async (isResend: boolean) => {
+      setSending(true);
+      setError(null);
+      try {
+        const result = await phoneVerificationApi.requestCode(phone);
+        if (result.status === "unavailable") {
+          onUnavailable();
+          return;
+        }
+        setSecondsLeft(result.status === "cooldown" ? Math.max(1, result.retry_after_seconds) : RESEND_SECONDS);
+        setNote(isResend ? "Sent again — check WhatsApp." : null);
+      } catch (failure) {
+        setError(
+          failure instanceof ApiError && failure.status === 400
+            ? "That number doesn't look right. Please close this and check it."
+            : "We couldn't send the code just now. Please check your connection and try again.",
+        );
+      } finally {
+        setSending(false);
+      }
+    },
+    [phone, onUnavailable],
+  );
+
+  useEffect(() => {
+    if (requested.current) return;
+    requested.current = true;
+    void sendCode(false);
+  }, [sendCode]);
+
+  // The resend countdown. Stops at zero rather than running forever.
+  useEffect(() => {
+    if (secondsLeft <= 0) return;
+    const timer = window.setTimeout(() => setSecondsLeft((value) => value - 1), 1000);
+    return () => window.clearTimeout(timer);
+  }, [secondsLeft]);
+
+  useEffect(() => {
+    boxRefs.current[0]?.focus();
+  }, []);
+
+  // Escape closes, and the page behind stops scrolling while this is open —
+  // on a phone this dialog IS the screen.
+  useEffect(() => {
+    function onKeyDown(event: globalThis.KeyboardEvent) {
+      if (event.key === "Escape") onClose();
+    }
+    const previousOverflow = document.body.style.overflow;
+    document.body.style.overflow = "hidden";
+    window.addEventListener("keydown", onKeyDown);
+    return () => {
+      document.body.style.overflow = previousOverflow;
+      window.removeEventListener("keydown", onKeyDown);
+    };
+  }, [onClose]);
+
+  const submitCode = useCallback(
+    async (code: string) => {
+      if (verifying.current || verifiedAlready.current) return;
+      verifying.current = true;
+      setChecking(true);
+      setError(null);
+      setNote(null);
+      try {
+        const result = await phoneVerificationApi.confirmCode(phone, code);
+        verifiedAlready.current = true;
+        onVerified(result.phone, result.verification_token, result.expires_in_seconds);
+      } catch (failure) {
+        setError(
+          failure instanceof ApiError && failure.status === 400
+            ? "That code isn't right, or it has expired. Please check WhatsApp and try again."
+            : "We couldn't check that code just now. Please try once more.",
+        );
+        setDigits(Array(CODE_LENGTH).fill(""));
+        boxRefs.current[0]?.focus();
+      } finally {
+        verifying.current = false;
+        setChecking(false);
+      }
+    },
+    [phone, onVerified],
+  );
+
+  function writeDigits(next: string[]) {
+    setDigits(next);
+    if (error) setError(null);
+  }
+
+  const code = digits.join("");
+  const complete = digits.every((digit) => digit !== "");
+
+  function onDone() {
+    if (!complete || checking) return;
+    void submitCode(code);
+  }
+
+  function onDigitChange(index: number, raw: string) {
+    // Handles a typed character, an autofilled code, and a paste that lands
+    // in one box, with the same three lines — take every digit given and
+    // spread it forward from here.
+    const incoming = raw.replace(/\D/g, "");
+    if (!incoming) {
+      const next = [...digits];
+      next[index] = "";
+      setDigits(next);
+      return;
+    }
+    const next = [...digits];
+    for (let offset = 0; offset < incoming.length && index + offset < CODE_LENGTH; offset += 1) {
+      next[index + offset] = incoming[offset];
+    }
+    const landed = Math.min(index + incoming.length, CODE_LENGTH - 1);
+    boxRefs.current[landed]?.focus();
+    writeDigits(next);
+  }
+
+  function onDigitKeyDown(index: number, event: KeyboardEvent<HTMLInputElement>) {
+    if (event.key === "Backspace" && digits[index] === "" && index > 0) {
+      // Backspace in an already-empty box steps back and clears the one
+      // before it — the behaviour every code field on every app has.
+      event.preventDefault();
+      const next = [...digits];
+      next[index - 1] = "";
+      setDigits(next);
+      boxRefs.current[index - 1]?.focus();
+      return;
+    }
+    if (event.key === "ArrowLeft" && index > 0) boxRefs.current[index - 1]?.focus();
+    if (event.key === "ArrowRight" && index < CODE_LENGTH - 1) boxRefs.current[index + 1]?.focus();
+    if (event.key === "Enter") onDone();
+  }
+
+  function onPaste(event: ClipboardEvent<HTMLInputElement>) {
+    const pasted = event.clipboardData.getData("text").replace(/\D/g, "").slice(0, CODE_LENGTH);
+    if (!pasted) return;
+    event.preventDefault();
+    const next = Array(CODE_LENGTH).fill("");
+    for (let i = 0; i < pasted.length; i += 1) next[i] = pasted[i];
+    boxRefs.current[Math.min(pasted.length, CODE_LENGTH - 1)]?.focus();
+    writeDigits(next);
+  }
+
+  return (
+    <div className="otp-backdrop" role="presentation" onMouseDown={onClose}>
+      <div
+        className="otp"
+        role="dialog"
+        aria-modal="true"
+        aria-labelledby="otp-title"
+        onMouseDown={(event) => event.stopPropagation()}
+      >
+        <button type="button" className="otp__close" onClick={onClose} aria-label="Close">
+          <IconClose size={18} />
+        </button>
+
+        <span className="otp__icon">
+          <IconWhatsApp size={20} />
+        </span>
+
+        <h3 className="otp__title" id="otp-title">
+          Confirm your WhatsApp number
+        </h3>
+        <p className="otp__sub">
+          {sending ? "Sending a 4-digit code to " : "We've sent a 4-digit code to "}
+          <strong>{phone}</strong>. Enter it below — it'll show right in your WhatsApp notification.
+        </p>
+
+        <div className="otp__boxes" onPaste={onPaste}>
+          {digits.map((digit, index) => (
+            <input
+              key={index}
+              ref={(element) => {
+                boxRefs.current[index] = element;
+              }}
+              className={`otp__box${digit ? " is-filled" : ""}${error ? " is-error" : ""}`}
+              type="text"
+              inputMode="numeric"
+              // Lets iOS/Android offer the code straight from the WhatsApp
+              // notification instead of making them read and retype it.
+              autoComplete={index === 0 ? "one-time-code" : "off"}
+              maxLength={CODE_LENGTH}
+              value={digit}
+              disabled={checking}
+              aria-label={`Digit ${index + 1}`}
+              onChange={(event) => onDigitChange(index, event.target.value)}
+              onKeyDown={(event) => onDigitKeyDown(index, event)}
+              onFocus={(event) => event.target.select()}
+            />
+          ))}
+        </div>
+
+        {error && (
+          <p className="otp__error" role="alert">
+            <IconAlert size={15} />
+            {error}
+          </p>
+        )}
+        {!error && note && <p className="otp__note">{note}</p>}
+
+        <button
+          type="button"
+          className="btn btn--primary otp__done"
+          onClick={onDone}
+          disabled={!complete || checking}
+        >
+          {checking ? <span className="spinner" /> : null}
+          {checking ? "Checking…" : "Done"}
+        </button>
+
+        <div className="otp__actions">
+          <button
+            type="button"
+            className="otp__link"
+            onClick={() => void sendCode(true)}
+            disabled={sending || secondsLeft > 0}
+          >
+            {secondsLeft > 0 ? `Resend in ${secondsLeft}s` : "Resend code"}
+          </button>
+          <button type="button" className="otp__link" onClick={onClose}>
+            Change number
+          </button>
+        </div>
+      </div>
+    </div>
+  );
+}

@@ -205,3 +205,8 @@ def init_db() -> None:
         # for rows written before this column existed.
         connection.execute(text("ALTER TABLE agent_visits ADD COLUMN IF NOT EXISTS property_record_id VARCHAR"))
         connection.execute(text("ALTER TABLE agent_visits ADD COLUMN IF NOT EXISTS property_label VARCHAR"))
+        # Budget snapshot, added once "Mark as still active" needed
+        # something to recreate the assignment's budget from — same
+        # nullable-for-old-rows treatment as the two columns just above.
+        connection.execute(text("ALTER TABLE agent_visits ADD COLUMN IF NOT EXISTS budget_min_inr FLOAT"))
+        connection.execute(text("ALTER TABLE agent_visits ADD COLUMN IF NOT EXISTS budget_max_inr FLOAT"))

@@ -1,5 +1,5 @@
 import { apiClient } from "./client";
-import type { AgentRecord, AgentSummary, HandoffTemplates, VisitRecord } from "./types";
+import type { AgentRecord, AgentSummary, AssignedClientSummary, HandoffTemplates, VisitRecord } from "./types";
 
 /** Mirrors Backend/Controller/AgentManagementController/agent_controller.py's
  *  AgentCreateRequest — name and phone are required, coverage_areas
@@ -33,6 +33,12 @@ export const agentApi = {
    *  agent's active list — see agent_store.complete_visit. */
   completeVisit: (agentId: string, body: VisitCompleteRequest): Promise<VisitRecord> =>
     apiClient.post(`/agents/${encodeURIComponent(agentId)}/visits`, body),
+
+  /** The reverse: "Mark as still active" — undoes one completed visit,
+   *  deleting its history row and recreating the active assignment it
+   *  came from (budget included) — see agent_store.reopen_visit. */
+  reopenVisit: (agentId: string, visitId: string): Promise<AssignedClientSummary> =>
+    apiClient.post(`/agents/${encodeURIComponent(agentId)}/visits/${encodeURIComponent(visitId)}/reopen`, {}),
 
   /** Settings page's editable hand-off message templates. */
   getHandoffTemplates: (): Promise<HandoffTemplates> => apiClient.get("/agents/handoff-templates"),

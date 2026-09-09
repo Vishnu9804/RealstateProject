@@ -32,11 +32,19 @@ Every flush is routed one of two ways, checked in this order:
                                              the database.
 
 IMPORTANT: nothing here ever writes to the client database. A client
-record is created exactly once — when they actually submit the
-registration/update form (Service/WhatsAppInquiryHandlingService/
+record is created exactly once through THIS pipeline — when they actually
+submit the registration/update form (Service/WhatsAppInquiryHandlingService/
 inquiry_form_service.py:submit_form). Being sent a link, or even asked to
 update, produces no database entry on its own; only their own submitted
 data does.
+
+The one thing that CAN create a record without any of that happening is a
+website enquiry (Service/LandingPageService/landing_page_service.py's
+_sync_to_inquiries) — status "website_lead", never "registered" or
+"pending_registration". handle_batch_ready treats that exactly like no
+record at all for the branching above, so a phone that only ever visited
+the public site still gets routed as a first-time texter the moment it
+actually messages this number.
 """
 
 from __future__ import annotations
@@ -48,7 +56,13 @@ from Config.settings import get_settings
 from Middleware import step_logger
 from Model.WhatsAppInquiryHandlingModel.client_record import ClientRecord
 from Model.WhatsAppInquiryHandlingModel.inquiry_message import InquiryChatMessage
-from Service.WhatsAppInquiryHandlingService import client_store, form_token_service, invitation_tracker, outbound_messenger
+from Service.WhatsAppInquiryHandlingService import (
+    assignment_lock_service,
+    client_store,
+    form_token_service,
+    invitation_tracker,
+    outbound_messenger,
+)
 from Service.WhatsAppInquiryHandlingService.phone_utils import normalize_phone
 
 _property_inquiry_count = 0
@@ -96,9 +110,19 @@ def handle_batch_ready(phone: str, messages: List[InquiryChatMessage]) -> None:
     # a parseable number at all, rather than dropping the inquiry outright.
     client_phone = normalize_phone(phone) or phone
     existing_client = client_store.get_client_by_phone(client_phone)
+    # A "website_lead" record (Service/LandingPageService/
+    # landing_page_service.py's _sync_to_inquiries) means this phone
+    # enquired on the public site, NOT that it ever actually texted this
+    # WhatsApp number before — treated as no record at all for everything
+    # below, so a first-time texter still gets the real new-client welcome
+    # + registration link, never the "welcome back" existing-client
+    # greeting for a conversation that never happened. Its pending_action
+    # is always None (only the real flow below ever sets that), so this
+    # substitution is safe for the check just below too.
+    real_existing_client = existing_client if existing_client is not None and existing_client.status != "website_lead" else None
 
-    if existing_client is not None and existing_client.pending_action == _AWAITING_UPDATE_CONFIRMATION:
-        _handle_update_confirmation_reply(client_phone, existing_client, messages)
+    if real_existing_client is not None and real_existing_client.pending_action == _AWAITING_UPDATE_CONFIRMATION:
+        _handle_update_confirmation_reply(client_phone, real_existing_client, messages)
         return
 
     classification = inquiry_classifier.classify_batch(messages)
@@ -114,8 +138,8 @@ def handle_batch_ready(phone: str, messages: List[InquiryChatMessage]) -> None:
     _property_inquiry_count += 1
     reason = classification.reason or "no reason given"
 
-    if existing_client is not None:
-        _greet_existing_client(client_phone, existing_client, reason)
+    if real_existing_client is not None:
+        _greet_existing_client(client_phone, real_existing_client, reason)
     elif invitation_tracker.was_invited(client_phone):
         step_logger.info(
             f"[Inquiry] {client_phone}: already invited, hasn't submitted the form yet ({reason}) — "
@@ -186,6 +210,15 @@ def _handle_update_confirmation_reply(phone: str, record: ClientRecord, messages
     client_store.upsert_client(record.model_copy(update={"pending_action": None}))
 
     if answer is True:
+        # Checked BEFORE a link is minted, not after it is submitted: a
+        # client with a site visit already assigned to an agent can't change
+        # their requirements online at all (see assignment_lock_service.py),
+        # so sending them a form to fill in would only waste their time and
+        # end in a refusal. They get the explanation straight away instead.
+        if assignment_lock_service.has_active_assignment(phone):
+            assignment_lock_service.send_locked_notice(phone, record)
+            return
+
         link = _build_form_link(phone)
         sent = outbound_messenger.send_text(phone, _UPDATE_LINK_TEXT_TEMPLATE.format(link=link))
         step_logger.success(
@@ -216,20 +249,12 @@ def _interpret_yes_no(combined_text: str) -> Optional[bool]:
 
 
 def _summarize_requirements(record: ClientRecord) -> str:
-    lines = []
-    if record.purpose:
-        lines.append(f"- Purpose: {record.purpose}")
-    if record.property_type:
-        lines.append(f"- Property type: {record.property_type}")
-    if record.bhk:
-        lines.append(f"- BHK: {record.bhk}")
-    if record.budget_min_inr or record.budget_max_inr:
-        lines.append(f"- Budget: {record.budget_min_inr or '?'} - {record.budget_max_inr or '?'}")
-    if record.preferred_areas:
-        lines.append(f"- Preferred areas: {record.preferred_areas}")
-    if record.additional_requirements:
-        lines.append(f"- Notes: {record.additional_requirements}")
-    return "\n".join(lines) if lines else "(no requirements on file yet)"
+    """Delegates to assignment_lock_service so the "here's what we have
+    for you" block reads identically whether it arrives in this
+    welcome-back message or in that module's refusal message — a client
+    comparing the two should be reading the same words about the same
+    data."""
+    return assignment_lock_service.summarize_requirements(record)
 
 
 def _build_form_link(phone: str) -> str:

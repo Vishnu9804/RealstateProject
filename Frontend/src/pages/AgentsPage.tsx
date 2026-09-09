@@ -1,22 +1,24 @@
 import { useCallback, useMemo, useState } from "react";
 import { agentApi } from "../api/agentApi";
 import { inquiryClientApi } from "../api/inquiryClientApi";
-import type { AgentSummary, AssignedClientSummary, InquiryClientRecord } from "../api/types";
+import type { AgentSummary, AssignedClientSummary, InquiryClientRecord, VisitRecord } from "../api/types";
 import { usePolling } from "../hooks/usePolling";
 import { friendlyError } from "../lib/apiError";
-import { formatCompactInr, relativeTime } from "../lib/formatters";
+import { relativeTime } from "../lib/formatters";
+import { getCachedAgents, setCachedAgents } from "../lib/agentListCache";
 import AgentFormDialog from "../components/AgentFormDialog";
+import AgentVisitsDialog from "../components/AgentVisitsDialog";
 import CompleteVisitDialog from "../components/CompleteVisitDialog";
 import ConfirmDialog from "../components/ui/ConfirmDialog";
 import { useToast } from "../components/ui/Toast";
 import { Avatar, Badge, Button, EmptyState, Panel, Stat } from "../components/ui/Primitives";
-import { IconCheck, IconClock, IconEdit, IconInbox, IconPlus, IconTag, IconTrash, IconUserCheck, IconUsers } from "../components/ui/Icons";
+import { IconClock, IconEdit, IconInbox, IconPlus, IconTag, IconTrash, IconUserCheck, IconUsers } from "../components/ui/Icons";
 
 const REFRESH_INTERVAL_MS = 8000;
 
 export default function AgentsPage() {
   const toast = useToast();
-  const [agents, setAgents] = useState<AgentSummary[] | null>(null);
+  const [agents, setAgents] = useState<AgentSummary[] | null>(() => getCachedAgents());
   const [clients, setClients] = useState<InquiryClientRecord[] | null>(null);
   const [error, setError] = useState<string | null>(null);
   const [lastUpdated, setLastUpdated] = useState<Date | null>(null);
@@ -26,12 +28,20 @@ export default function AgentsPage() {
   const [deletingAgent, setDeletingAgent] = useState<AgentSummary | null>(null);
   const [deleting, setDeleting] = useState(false);
   const [completingVisit, setCompletingVisit] = useState<{ agent: AgentSummary; client: AssignedClientSummary } | null>(null);
+  // The Agents page's per-agent dialog — clicking a card opens this rather
+  // than expanding the property list inline on the card itself. Keyed by
+  // id, not by holding the AgentSummary object directly, so it always
+  // shows this agent's LATEST data as `agents` state updates underneath
+  // it (a poll tick, a completed/reopened visit) instead of a snapshot
+  // frozen at the moment it was opened.
+  const [openAgentId, setOpenAgentId] = useState<string | null>(null);
 
   const load = useCallback(async (manual = false) => {
     setRefreshing(true);
     try {
       const [agentData, clientData] = await Promise.all([agentApi.getAgents(), inquiryClientApi.getClients(500)]);
       setAgents(agentData);
+      setCachedAgents(agentData);
       setClients(clientData);
       setLastUpdated(new Date());
       setError(null);
@@ -50,12 +60,27 @@ export default function AgentsPage() {
   const allClients = useMemo(() => clients ?? [], [clients]);
   const assignedCount = useMemo(() => allClients.filter((c) => c.assigned_agent_id).length, [allClients]);
   const unassignedCount = allClients.length - assignedCount;
-  const visitsThisMonth = useMemo(() => allAgents.reduce((sum, a) => sum + a.monthly_visits, 0), [allAgents]);
+  const visitsThisMonth = useMemo(() => allAgents.reduce((sum, a) => sum + a.visits_this_month, 0), [allAgents]);
 
   const loading = agents === null && error === null;
 
   function replaceAgent(agentId: string, updater: (agent: AgentSummary) => AgentSummary) {
     setAgents((prev) => (prev ? prev.map((a) => (a.agent_id === agentId ? updater(a) : a)) : prev));
+  }
+
+  const openAgent = useMemo(() => allAgents.find((a) => a.agent_id === openAgentId) ?? null, [allAgents, openAgentId]);
+
+  /** "Mark as still active" inside AgentVisitsDialog already succeeded on
+   *  the server by the time this fires — move the visit out of
+   *  completed_visits and the restored assignment into active_clients
+   *  locally, the same optimistic-update shape CompleteVisitDialog's own
+   *  onCompleted already uses in reverse below. */
+  function handleReopened(agentId: string, visit: VisitRecord, restored: AssignedClientSummary) {
+    replaceAgent(agentId, (a) => ({
+      ...a,
+      active_clients: [...a.active_clients, restored],
+      completed_visits: a.completed_visits.filter((v) => v.visit_id !== visit.visit_id),
+    }));
   }
 
   async function handleDelete() {
@@ -134,9 +159,9 @@ export default function AgentsPage() {
               key={agent.agent_id}
               agent={agent}
               delay={Math.min(index * 40, 320)}
+              onOpen={() => setOpenAgentId(agent.agent_id)}
               onEdit={() => setEditingAgent(agent)}
               onDelete={() => setDeletingAgent(agent)}
-              onCompleteVisit={(client) => setCompletingVisit({ agent, client })}
             />
           ))}
         </div>
@@ -216,25 +241,56 @@ export default function AgentsPage() {
           }}
         />
       )}
+
+      {openAgent && (
+        <AgentVisitsDialog
+          agent={openAgent}
+          onClose={() => setOpenAgentId(null)}
+          onCompleteVisit={(client) => setCompletingVisit({ agent: openAgent, client })}
+          onReopened={handleReopened}
+        />
+      )}
     </div>
   );
 }
 
+/**
+ * Deliberately just the roster facts — name, coverage, how busy they are
+ * right now, how many visits they logged this month. Property-level detail
+ * (which visit, which client, which property) used to live inline on this
+ * card and made a team of any size feel cluttered; it now lives one click
+ * away in AgentVisitsDialog, reached by clicking anywhere on the card that
+ * isn't the Edit/Delete buttons.
+ */
 function AgentCard({
   agent,
   delay,
+  onOpen,
   onEdit,
   onDelete,
-  onCompleteVisit,
 }: {
   agent: AgentSummary;
   delay: number;
+  onOpen: () => void;
   onEdit: () => void;
   onDelete: () => void;
-  onCompleteVisit: (client: AssignedClientSummary) => void;
 }) {
   return (
-    <Panel interactive pad className="stack stack-3" delay={delay}>
+    <Panel
+      interactive
+      pad
+      className="stack stack-3"
+      delay={delay}
+      role="button"
+      tabIndex={0}
+      onClick={onOpen}
+      onKeyDown={(event) => {
+        if (event.key === "Enter" || event.key === " ") {
+          event.preventDefault();
+          onOpen();
+        }
+      }}
+    >
       <div className="row-flex" style={{ gap: 12, alignItems: "flex-start" }}>
         <Avatar name={agent.name} size={44} />
         <div style={{ minWidth: 0, flex: 1 }}>
@@ -260,51 +316,12 @@ function AgentCard({
         </div>
       )}
 
-      <div className="stack stack-1">
-        <div className="row-flex" style={{ justifyContent: "space-between" }}>
-          <div className="detail__k">Active visits</div>
-          <Badge tone={agent.active_clients.length > 0 ? "ok" : "info"}>{agent.active_clients.length}</Badge>
-        </div>
-        {agent.active_clients.length === 0 ? (
-          <div className="faint small">Free right now</div>
-        ) : (
-          <div className="stack stack-2">
-            {agent.active_clients.map((client) => (
-              <div key={`${client.phone}-${client.property_record_id}`} className="row-flex" style={{ justifyContent: "space-between" }}>
-                <div style={{ minWidth: 0 }}>
-                  <div className="cell-truncate">
-                    {client.name || client.phone} <span className="faint small">— {client.property_label}</span>
-                  </div>
-                  <div className="faint small">{budgetRange(client.budget_min_inr, client.budget_max_inr)}</div>
-                </div>
-                <Button size="sm" variant="ghost" icon={<IconCheck size={13} />} onClick={() => onCompleteVisit(client)}>
-                  Mark complete
-                </Button>
-              </div>
-            ))}
-          </div>
-        )}
+      <div className="pcard__facts">
+        <span className="fact">
+          {agent.active_clients.length > 0 ? `${agent.active_clients.length} active` : "Free right now"}
+        </span>
+        <span className="fact">{agent.visits_this_month} this month</span>
       </div>
-
-      {agent.completed_visits.length > 0 && (
-        <div className="stack stack-1">
-          <div className="detail__k">Completed visits</div>
-          <div className="stack stack-2">
-            {agent.completed_visits.map((visit) => (
-              <div key={visit.visit_id} className="row-flex" style={{ justifyContent: "space-between", alignItems: "flex-start" }}>
-                <div style={{ minWidth: 0 }}>
-                  <div className="cell-truncate">
-                    {visit.client_name || visit.client_phone}
-                    {visit.property_label && <span className="faint small"> — {visit.property_label}</span>}
-                  </div>
-                  {visit.notes && <div className="faint small">{visit.notes}</div>}
-                </div>
-                <Badge tone="ok">{visit.completed_at ? relativeTime(new Date(visit.completed_at)) : "Done"}</Badge>
-              </div>
-            ))}
-          </div>
-        </div>
-      )}
 
       <hr className="rule" style={{ margin: "2px 0" }} />
 
@@ -314,17 +331,10 @@ function AgentCard({
           <div className="faint small">{agent.created_at ? new Date(agent.created_at).toLocaleDateString("en-IN", { month: "short", year: "numeric" }) : "—"}</div>
         </div>
         <div>
-          <div className="detail__k">Visits / month</div>
-          <Badge tone="info">{agent.monthly_visits}</Badge>
+          <div className="detail__k">Active visits</div>
+          <Badge tone={agent.active_clients.length > 0 ? "ok" : "info"}>{agent.active_clients.length}</Badge>
         </div>
       </div>
     </Panel>
   );
-}
-
-function budgetRange(min: number | null, max: number | null): string {
-  if (min === null && max === null) return "—";
-  if (min !== null && max !== null) return `${formatCompactInr(min)} – ${formatCompactInr(max)}`;
-  if (min !== null) return `${formatCompactInr(min)}+`;
-  return `Up to ${formatCompactInr(max as number)}`;
 }

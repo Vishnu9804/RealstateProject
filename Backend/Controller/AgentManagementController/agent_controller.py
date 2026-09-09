@@ -14,7 +14,7 @@ from typing import List, Optional
 from fastapi import APIRouter, HTTPException
 from pydantic import BaseModel, Field
 
-from Model.AgentManagementModel.agent_record import AgentRecord, AgentSummary
+from Model.AgentManagementModel.agent_record import AgentRecord, AgentSummary, AssignedClientSummary
 from Model.AgentManagementModel.handoff_templates import HandoffTemplates
 from Model.AgentManagementModel.visit_record import VisitRecord
 from Service.AgentManagementService import agent_store, handoff_template_service
@@ -86,3 +86,14 @@ def complete_visit(agent_id: str, body: VisitCompleteRequest) -> VisitRecord:
     if visit is None:
         raise HTTPException(status_code=404, detail="No active visit found for that agent/client/property.")
     return visit
+
+
+@router.post("/{agent_id}/visits/{visit_id}/reopen", response_model=AssignedClientSummary)
+def reopen_visit(agent_id: str, visit_id: str) -> AssignedClientSummary:
+    """The Agents page's "Mark as still active" action — undoes one
+    completed visit, moving it back out of history and into this agent's
+    active visits (see agent_store.reopen_visit)."""
+    reopened = agent_store.reopen_visit(agent_id, visit_id)
+    if reopened is None:
+        raise HTTPException(status_code=404, detail="No completed visit found to reopen.")
+    return reopened

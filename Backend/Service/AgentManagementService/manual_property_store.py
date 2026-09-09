@@ -33,6 +33,15 @@ def remove_manual_property(client_phone: str, property_record_id: str) -> None:
         existing.remove(property_record_id)
 
 
+def clear_for_client(client_phone: str) -> None:
+    """Drops every hand-picked property for one client — used when that
+    client is deleted outright, not as an operator action."""
+    if is_client_database_configured():
+        manual_property_repository.delete_all_for_client(client_phone)
+        return
+    _manual_properties.pop(client_phone, None)
+
+
 def get_manual_properties(client_phone: str) -> List[str]:
     if is_client_database_configured():
         return manual_property_repository.get_for_client(client_phone)

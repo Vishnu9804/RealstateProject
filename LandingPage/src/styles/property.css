@@ -452,24 +452,6 @@
   line-height: 1.6;
 }
 
-.enquire__divider {
-  display: flex;
-  align-items: center;
-  gap: 14px;
-  margin: 22px 0 18px;
-  font-size: 11px;
-  letter-spacing: 0.2em;
-  text-transform: uppercase;
-  color: var(--text-faint);
-}
-.enquire__divider::before,
-.enquire__divider::after {
-  content: "";
-  flex: 1;
-  height: 1px;
-  background: var(--hairline);
-}
-
 /* ======================= loading / not-found ======================= */
 
 .prop-loading {

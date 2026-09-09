@@ -1,9 +1,8 @@
 import { useCallback, useEffect, useState } from "react";
-import { Link, useLocation, useParams } from "react-router-dom";
+import { Link, useLocation, useNavigate, useParams } from "react-router-dom";
 import type { LandingProperty, LandingPropertyDetail } from "../api/types";
 import { formatArea, formatPrice, locationLabel } from "../lib/format";
 import { prefetchProperty } from "../lib/propertyCache";
-import { site, whatsappLink } from "../lib/siteConfig";
 import LeadForm from "../components/LeadForm";
 import Reveal from "../components/Reveal";
 import {
@@ -16,7 +15,6 @@ import {
   IconInstagram,
   IconPin,
   IconSparkle,
-  IconWhatsApp,
 } from "../components/Icons";
 
 /** Fields the header/hero/specs need that both the card's summary and the
@@ -56,7 +54,13 @@ const SLOW_LOAD_HINT_MS = 4000;
 export default function PropertyPage() {
   const { recordId } = useParams<{ recordId: string }>();
   const location = useLocation();
+  const navigate = useNavigate();
   const preview = (location.state as { preview?: LandingProperty } | null)?.preview;
+
+  /** The form lives on the home page and only there — this hands the home
+   *  route the section to scroll to once it has actually rendered, exactly
+   *  as SiteHeader does from here. */
+  const goToEnquiry = useCallback(() => navigate("/", { state: { scrollTo: "contact" } }), [navigate]);
 
   const [property, setProperty] = useState<LandingPropertyDetail | null>(null);
   const [missing, setMissing] = useState(false);
@@ -106,10 +110,9 @@ export default function PropertyPage() {
             <Link className="btn btn--primary" to="/">
               Back to all properties
             </Link>
-            <a className="btn btn--ghost" href={whatsappLink()} target="_blank" rel="noreferrer noopener">
-              <IconWhatsApp size={16} />
-              Ask us directly
-            </a>
+            <button type="button" className="btn btn--ghost" onClick={goToEnquiry}>
+              Tell us what you're looking for
+            </button>
           </div>
         </div>
       </main>
@@ -282,25 +285,19 @@ export default function PropertyPage() {
                   time that suits you.
                 </p>
 
+                {/* The SHORT form on purpose. Someone reading this page has
+                    already said what they want by being on it, and the
+                    listing they are on is recorded with the enquiry — so
+                    asking for budget/areas/BHK here would be asking them to
+                    re-type what we can already see. The long requirements
+                    form belongs on the home page, where none of that is
+                    known. */}
                 <LeadForm
                   propertyRecordId={base.record_id}
                   submitLabel="Request details"
                   successTitle="We'll be in touch."
-                  successBody={`Someone from ${site.brand} ${site.brandAccent} will message you on WhatsApp about this property shortly.`}
+                  successBody="Someone from our team will message you on WhatsApp about this property shortly."
                 />
-
-                <div className="enquire__divider">or</div>
-
-                <a
-                  className="btn btn--ghost"
-                  style={{ width: "100%" }}
-                  href={whatsappLink(`Hi! I'm interested in "${base.title}" listed on your website.`)}
-                  target="_blank"
-                  rel="noreferrer noopener"
-                >
-                  <IconWhatsApp size={16} />
-                  Message us now
-                </a>
               </div>
             </Reveal>
           </aside>

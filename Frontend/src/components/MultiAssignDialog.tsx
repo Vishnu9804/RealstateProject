@@ -7,8 +7,17 @@ import { IconArrowRight, IconTag, IconX } from "./ui/Icons";
 
 export interface SelectableProperty {
   property: HandoffPropertyLike;
-  source: "matched" | "manual";
+  /** Where this property came from, for the badge on its agent picker:
+   *  scored against the client's requirements, picked by hand, or named by
+   *  the client themselves on a property page of the public site. */
+  source: "matched" | "manual" | "enquired";
 }
+
+const SOURCE_LABEL: Record<SelectableProperty["source"], string> = {
+  matched: "Matched",
+  manual: "Manually Added",
+  enquired: "Enquired",
+};
 
 /**
  * "Step 4 — Assign": which agent takes each selected property — one agent
@@ -103,7 +112,7 @@ export default function MultiAssignDialog({
                       <strong>{property.society_name || property.property_type || "Property"}</strong>
                       <span className="faint small">{[property.bhk, property.area_name].filter(Boolean).join(" · ")}</span>
                     </div>
-                    <Badge tone={source === "matched" ? "accent" : "info"}>{source === "matched" ? "Matched" : "Manually Added"}</Badge>
+                    <Badge tone={source === "manual" ? "info" : "accent"}>{SOURCE_LABEL[source]}</Badge>
                   </div>
 
                   <div className="card-grid">
@@ -138,7 +147,7 @@ export default function MultiAssignDialog({
 
                           <div className="pcard__facts" style={{ marginTop: 10 }}>
                             <span className="fact">Active {agent.active_clients.length}</span>
-                            <span className="fact">Visits/mo {agent.monthly_visits}</span>
+                            <span className="fact">Visits/mo {agent.visits_this_month}</span>
                           </div>
                         </button>
                       );

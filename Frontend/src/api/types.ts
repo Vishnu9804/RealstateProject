@@ -32,14 +32,28 @@ export interface WhatsAppGroup {
   member_count: number;
 }
 
-export interface WhatsAppPersonalChat {
-  jid: string;
-  phone_number: string;
-}
+/** Which pipeline(s) a linked WhatsApp number feeds — not mutually
+ *  exclusive, see Backend/Model/WhatsAppDataFetchingModel/whatsapp_connection.py. */
+export type ConnectionRole = "property" | "inquiry";
 
-export interface MonitoringSelectionResponse {
-  monitored_groups: WhatsAppGroup[];
-  monitored_personal_chats: WhatsAppPersonalChat[];
+/**
+ * Mirrors Backend/Model/WhatsAppDataFetchingModel/whatsapp_connection.py's
+ * WhatsAppConnectionView — one linked WhatsApp number as the redesigned
+ * Connection page shows it. `joined_groups` is included directly so the
+ * page never has to fetch per-connection group lists separately to build
+ * the aggregated Property groups picker.
+ */
+export interface WhatsAppConnection {
+  connection_id: string;
+  phone_number: string | null;
+  status: string;
+  roles: ConnectionRole[];
+  joined_groups: WhatsAppGroup[];
+  property_group_jids: string[];
+  property_personal_numbers: string[];
+  /** True for the not-yet-paired onboarding slot the QR code currently
+   *  belongs to — not a real, usable connection yet. */
+  is_pending: boolean;
 }
 
 export interface AreaFilterSettings {
@@ -58,7 +72,10 @@ export interface DisplaySettings {
  */
 /** "whatsapp": phone is known and fixed (locked field). "instagram": phone
  *  is unknown unless/until the visitor adds one (open, optional field) —
- *  see InquiryFormPage.tsx. */
+ *  the form itself now lives on the public site — see
+ *  LandingPage/src/components/RequirementsForm.tsx. Kept here because these
+ *  are the backend's shapes and this file documents them for the whole
+ *  whatsapp-inquiry surface. */
 export type InquiryChannel = "whatsapp" | "instagram";
 
 export interface InquiryFormPrefill {
@@ -157,6 +174,10 @@ export interface AssignedClientSummary {
   budget_max_inr: number | null;
   property_record_id: string;
   property_label: string;
+  /** When this specific visit became active — the per-agent dialog lists
+   *  active visits oldest-first using this. Null only for rows written
+   *  before this field existed. */
+  assigned_at: string | null;
 }
 
 /** Mirrors Backend/Model/AgentManagementModel/visit_record.py — one
@@ -172,6 +193,12 @@ export interface VisitRecord {
   client_name: string | null;
   property_record_id: string | null;
   property_label: string | null;
+  /** Snapshotted from the active assignment at completion time, so
+   *  "Mark as still active" can recreate it without the budget it
+   *  carried simply vanishing. Null for rows completed before this
+   *  field existed. */
+  budget_min_inr: number | null;
+  budget_max_inr: number | null;
   notes: string | null;
   completed_at: string | null;
 }
@@ -183,6 +210,11 @@ export interface VisitRecord {
 export interface AgentSummary extends AgentRecord {
   active_clients: AssignedClientSummary[];
   completed_visits: VisitRecord[];
+  /** Computed at read time from completed_visits, not from
+   *  AgentRecord.monthly_visits — that column is a static counter nothing
+   *  has ever incremented (see Backend/Database/agent_models.py's own
+   *  docstring), so it always reads 0. This is the real number. */
+  visits_this_month: number;
 }
 
 /** Mirrors Backend/Model/AgentManagementModel/handoff_templates.py — the
@@ -254,6 +286,35 @@ export interface MatchCounts {
   high: number;
   medium: number;
   low: number;
+  /** Properties the operator picked by hand for this client (never
+   *  scored, so never in the three buckets above) — the Inquiries table
+   *  shows matched + manual as one "N properties" total. */
+  manual: number;
+  /** Properties this client specifically enquired about on the public
+   *  site (LandingPage/) that aren't already counted in `manual` or the
+   *  three buckets above — a website enquiry that also scored or was
+   *  hand-picked is already reflected there and never counted twice here.
+   *  Also part of the Inquiries table's "N properties" total, for exactly
+   *  the same reason `manual` is: see ClientMatchesDialog.tsx's own "Web
+   *  Site Property Inquiry" section, which this mirrors. */
+  website_only: number;
+  /** THE number the Matches button shows — the deduped set of everything
+   *  still outstanding for this client, (scored ∪ manual ∪ website) minus
+   *  anything already visited, computed server-side. Use this directly:
+   *  the per-source counts above overlap each other, and `completed` is
+   *  not necessarily a subset of them, so adding them up here would both
+   *  double-count and over-subtract (which is exactly what it used to do).
+   *  Mirrors ClientMatchesDialog's own card list by construction. */
+  total: number;
+  /** How many of this client's properties are already out with an agent,
+   *  so the Status column can read "2 assigned · 1 remaining". */
+  assigned: number;
+  /** How many of this client's properties already have a COMPLETED visit
+   *  — disjoint from `assigned` (completing removes the active
+   *  assignment). Subtracted out of the matched+manual total, since a
+   *  property that's already been visited is no longer an outstanding
+   *  match. */
+  completed: number;
 }
 
 export interface ClientMatchResult {
@@ -329,6 +390,13 @@ export interface LandingLeadRecord {
   lead_id: string;
   name: string;
   whatsapp_number: string;
+  /** The canonical E.164 form of the number above, computed by the backend
+   *  on read (see Backend/Service/LandingPageService/lead_store.py). This
+   *  — not the raw string — is what the Property Interest tab groups on,
+   *  so one person who typed their number two different ways across two
+   *  enquiries still lands in a single row. null when it isn't parseable,
+   *  in which case the raw string is all there is to group by. */
+  phone_e164: string | null;
   property_record_id: string | null;
   /** A snapshot of the property's title taken at submission time — still
    *  meaningful even if that property is later edited, unpublished, or

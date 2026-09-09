@@ -35,31 +35,38 @@ def create(
     budget_max_inr: Optional[float],
     property_record_id: str,
     property_label: str,
-) -> None:
+) -> ActiveAssignment:
     """Idempotent: this exact (agent, client, property) triple staying
     active across a resent hand-off is a no-op, not a duplicate row (see
-    the table's own unique constraint)."""
+    the table's own unique constraint) — returns the existing row as-is
+    rather than touching it. Returns the row either way (existing or
+    newly inserted) so a caller that needs the result — agent_store.
+    reopen_visit, to read back the assigned_at this row was just given —
+    never has to pay a second round trip for a get_one() right after."""
     with get_client_session() as session:
-        exists = session.execute(
-            select(AgentAssignmentRow.id).where(
+        existing = session.execute(
+            select(AgentAssignmentRow).where(
                 AgentAssignmentRow.agent_id == agent_id,
                 AgentAssignmentRow.client_phone == client_phone,
                 AgentAssignmentRow.property_record_id == property_record_id,
             )
-        ).first()
-        if exists is None:
-            session.add(
-                AgentAssignmentRow(
-                    agent_id=agent_id,
-                    agent_name=agent_name,
-                    client_phone=client_phone,
-                    client_name=client_name,
-                    budget_min_inr=budget_min_inr,
-                    budget_max_inr=budget_max_inr,
-                    property_record_id=property_record_id,
-                    property_label=property_label,
-                )
-            )
+        ).scalar_one_or_none()
+        if existing is not None:
+            return _to_pydantic(existing)
+        row = AgentAssignmentRow(
+            agent_id=agent_id,
+            agent_name=agent_name,
+            client_phone=client_phone,
+            client_name=client_name,
+            budget_min_inr=budget_min_inr,
+            budget_max_inr=budget_max_inr,
+            property_record_id=property_record_id,
+            property_label=property_label,
+        )
+        session.add(row)
+        session.flush()
+        session.refresh(row)
+        return _to_pydantic(row)
 
 
 def get_all_active() -> List[ActiveAssignment]:
@@ -67,6 +74,18 @@ def get_all_active() -> List[ActiveAssignment]:
     with get_client_session() as session:
         rows = list(session.execute(stmt).scalars().all())
     return [_to_pydantic(row) for row in rows]
+
+
+def get_active_property_ids_for_client(client_phone: str) -> List[str]:
+    """AgentManagement feature: just the property ids currently assigned to
+    SOMEONE for this client — the Inquiries table's "2 assigned, 1 remaining"
+    status only needs a count, so this deliberately never builds the full
+    ActiveAssignment objects get_all_active() does."""
+    stmt = select(AgentAssignmentRow.property_record_id).where(
+        AgentAssignmentRow.client_phone == client_phone
+    )
+    with get_client_session() as session:
+        return list(session.execute(stmt).scalars().all())
 
 
 def get_one(agent_id: str, client_phone: str, property_record_id: str) -> Optional[ActiveAssignment]:

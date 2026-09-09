@@ -1,4 +1,4 @@
-import { API_BASE_URL, apiClient } from "./client";
+import { apiClient } from "./client";
 import type { InquiryClientRecord, InquiryStatusResponse, ManualLinkResponse } from "./types";
 
 /** Mirrors Backend/Controller/WhatsAppInquiryHandlingController/
@@ -31,10 +31,24 @@ export interface HandoffSendRequest {
   client_message: string;
 }
 
+/** What a cancellation did — see Backend/Controller/
+ *  WhatsAppInquiryHandlingController/whatsapp_inquiry_controller.py's
+ *  CancelResult. Returned by both clearAssignments and deleteClient,
+ *  because deleting an inquiry cancels its visits on the way out. */
+export interface CancelResult {
+  cleared: number;
+  agents_notified: number;
+  agents_failed: number;
+}
+
 export interface HandoffSendResult {
   agent_results: AgentSendResult[];
   client_sent: boolean;
-  client: InquiryClientRecord;
+  /** null only when the hand-off was for someone with no ClientRecord at
+   *  all — a landing-page lead handed off from the Inquiries page's
+   *  Property Interest tab. A whatsappInquiryHandling client always comes
+   *  back here with their updated record, exactly as before. */
+  client: InquiryClientRecord | null;
 }
 
 export const inquiryClientApi = {
@@ -50,12 +64,6 @@ export const inquiryClientApi = {
    *  Throws ApiError(400) if `phone` isn't a valid phone number. */
   createManualLink: (phone: string): Promise<ManualLinkResponse> =>
     apiClient.post("/whatsapp-inquiry/manual-link", { phone }),
-
-  /** Not a JSON endpoint — the backend returns a raw PNG (or 404 if no QR
-   *  is available right now). Same pattern as whatsappApi.getQrCodeUrl;
-   *  `cacheBustToken` should change on every poll tick so the browser
-   *  doesn't serve a stale cached image once WhatsApp rotates to a new QR. */
-  getQrCodeUrl: (cacheBustToken: number | string): string => `${API_BASE_URL}/whatsapp-inquiry/qr?t=${cacheBustToken}`,
 
   /** AgentManagement feature: a lightweight "has this client been handed
    *  off to anyone" signal (drives the Inquiries table's Status pill only)
@@ -73,6 +81,21 @@ export const inquiryClientApi = {
    *  through) and records that the hand-off happened. */
   sendHandoff: (phone: string, body: HandoffSendRequest): Promise<HandoffSendResult> =>
     apiClient.post(`/whatsapp-inquiry/clients/${encodeURIComponent(phone)}/handoff-sent`, body),
+
+  /** Calls off every site visit currently out with an agent for this
+   *  client and messages each agent involved once. Leaves the client,
+   *  their requirements, their properties and their completed visits
+   *  untouched — only the active hand-offs go. */
+  clearAssignments: (phone: string): Promise<CancelResult> =>
+    apiClient.post(`/whatsapp-inquiry/clients/${encodeURIComponent(phone)}/clear-assignments`),
+
+  /** Removes the inquiry outright: cancels its active visits (notifying the
+   *  agents, exactly as clearAssignments does), then deletes the cached
+   *  matches, hand-picked properties and the client record. COMPLETED
+   *  visits are deliberately kept, so the same number enquiring again
+   *  still sees those properties as already visited. */
+  deleteClient: (phone: string): Promise<CancelResult> =>
+    apiClient.delete(`/whatsapp-inquiry/clients/${encodeURIComponent(phone)}`),
 
   /** AgentManagement feature: properties the dashboard operator picked by
    *  hand for this client (see SelectPropertyPage.tsx) — separate from

@@ -118,6 +118,7 @@ def get_all_agents_with_active_clients() -> List[AgentSummary]:
                     budget_max_inr=assignment_row.budget_max_inr,
                     property_record_id=assignment_row.property_record_id,
                     property_label=assignment_row.property_label,
+                    assigned_at=assignment_row.created_at,
                 )
             )
     return list(agents.values())

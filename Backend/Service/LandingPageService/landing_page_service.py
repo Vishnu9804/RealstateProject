@@ -23,8 +23,12 @@ from typing import List, Optional
 from Model.LandingPageModel.landing_lead import LandingLeadRecord, LandingLeadRequest
 from Model.LandingPageModel.landing_property import LandingPropertyDetail, LandingPropertySummary
 from Model.WhatsAppDataFetchingModel.embedded_property import EmbeddedProperty
+from Model.WhatsAppInquiryHandlingModel.client_record import ClientRecord
+from Service.ClientPropertyMatchingService import matching_service
 from Service.LandingPageService import lead_store
 from Service.WhatsAppDataFetchingService import property_vector_store
+from Service.WhatsAppInquiryHandlingService import assignment_lock_service, client_store, otp_service
+from Service.WhatsAppInquiryHandlingService.phone_utils import normalize_phone
 
 # The properties GRID needs enough photos per card to make the auto-swipe
 # feel alive, not every photo a listing has — a property with a dozen
@@ -75,36 +79,174 @@ def get_published_property(record_id: str) -> Optional[LandingPropertyDetail]:
 
 
 def submit_lead(request: LandingLeadRequest) -> LandingLeadRecord:
-    """Stores one enquiry. The property label is resolved here rather than
-    trusted from the browser — the request only carries an id, and a public
-    caller has no say in how that property is described."""
-    label = None
+    """Stores one enquiry, and folds it into the SAME Inquiries table a
+    WhatsApp registration produces -- see _sync_to_inquiries below for
+    exactly what that does and doesn't touch. The property label is
+    resolved here rather than trusted from the browser -- the request only
+    carries an id, and a public caller has no say in how that property is
+    described."""
+    prop: Optional[EmbeddedProperty] = None
+    label: Optional[str] = None
     if request.property_record_id:
-        summary = _find_summary(request.property_record_id)
-        label = summary.title if summary else None
+        prop = property_vector_store.get_property(request.property_record_id)
+        label = _title(prop) if prop is not None else None
 
-    return lead_store.add_lead(
+    # A verified number outranks the typed one for exactly the reason the
+    # form token does on the requirements form: it is an identity WE
+    # established, not one the browser asserted. Falls through to the typed
+    # number when there is no token to resolve, which is the only behaviour
+    # this endpoint had before (see LandingLeadRequest.verification_token).
+    verified_phone = otp_service.resolve_verification(request.verification_token)
+
+    record = lead_store.add_lead(
         LandingLeadRecord(
             name=request.name.strip(),
-            whatsapp_number=request.whatsapp_number.strip(),
+            whatsapp_number=verified_phone or request.whatsapp_number.strip(),
             property_record_id=request.property_record_id,
             property_label=label,
         )
     )
+    _sync_to_inquiries(record, prop)
+    return record
 
 
 def get_leads(limit: int = 100) -> List[LandingLeadRecord]:
     return lead_store.get_all_leads(limit=limit)
 
 
+def get_property_ids_for_phone(phone: str) -> List[str]:
+    """Distinct property ids one phone number enquired about via this
+    site's own form -- the Inquiries page's single client table folds every
+    website enquiry into a ClientRecord (see _sync_to_inquiries), and reads
+    this to know which of THAT client's properties were specifically asked
+    about here, so it can show them a second time under its "Web Site
+    Property Inquiry" section (components/ClientMatchesDialog.tsx) even
+    when they're already sitting in a scored bucket for an unrelated
+    reason. Order matches the raw enquiries themselves (newest first)."""
+    seen: set = set()
+    ids: List[str] = []
+    for lead in lead_store.find_leads_for_phone(phone):
+        if lead.property_record_id and lead.property_record_id not in seen:
+            seen.add(lead.property_record_id)
+            ids.append(lead.property_record_id)
+    return ids
+
+
+def _sync_to_inquiries(lead: LandingLeadRecord, prop: Optional[EmbeddedProperty]) -> None:
+    """Folds one website enquiry into whatsappInquiryHandling's own
+    ClientRecord table, rather than leaving it a second, separate kind of
+    row -- the Inquiries page shows one merged list, keyed on phone number
+    exactly like a WhatsApp registration.
+
+    Deliberately does NOT touch Service/AgentManagementService/
+    manual_property_store.py: which section a property renders under
+    (High/Medium/Low because it scored, Manually added because staff
+    picked it) must stay exactly what it already was. The property this
+    lead named still becomes visible -- via get_property_ids_for_phone
+    above, which the dialog uses to render its own "Web Site Property
+    Inquiry" section -- without ever relabelling an already-scored match as
+    a hand-pick.
+
+    The one thing this DOES write is the client's REQUIREMENTS, and only
+    when there is nothing usable there yet (has_requirements is False --
+    covers both "never heard from this number before" and "registered over
+    WhatsApp but the requirements form was never completed"): derives a
+    starting set from the property they just asked about
+    (_derive_requirements), which triggers the normal auto-recompute
+    (client_store.upsert_client -> matching_service.recompute_for_client)
+    so high/medium/low isn't empty on their very first click. A number
+    that already has real, active requirements keeps them completely
+    untouched -- the property they asked about surfaces through the read
+    side only, per the docstring above."""
+    phone = normalize_phone(lead.whatsapp_number)
+    if phone is None:
+        # No reliable identity to fold this into -- the raw lead is still
+        # recorded above, it just can't become (or update) a client row.
+        return
+
+    existing = client_store.get_client_by_phone(phone)
+    if existing is not None and matching_service.has_requirements(existing):
+        return
+
+    # The same freeze the requirements form obeys, for the same reason: once
+    # a property is out with an agent for this client, the requirements they
+    # were briefed on must not change underneath them — and a derived set
+    # (below) is still a change. The LEAD itself is recorded either way, so
+    # nothing about the enquiry is lost; only the inferred requirements are
+    # skipped. See Service/WhatsAppInquiryHandlingService/
+    # assignment_lock_service.py.
+    if assignment_lock_service.has_active_assignment(phone):
+        return
+
+    record = ClientRecord(
+        phone=phone,
+        # "website_lead", NEVER "registered" or "pending_registration" --
+        # inquiry_pipeline_service.handle_batch_ready reads "does a
+        # ClientRecord exist" as "has this phone been through the REAL
+        # WhatsApp registration flow", and routes a returning client to a
+        # completely different message (its own _greet_existing_client)
+        # than a first-time one (_start_new_client's welcome + link). A
+        # landing-site enquiry must not silently flip that switch for
+        # someone who has never actually texted the WhatsApp number --
+        # inquiry_pipeline_service.py and inquiry_form_service.py both
+        # special-case "website_lead" as "no real registration yet" for
+        # exactly that reason. The one exception: a client who already IS
+        # "registered" (a real WhatsApp/Instagram submission, however
+        # sparse) never gets demoted by this -- that status only ever
+        # moves one way.
+        status="registered" if existing is not None and existing.status == "registered" else "website_lead",
+        pending_action=existing.pending_action if existing is not None else None,
+        # The lead's own name is always present (LandingLeadRequest
+        # requires it) and reflects the most recent thing they told us.
+        name=lead.name.strip() or (existing.name if existing is not None else None),
+        email=existing.email if existing is not None else None,
+        assigned_agent_id=existing.assigned_agent_id if existing is not None else None,
+        handoff_sent_at=existing.handoff_sent_at if existing is not None else None,
+        created_at=existing.created_at if existing is not None else None,
+        updated_at=existing.updated_at if existing is not None else None,
+        **_derive_requirements(prop),
+    )
+    client_store.upsert_client(record)
+
+
+def _derive_requirements(prop: Optional[EmbeddedProperty]) -> dict:
+    """Requirement fields inferred from the ONE property a client-less (or
+    requirement-less) phone number just enquired about -- property_type and
+    bhk copied verbatim (Service/ClientPropertyMatchingService/
+    normalization.py already matches a value against itself), purpose
+    derived from listing_type, preferred_areas from area_name, and budget
+    set to the property's own price on BOTH ends -- scoring.py's budget
+    curve already scores 1.0 exactly at that point and decays smoothly
+    around it, so this is enough to surface genuinely similar properties
+    without inventing an arbitrary tolerance band.
+
+    All-None (no fields to derive) when there is no property at all -- a
+    general Contact-section enquiry has nothing to build requirements
+    from."""
+    if prop is None:
+        return {
+            "purpose": None,
+            "property_type": None,
+            "bhk": None,
+            "budget_min_inr": None,
+            "budget_max_inr": None,
+            "preferred_areas": None,
+            "additional_requirements": None,
+        }
+    return {
+        "purpose": {"Sale": "buy", "Rent": "rent"}.get(prop.listing_type),
+        "property_type": prop.property_type,
+        "bhk": prop.bhk,
+        "budget_min_inr": prop.price_amount_inr,
+        "budget_max_inr": prop.price_amount_inr,
+        "preferred_areas": prop.area_name,
+        "additional_requirements": f"Auto-filled from a website enquiry about {_title(prop)}.",
+    }
+
+
 # --------------------------------------------------------------------------
 # projection helpers — the only place an internal property becomes public
 # --------------------------------------------------------------------------
-
-
-def _find_summary(record_id: str) -> Optional[LandingPropertySummary]:
-    prop = property_vector_store.get_property(record_id)
-    return _to_summary(prop) if prop is not None else None
 
 
 def _published_sort_key(prop: EmbeddedProperty):

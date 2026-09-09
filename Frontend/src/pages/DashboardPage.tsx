@@ -33,6 +33,7 @@ import {
 import { useToast } from "../components/ui/Toast";
 import FilterPopover, { type SortControl } from "../components/ui/FilterPopover";
 import ConfirmDialog from "../components/ui/ConfirmDialog";
+import RowRail from "../components/ui/RowRail";
 import PropertyFormDialog from "../components/PropertyFormDialog";
 import {
   Badge,
@@ -454,20 +455,27 @@ export default function DashboardPage() {
   // fine: reopening re-fetches (or re-reads the cache) in a moment, and
   // while it's open the poll never replaces `detailProperty`/`formDialog`'s
   // own already-fetched object out from under it.
-  async function openDetail(recordId: string) {
+  // Opens immediately using whatever this row already has (the polled
+  // summary — everything except real photos, see propertyApi.getProperties'
+  // own comment) rather than waiting on the fetch below first — a dialog
+  // that only appears once its data has fully loaded reads as broken (a
+  // click that visibly does nothing for a second), where every other
+  // detail dialog in the app (ClientMatchesDialog, PropertyReadOnlyDialog,
+  // SelectPropertyPage) opens at once and fills in as data arrives. The
+  // background fetch below only exists to backfill photos.
+  function openDetail(recordId: string) {
+    setDetailId(recordId);
     const cached = getCachedPropertyDetail(recordId);
     if (cached) {
       updateLocalProperty(recordId, cached);
-      setDetailId(recordId);
       return;
     }
-    try {
-      const full = await propertyApi.getProperty(recordId);
-      updateLocalProperty(recordId, full);
-      setDetailId(recordId);
-    } catch (err) {
-      toast.push({ tone: "bad", title: "Couldn't open this property", message: friendlyError(err) });
-    }
+    propertyApi
+      .getProperty(recordId)
+      .then((full) => updateLocalProperty(recordId, full))
+      .catch((err) => {
+        toast.push({ tone: "bad", title: "Couldn't load this property's photos", message: friendlyError(err) });
+      });
   }
 
   async function openEdit(property: PropertyRecord) {
@@ -1067,15 +1075,15 @@ function PropertyTable({
   openFilterKey: string | null;
   onOpenFilter: (key: string, anchor: HTMLElement) => void;
 }) {
+  const tableWrapRef = useRef<HTMLDivElement>(null);
   return (
-    <div className="table-with-rail">
-      <div className="row-icon-rail anim-rise" aria-hidden="true">
-        {properties.map((property) => (
-          <div key={property.record_id} className="row-icon-slot">
-            <PropertyIndicators property={property} />
-          </div>
-        ))}
-      </div>
+    <div className="table-with-rail" ref={tableWrapRef}>
+      <RowRail containerRef={tableWrapRef} count={properties.length} className="anim-rise" ariaHidden>
+        {(index) => {
+          const property = properties[index];
+          return property ? <PropertyIndicators property={property} /> : null;
+        }}
+      </RowRail>
       <div className="table-frame anim-rise">
       <div className="table-scroll">
         <table className="table">
@@ -1120,6 +1128,7 @@ function PropertyTable({
               return (
                 <tr
                   key={property.record_id}
+                  data-rail-row=""
                   className={[
                     "row",
                     flagged && "row--flagged",

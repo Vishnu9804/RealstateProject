@@ -1,29 +1,22 @@
-"""Holds a reference to the live WhatsAppInquiryClient so any pipeline
-stage (currently inquiry_pipeline_service.py) can send an outbound message
-without importing whatsapp_inquiry_service.py directly — that module
-already imports inquiry_pipeline_service.py to wire up the buffer's flush
-callback, so importing it back from here would create a cycle.
-whatsapp_inquiry_service.py calls set_client() once, right after
-constructing the client in start_agent_in_background().
+"""Sends an outbound WhatsApp message (welcome messages, hand-off briefs)
+without any pipeline stage needing to know which specific linked connection
+is doing the sending — picks any currently-listening connection, preferring
+one with the "inquiry" role, via whatsapp_connection_manager.py. Kept as its
+own module (rather than calling the manager directly from
+inquiry_pipeline_service.py) purely to keep that module's imports focused on
+pipeline logic, matching the seam that existed before the multi-connection
+redesign.
 """
 
 from __future__ import annotations
 
-from typing import Optional
-
 from Middleware import step_logger
-from Service.WhatsAppInquiryHandlingService.whatsapp_inquiry_client import WhatsAppInquiryClient
-
-_client: Optional[WhatsAppInquiryClient] = None
-
-
-def set_client(client: WhatsAppInquiryClient) -> None:
-    global _client
-    _client = client
+from Service.WhatsAppDataFetchingService import whatsapp_connection_manager
 
 
 def send_text(phone: str, text: str) -> bool:
-    if _client is None:
-        step_logger.error(f"Cannot send WhatsApp message to {phone}: client not connected yet.")
+    client = whatsapp_connection_manager.get_sender_client(prefer_role="inquiry")
+    if client is None:
+        step_logger.error(f"Cannot send WhatsApp message to {phone}: no connected number is available to send from.")
         return False
-    return _client.send_text(phone, text)
+    return client.send_text(phone, text)

@@ -109,6 +109,26 @@ def get_match_counts(phone: str) -> Dict[str, int]:
     return counts
 
 
+def clear_matches_for_client(phone: str) -> None:
+    """Drops every cached score for one client — used when that client is
+    deleted outright (the match rows FOREIGN-KEY clients.phone, so they
+    have to go first). Wholesale replacement with nothing is already the
+    delete path here, in both storage backends."""
+    _persist_scores(phone, [], _now())
+
+
+def get_scored_property_ids(phone: str) -> set:
+    """Every property id currently scored for this client, any bucket —
+    the same cheap, cache-only read get_match_counts above does, just the
+    ids instead of a per-bucket count. Lets a caller tell "already scored"
+    apart from "not scored at all" without loading a single property
+    record (see Controller/ClientPropertyMatchingController/
+    matching_controller.py's own use: which website-enquired properties
+    aren't already reflected in the counts above)."""
+    scores, _ = _read_scores(phone)
+    return {score.record_id for score in scores}
+
+
 def has_requirements(client: ClientRecord) -> bool:
     return any(
         [

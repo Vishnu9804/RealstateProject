@@ -74,6 +74,17 @@ export function useScrollState(sectionIds: string[]) {
  * three must land in exactly the same place — the CSS `scroll-margin-top`
  * on `.section` is what keeps the heading clear of the fixed header.
  */
+/**
+ * Whether `pathname` is the home DOCUMENT — which is not the same as being
+ * the "/" URL, because /enquire/:token renders the very same page (App.tsx).
+ * Everything that scrolls to a section has to agree on this: get it wrong
+ * for /enquire and the header's own nav links navigate away from the page
+ * they are already on, losing the visitor's place, instead of scrolling.
+ */
+export function isHomeRoute(pathname: string): boolean {
+  return pathname === "/" || pathname.startsWith("/enquire/");
+}
+
 export function scrollToSection(id: string): void {
   document.getElementById(id)?.scrollIntoView({ behavior: "smooth", block: "start" });
 }

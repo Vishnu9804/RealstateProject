@@ -95,12 +95,18 @@ export default function HandoffDialog({
       // "Assigned to" label actually read. When this round involved more
       // than one agent, the first is recorded here; that's fine, since
       // nothing displays this field as "the" agent anymore.
-      let updated = result.client;
+      //
+      // `result.client` is null when this hand-off was for a landing-page
+      // lead, who has no ClientRecord to stamp at all — the messages still
+      // went out and the visits were still recorded, so falling back to the
+      // record we were handed keeps onSent's contract intact.
+      let updated = result.client ?? client;
       try {
         updated = await inquiryClientApi.assignAgent(client.phone, assignments[0].agent.agent_id);
       } catch {
         // Non-fatal — the hand-off itself already went out; the Agent
-        // column just won't reflect it until the next successful save.
+        // column just won't reflect it until the next successful save (and
+        // for a lead there is no record to save it on in the first place).
       }
 
       const failedAgents = result.agent_results.filter((r) => !r.sent);

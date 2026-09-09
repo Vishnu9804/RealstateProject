@@ -37,6 +37,14 @@ def remove(client_phone: str, property_record_id: str) -> None:
         )
 
 
+def delete_all_for_client(client_phone: str) -> None:
+    """Every hand-picked property for one client, in one statement — used
+    when that client is deleted outright (this table FOREIGN-KEYs to
+    clients.phone, so these rows have to go first)."""
+    with get_client_session() as session:
+        session.execute(delete(ManualPropertyRow).where(ManualPropertyRow.client_phone == client_phone))
+
+
 def get_for_client(client_phone: str) -> List[str]:
     stmt = (
         select(ManualPropertyRow.property_record_id)

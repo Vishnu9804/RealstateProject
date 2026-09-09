@@ -4,11 +4,16 @@ Service/ClientPropertyMatchingService/matching_service.py, same convention
 as every other controller in this project.
 """
 
+from typing import List
+
 from fastapi import APIRouter, HTTPException
 
+from Model.AgentManagementModel.visit_record import VisitRecord
 from Model.ClientPropertyMatchingModel.client_match_result import ClientMatchResult
 from Model.ClientPropertyMatchingModel.match_counts import MatchCounts
+from Service.AgentManagementService import agent_store, manual_property_store
 from Service.ClientPropertyMatchingService import matching_service
+from Service.LandingPageService import landing_page_service
 
 router = APIRouter(prefix="/matching", tags=["matching"])
 
@@ -28,8 +33,55 @@ def get_client_matches(phone: str) -> ClientMatchResult:
 def get_client_match_counts(phone: str) -> MatchCounts:
     """AgentManagement feature: cheap per-bucket counts for the Inquiries
     table's Matches column — see matching_service.get_match_counts for why
-    this exists separately from get_client_matches above."""
-    return MatchCounts(**matching_service.get_match_counts(phone))
+    this exists separately from get_client_matches above.
+
+    The manual/website_only/assigned halves are joined in HERE rather than
+    inside matching_service, which stays strictly about scoring (manually-
+    added properties are never scored, and an assignment is not a match —
+    see Database/manual_property_models.py's own docstring). All of them
+    are id-only reads, so this endpoint stays as cheap as it was when it
+    returned the three bucket counts alone."""
+    counts = matching_service.get_match_counts(phone)
+    scored_ids = matching_service.get_scored_property_ids(phone)
+    manual_ids = set(manual_property_store.get_manual_properties(phone))
+    assigned_ids = set(agent_store.get_assigned_property_ids(phone))
+    completed_ids = set(agent_store.get_completed_property_ids(phone))
+    # Only the ones with no other home yet, mirroring ClientMatchesDialog.tsx's
+    # own "website" fallback section exactly (never scored, never hand-
+    # picked, not already completed) — so the table's total and the
+    # dialog's own header count never disagree. A website enquiry that DID
+    # score, or that staff also hand-picked, is already inside scored_ids
+    # or manual_ids and must not be counted twice.
+    website_ids = set(landing_page_service.get_property_ids_for_phone(phone))
+    website_only_ids = website_ids - scored_ids - manual_ids - completed_ids
+    # The one figure the table actually renders — see MatchCounts.total.
+    # A set, not a sum: the three sources overlap, and `completed` is not
+    # necessarily a subset of them.
+    outstanding_ids = (scored_ids | manual_ids | website_ids) - completed_ids
+    return MatchCounts(
+        **counts,
+        manual=len(manual_ids),
+        website_only=len(website_only_ids),
+        total=len(outstanding_ids),
+        # Only assignments against properties that are still outstanding —
+        # an assignment left over from a property that has since dropped out
+        # of every list must never make the Status column read "3 assigned"
+        # out of 2 properties.
+        assigned=len(outstanding_ids & assigned_ids),
+        completed=len(completed_ids),
+    )
+
+
+@router.get("/clients/{phone}/completed-visits", response_model=List[VisitRecord])
+def get_client_completed_visits(phone: str) -> List[VisitRecord]:
+    """AgentManagement feature: every completed visit for this client,
+    across every agent (even one since deleted — visit rows are a
+    permanent history, see VisitRecord's own docstring), newest first.
+    Powers the matches dialog's Completed section — the property this
+    visit was about no longer belongs among the still-outstanding
+    Main/Outsider/Needs review matches, so it moves here instead of
+    silently disappearing when its active assignment is cleared."""
+    return agent_store.get_visits_for_client(phone)
 
 
 @router.post("/clients/{phone}/recompute", response_model=ClientMatchResult)

@@ -6,7 +6,6 @@ import ConnectionPage from "./pages/ConnectionPage";
 import DashboardPage from "./pages/DashboardPage";
 import LandingPagePage from "./pages/LandingPagePage";
 import InquiryClientsPage from "./pages/InquiryClientsPage";
-import InquiryFormPage from "./pages/InquiryFormPage";
 import SelectPropertyPage from "./pages/SelectPropertyPage";
 import SettingsPage from "./pages/SettingsPage";
 import { ThemeProvider } from "./components/ui/Theme";
@@ -18,11 +17,15 @@ import { StatusProvider } from "./state/StatusProvider";
  * is painted in its colours, toasts next so any screen can raise one.
  *
  * StatusProvider (polls the internal whatsappDataFetching connection
- * status) wraps ONLY the internal-tool routes under <Layout> — not
- * /whatsapp-inquiry/:token, which is a public page a prospective client
- * opens from a WhatsApp link. That visitor's browser has no business
- * polling an internal ops endpoint, and the page has no ops nav to show a
- * status pill in anyway.
+ * status) wraps every route here, because every route here is now an
+ * internal-tool one.
+ *
+ * There used to be one exception: /whatsapp-inquiry/:token, the public
+ * requirements form a prospective client opened from a WhatsApp link. That
+ * form now lives on the public site instead — LandingPage/'s /enquire/:token
+ * renders it inside the landing page itself (Backend/Config/settings.py's
+ * inquiry_form_base_url points there), so a client following our link lands
+ * on the business's own website rather than a bare form on the ops app.
  */
 export default function App() {
   return (
@@ -30,7 +33,6 @@ export default function App() {
       <ToastProvider>
         <BrowserRouter>
           <Routes>
-            <Route path="/whatsapp-inquiry/:token" element={<InquiryFormPage />} />
             <Route
               element={
                 <StatusProvider>

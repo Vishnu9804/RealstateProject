@@ -1,38 +1,26 @@
 import {
-  Fragment,
   useCallback,
   useEffect,
   useMemo,
   useRef,
   useState,
 } from "react";
-import { useNavigate } from "react-router-dom";
-import { ApiError } from "../api/client";
+import { createPortal } from "react-dom";
+import { Link, useLocation, useNavigate } from "react-router-dom";
 import { inquiryClientApi } from "../api/inquiryClientApi";
-import { landingLeadApi } from "../api/landingLeadApi";
 import { matchingApi } from "../api/matchingApi";
-import { propertyApi } from "../api/propertyApi";
 import type {
   InquiryClientRecord,
   InquiryStatusResponse,
-  LandingLeadRecord,
   MatchCounts,
-  PropertyRecord,
 } from "../api/types";
 import { usePolling } from "../hooks/usePolling";
 import { useDebounced } from "../hooks/useUi";
 import { friendlyError } from "../lib/apiError";
-import {
-  formatCarpetArea,
-  formatCompactInr,
-  formatPrice,
-  relativeTime,
-} from "../lib/formatters";
-import { describeInquiryStatus } from "../lib/inquiryStatus";
-import { statusTone } from "../lib/whatsappStatus";
-import { getCachedClients, getCachedLeads, setCachedClients, setCachedLeads } from "../lib/inquiryListCache";
-import { getCachedPropertyDetail, setCachedPropertyDetail } from "../lib/propertyDetailCache";
+import { formatCompactInr, relativeTime } from "../lib/formatters";
+import { getCachedClients, setCachedClients } from "../lib/inquiryListCache";
 import { useToast } from "../components/ui/Toast";
+import ClientMatchesDialog, { type DialogView } from "../components/ClientMatchesDialog";
 import ConfirmDialog from "../components/ui/ConfirmDialog";
 import {
   Badge,
@@ -50,7 +38,9 @@ import {
 import {
   IconAlert,
   IconBuilding,
+  IconCheck,
   IconClock,
+  IconEdit,
   IconInbox,
   IconMessage,
   IconPin,
@@ -58,64 +48,82 @@ import {
   IconRefresh,
   IconSearch,
   IconTag,
+  IconTrash,
   IconUsers,
+  IconX,
 } from "../components/ui/Icons";
 
-function pipelineStatus(client: InquiryClientRecord, matchCount: number | null): "assigned" | "matched" | "new" {
-  if (client.assigned_agent_id) return "assigned";
-  if (matchCount !== null && matchCount > 0) return "matched";
-  return "new";
+/** What the Status column says about one client. "partial" is the case
+ *  that used to be invisible: some of this client's properties are out
+ *  with an agent and some are still sitting here waiting to be handed
+ *  off — a half-finished round reads as done under a flat "Assigned". */
+type PipelineStatus =
+  | { kind: "partial"; assigned: number; remaining: number }
+  | { kind: "assigned"; assigned: number }
+  | { kind: "matched" }
+  | { kind: "new" };
+
+function pipelineStatus(client: InquiryClientRecord, counts: ClientPropertyCounts | null): PipelineStatus {
+  if (counts !== null && counts.assigned > 0) {
+    const remaining = Math.max(counts.total - counts.assigned, 0);
+    if (remaining > 0) return { kind: "partial", assigned: counts.assigned, remaining };
+    return { kind: "assigned", assigned: counts.assigned };
+  }
+  if (client.assigned_agent_id) return { kind: "assigned", assigned: counts?.assigned ?? 0 };
+  if (counts !== null && counts.total > 0) return { kind: "matched" };
+  return { kind: "new" };
+}
+
+/** The Matches/Completed/Status columns' whole input, straight off
+ *  matchingApi.getMatchCounts — `total` is scored matches PLUS properties
+ *  the operator added by hand MINUS whichever of those already have a
+ *  completed visit, since to the person reading this table those are all
+ *  just "properties still outstanding for this client", and a property
+ *  that's already been shown and visited isn't outstanding anymore. */
+export interface ClientPropertyCounts {
+  total: number;
+  assigned: number;
+  completed: number;
 }
 
 const REFRESH_INTERVAL_MS = 8000;
-const QR_POLL_INTERVAL_MS = 3000;
 const FETCH_LIMIT = 500;
 
 type StatusFilter = "all" | "registered" | "pending_registration";
-/** Which of the two enquiry sources is showing — see the Segmented tab
- *  right below the page header. "form" is the original WhatsApp
- *  registration-form flow this page has always shown; "property" is new —
- *  leads from the public landing page's own enquiry form (LandingPage/). */
-type Source = "form" | "property";
 
 export default function InquiryClientsPage() {
   const toast = useToast();
   const navigate = useNavigate();
+  const location = useLocation();
   const [clients, setClients] = useState<InquiryClientRecord[] | null>(null);
   const [inquiryStatus, setInquiryStatus] =
     useState<InquiryStatusResponse | null>(null);
-  const [leads, setLeads] = useState<LandingLeadRecord[] | null>(null);
   const [error, setError] = useState<string | null>(null);
   const [lastUpdated, setLastUpdated] = useState<Date | null>(null);
   const [refreshing, setRefreshing] = useState(false);
 
-  const [source, setSource] = useState<Source>("form");
   const [search, setSearch] = useState("");
   const query = useDebounced(search, 180);
   const [statusFilter, setStatusFilter] = useState<StatusFilter>("all");
   const [expandedPhone, setExpandedPhone] = useState<string | null>(null);
-  const [expandedLeadId, setExpandedLeadId] = useState<string | null>(null);
 
   const searchRef = useRef<HTMLInputElement>(null);
   const seenPhones = useRef<Set<string> | null>(null);
   const [freshPhones, setFreshPhones] = useState<Set<string>>(new Set());
-  // Last clients_version/leads_version this page actually fetched a list
-  // for — see load() below. null means "never fetched yet", which always
-  // forces a fetch regardless of what the version says.
+  // Last clients_version this page actually fetched a list for — see
+  // load() below. null means "never fetched yet", which always forces a
+  // fetch regardless of what the version says.
   const lastClientsVersion = useRef<string | null>(null);
+  // Purely a signal, never used to fetch a leads list any more (there
+  // isn't one on this page) — see load() below, where a change here
+  // forces every client's match counts to be re-fetched. A website
+  // enquiry about an existing, already-registered client's ALREADY-known
+  // requirements never touches that client's own updated_at (see Backend/
+  // Service/LandingPageService/landing_page_service.py's
+  // _sync_to_inquiries), so the per-client updated_at gate a few lines
+  // down would otherwise never notice that client's MatchCounts.website_only
+  // just changed.
   const lastLeadsVersion = useRef<string | null>(null);
-
-  // The property behind a "Property Interest" lead is fetched one at a time,
-  // only once its row is actually expanded — see the effect below. Bulk-
-  // fetching all properties (with every photo) on every poll just to
-  // support the rare expand was the single biggest thing making this page
-  // slow to load. A key absent from this map means "not fetched yet"; a
-  // key present with value `null` means "fetched, and it no longer exists"
-  // (deleted/never existed) — cached as such so it isn't re-requested on
-  // every render while the row stays expanded.
-  const [propertyCache, setPropertyCache] = useState<
-    Record<string, PropertyRecord | null>
-  >({});
 
   // AgentManagement feature: the field team (for the Agent column) and, per
   // client, the cheap per-bucket match count (for the Matches pill + the
@@ -128,10 +136,29 @@ export default function InquiryClientsPage() {
   // since is never re-fetched on every 8s poll.
   const [matchCounts, setMatchCounts] = useState<Record<string, MatchCounts>>({});
   const matchCountsUpdatedAt = useRef<Record<string, string>>({});
+  // Bumped to force the counts effect below to run again — adding a
+  // property by hand or handing one to an agent changes this client's
+  // counts without touching client.updated_at, so the version gate alone
+  // would keep serving the stale number.
+  const [countsNonce, setCountsNonce] = useState(0);
 
-  const [qrTick, setQrTick] = useState(0);
-  const [qrLoadFailed, setQrLoadFailed] = useState(false);
-  const waitingForQr = inquiryStatus?.status === "waiting_for_qr_scan";
+  // AgentManagement feature: "N properties" opens the matches dialog over
+  // this table (components/ClientMatchesDialog.tsx) rather than navigating
+  // to a page of its own, so the operator keeps their place in the list.
+  const [matchesPhone, setMatchesPhone] = useState<string | null>(null);
+  // Which tab that dialog opens on — "main" from the Matches pill, or
+  // "completed" from the new green Completed pill, so a click on either
+  // one lands straight where it says it will instead of always opening to
+  // Main and making the operator switch tabs themselves.
+  const [matchesInitialView, setMatchesInitialView] = useState<DialogView>("main");
+
+  // Per-row actions. `editBlocked` holds the phone whose Edit was refused
+  // because that client still has live assignments — cleared when the
+  // explanatory dialog is dismissed.
+  const [editBlocked, setEditBlocked] = useState<string | null>(null);
+  const [editBusyPhone, setEditBusyPhone] = useState<string | null>(null);
+  const [deleteTarget, setDeleteTarget] = useState<InquiryClientRecord | null>(null);
+  const [deleteBusy, setDeleteBusy] = useState(false);
 
   // "+ Add" — manually register a client who hasn't messaged in yet (a
   // walk-in, a phone call, a referral). Mints the exact same token-
@@ -173,47 +200,103 @@ export default function InquiryClientsPage() {
     }
   }
 
-  // Only polled while a scan is actually being waited on — pointless to
-  // keep refreshing a QR image once pairing is done or hasn't started yet.
-  usePolling(
-    () => {
-      setQrTick((t) => t + 1);
-      setQrLoadFailed(false);
-    },
-    QR_POLL_INTERVAL_MS,
-    waitingForQr,
-  );
+  /**
+   * Edit = the same token-authenticated requirements form the "+ Add"
+   * button and every WhatsApp welcome message open, for a client who
+   * already exists — so it arrives pre-filled with what we have on file,
+   * and submitting it re-runs matching through the one code path that has
+   * always done that (client_store.upsert_client's auto-recompute).
+   *
+   * Refused while ANY of this client's properties is still out with an
+   * agent: re-scoring rewrites the High/Medium/Low buckets underneath
+   * visits that are already booked in someone's calendar, so the
+   * assignments have to be cleared (and those agents told) first.
+   * Manually-added and website-enquiry properties are never touched by a
+   * recompute either way — only the scored buckets change.
+   */
+  async function handleEdit(client: InquiryClientRecord) {
+    const counts = countsFor(client.phone);
+    if (counts !== null && counts.assigned > 0) {
+      setEditBlocked(client.phone);
+      return;
+    }
+    setEditBusyPhone(client.phone);
+    try {
+      const result = await inquiryClientApi.createManualLink(client.phone);
+      window.open(result.url, "_blank", "noopener,noreferrer");
+      toast.push({
+        tone: "ok",
+        title: "Form opened",
+        message: `${client.name || client.phone}'s requirements form opened in a new tab.`,
+      });
+    } catch (err) {
+      toast.push({ tone: "bad", title: "Could not open the form", message: friendlyError(err) });
+    } finally {
+      setEditBusyPhone(null);
+    }
+  }
+
+  async function handleDelete() {
+    if (!deleteTarget) return;
+    setDeleteBusy(true);
+    try {
+      const result = await inquiryClientApi.deleteClient(deleteTarget.phone);
+      const name = deleteTarget.name || deleteTarget.phone;
+      toast.push({
+        tone: "ok",
+        title: "Inquiry deleted",
+        message:
+          result.cleared > 0
+            ? `${name} removed. ${result.cleared} site visit${result.cleared === 1 ? "" : "s"} cancelled, ${result.agents_notified} agent${result.agents_notified === 1 ? "" : "s"} notified.`
+            : `${name} removed. Completed visits are kept.`,
+      });
+      setDeleteTarget(null);
+      // The row is gone server-side; force the list (not just the counts)
+      // to re-read rather than waiting for the next poll.
+      await load(true);
+    } catch (err) {
+      toast.push({ tone: "bad", title: "Could not delete this inquiry", message: friendlyError(err) });
+    } finally {
+      setDeleteBusy(false);
+    }
+  }
 
   const load = useCallback(
     async (manual = false) => {
       setRefreshing(true);
       try {
-        // The status call is cheap (mostly in-memory counters plus two small
-        // aggregate queries) and runs every tick. clients_version/
-        // leads_version on it are what changed with this fix: the two heavy
-        // list fetches below (up to 500 rows each) now only fire when their
-        // version actually differs from what this page last fetched, or on
-        // a manual refresh — not unconditionally on every tick regardless of
-        // whether anything changed. The property behind a lead is
-        // deliberately NOT fetched here either way — see propertyCache's
-        // own comment.
+        // The status call is cheap (mostly in-memory counters plus a small
+        // aggregate query) and runs every tick. clients_version on it is
+        // what decides whether the one heavy list fetch below (up to 500
+        // rows) actually fires — not unconditionally on every tick
+        // regardless of whether anything changed.
+        //
+        // Every website enquiry now folds into this SAME client list (see
+        // Backend/Service/LandingPageService/landing_page_service.py's
+        // _sync_to_inquiries) — there is no second list to poll here any
+        // more, only the one Inquiries table this page has always shown.
         const statusData = await inquiryClientApi.getStatus();
         setInquiryStatus(statusData);
         setError(null);
+
+        // A new website enquiry can change an EXISTING client's Matches
+        // count (MatchCounts.website_only) without that client's own
+        // updated_at moving at all — see lastLeadsVersion's own comment.
+        // Clearing every cached entry forces the counts effect below to
+        // re-fetch for every visible client on its very next pass, exactly
+        // as invalidateCounts already does for one phone at a time.
+        if (lastLeadsVersion.current !== null && lastLeadsVersion.current !== statusData.leads_version) {
+          matchCountsUpdatedAt.current = {};
+          setCountsNonce((n) => n + 1);
+        }
+        lastLeadsVersion.current = statusData.leads_version;
 
         const needsClients =
           manual ||
           lastClientsVersion.current === null ||
           lastClientsVersion.current !== statusData.clients_version;
-        const needsLeads =
-          manual ||
-          lastLeadsVersion.current === null ||
-          lastLeadsVersion.current !== statusData.leads_version;
 
-        const [clientData, leadData] = await Promise.all([
-          needsClients ? inquiryClientApi.getClients(FETCH_LIMIT) : Promise.resolve(null),
-          needsLeads ? landingLeadApi.getLeads(FETCH_LIMIT) : Promise.resolve(null),
-        ]);
+        const clientData = needsClients ? await inquiryClientApi.getClients(FETCH_LIMIT) : null;
 
         if (clientData !== null) {
           setClients(clientData);
@@ -231,11 +314,6 @@ export default function InquiryClientsPage() {
             }
           }
           seenPhones.current = incoming;
-        }
-        if (leadData !== null) {
-          setLeads(leadData);
-          lastLeadsVersion.current = statusData.leads_version;
-          setCachedLeads(leadData, statusData.leads_version);
         }
 
         setLastUpdated(new Date());
@@ -268,13 +346,8 @@ export default function InquiryClientsPage() {
       setClients(cachedClients.data);
       lastClientsVersion.current = cachedClients.version;
       seenPhones.current = new Set(cachedClients.data.map((c) => c.phone));
+      setLastUpdated(new Date());
     }
-    const cachedLeads = getCachedLeads();
-    if (cachedLeads) {
-      setLeads(cachedLeads.data);
-      lastLeadsVersion.current = cachedLeads.version;
-    }
-    if (cachedClients || cachedLeads) setLastUpdated(new Date());
     // eslint-disable-next-line react-hooks/exhaustive-deps
   }, []);
 
@@ -300,63 +373,18 @@ export default function InquiryClientsPage() {
   );
   const pendingCount = allClients.length - registeredCount;
 
-  const allLeads = useMemo(() => leads ?? [], [leads]);
-  const propertyLeadCount = useMemo(
-    () => allLeads.filter((lead) => lead.property_record_id !== null).length,
-    [allLeads],
-  );
-
-  // Leaving a tab collapses whatever row was open in it — returning later
-  // shouldn't dump a visitor straight into detail they already closed.
-  useEffect(() => {
-    setExpandedPhone(null);
-    setExpandedLeadId(null);
-  }, [source]);
-
-  // Fetch the one property an expanded lead is about, on demand — see
-  // propertyCache's own comment for why this replaced a bulk fetch.
-  // lib/propertyDetailCache.ts (shared with the Properties and Landing Page
-  // pages) is checked first — if that property was recently opened from
-  // either of those, expanding it here costs no request at all.
-  useEffect(() => {
-    if (!expandedLeadId) return;
-    const lead = allLeads.find((l) => l.lead_id === expandedLeadId);
-    const recordId = lead?.property_record_id;
-    if (!recordId || recordId in propertyCache) return;
-    const shared = getCachedPropertyDetail(recordId);
-    if (shared) {
-      setPropertyCache((prev) => ({ ...prev, [recordId]: shared }));
-      return;
-    }
-    let cancelled = false;
-    propertyApi
-      .getProperty(recordId)
-      .then((full) => {
-        if (!cancelled) {
-          setPropertyCache((prev) => ({ ...prev, [recordId]: full }));
-          setCachedPropertyDetail(full);
-        }
-      })
-      .catch((err) => {
-        if (cancelled) return;
-        // Only a real 404 (deleted/never existed) is cached as "gone" —
-        // a transient network error is left unfetched so re-expanding the
-        // row simply tries again, instead of permanently showing "no
-        // longer available" for what might just be a dropped request.
-        if (err instanceof ApiError && err.status === 404) {
-          setPropertyCache((prev) => ({ ...prev, [recordId]: null }));
-        }
-      });
-    return () => {
-      cancelled = true;
-    };
-  }, [expandedLeadId, allLeads, propertyCache]);
-
   const visibleClients = useMemo(() => {
     const needle = query.trim().toLowerCase();
     return allClients.filter((client) => {
-      if (statusFilter !== "all" && client.status !== statusFilter)
-        return false;
+      // "registered" is an exact match; "pending_registration" instead
+      // means "anything that ISN'T registered yet" — the backend can also
+      // hand back "website_lead" (a landing-site enquiry that folded into
+      // this table without ever completing WhatsApp registration — see
+      // Backend/Service/LandingPageService/landing_page_service.py's
+      // _sync_to_inquiries), and that belongs on this same Pending tab,
+      // not hidden from both filters.
+      if (statusFilter === "registered" && client.status !== "registered") return false;
+      if (statusFilter === "pending_registration" && client.status === "registered") return false;
       if (!needle) return true;
       const haystack = [
         client.name,
@@ -381,6 +409,10 @@ export default function InquiryClientsPage() {
   // load(), not on every render, since matchCountsUpdatedAt is a ref.
   useEffect(() => {
     const stale = allClients.filter((c) => matchCountsUpdatedAt.current[c.phone] !== (c.updated_at ?? ""));
+    // Referenced only to keep it an honest dependency: invalidateCounts
+    // clears the ref entry above and bumps this, and re-running is the
+    // entire effect it is asking for.
+    void countsNonce;
     if (stale.length === 0) return;
     let cancelled = false;
     Promise.all(
@@ -402,13 +434,44 @@ export default function InquiryClientsPage() {
     return () => {
       cancelled = true;
     };
-  }, [allClients]);
+  }, [allClients, countsNonce]);
 
-  function matchCountFor(phone: string): number | null {
-    const counts = matchCounts[phone];
-    if (!counts) return null;
-    return counts.high + counts.medium + counts.low;
-  }
+  /** Re-read one client's property counts on the next tick — see
+   *  countsNonce above for why updated_at alone isn't enough. */
+  const invalidateCounts = useCallback((phone: string) => {
+    delete matchCountsUpdatedAt.current[phone];
+    setCountsNonce((n) => n + 1);
+  }, []);
+
+  // "Add property" inside the matches dialog is a full page of its own
+  // (SelectPropertyPage), so it leaves this one. It comes back with
+  // ?matches=<phone>, which re-opens the dialog exactly where it was and
+  // re-reads that client's counts — the newly-added properties are part
+  // of the total the moment the operator lands back here.
+  useEffect(() => {
+    const phone = new URLSearchParams(location.search).get("matches");
+    if (!phone) return;
+    setMatchesInitialView("main");
+    setMatchesPhone(phone);
+    invalidateCounts(phone);
+    navigate("/inquiries", { replace: true });
+  }, [location.search, navigate, invalidateCounts]);
+
+  const countsFor = useCallback(
+    (phone: string): ClientPropertyCounts | null => {
+      const counts = matchCounts[phone];
+      if (!counts) return null;
+      // Both figures come straight from the server, which computes them
+      // as SETS (see MatchCounts.total). They used to be added up here
+      // from the per-source counts, which silently double-counted every
+      // property that was both scored and hand-picked, and over-subtracted
+      // every completed visit whose property had since dropped out of the
+      // matched set — so a client with real properties could read "No
+      // matches" while the dialog behind that very button listed them.
+      return { total: counts.total, assigned: counts.assigned, completed: counts.completed };
+    },
+    [matchCounts],
+  );
 
   const filtersActive = query.trim().length > 0 || statusFilter !== "all";
   function resetAll() {
@@ -417,14 +480,6 @@ export default function InquiryClientsPage() {
   }
 
   const loading = clients === null && error === null;
-  const statusDisplay = inquiryStatus
-    ? describeInquiryStatus(inquiryStatus.status)
-    : null;
-  const rawStatusNoteTone = statusDisplay
-    ? statusTone(statusDisplay.tone)
-    : "info";
-  const statusNoteTone =
-    rawStatusNoteTone === "neutral" ? "info" : rawStatusNoteTone;
 
   return (
     <div className="stack stack-5">
@@ -435,7 +490,7 @@ export default function InquiryClientsPage() {
           <p className="section-head__sub">
             Everyone who's reached out about a property — through the WhatsApp
             registration form, or by leaving their name and number on the public
-            website. Refreshes automatically.
+            website — in one list. Refreshes automatically.
           </p>
         </div>
         <div className="row-flex">
@@ -465,90 +520,18 @@ export default function InquiryClientsPage() {
         </div>
       </header>
 
-      <Segmented<Source>
-        ariaLabel="Enquiry source"
-        value={source}
-        onChange={setSource}
-        options={[
-          {
-            value: "form",
-            label: `Form Enquiries${allClients.length ? ` (${allClients.length})` : ""}`,
-          },
-          {
-            value: "property",
-            label: `Property Interest${allLeads.length ? ` (${allLeads.length})` : ""}`,
-          },
-        ]}
-      />
+      {inquiryStatus && !inquiryStatus.client_database_configured && (
+            <Note tone="warn" icon={<IconAlert size={16} />}>
+              <strong>CLIENT_DATABASE_URL is not set</strong> — client records are in-memory only and will be lost on
+              restart.
+            </Note>
+          )}
 
-      {source === "form" && (
-        <>
-          {waitingForQr ? (
-            <Panel className="stack stack-4">
-              <div
-                className="section-head__eyebrow"
-                style={{ marginBottom: 0 }}
-              >
-                Pair the inquiry-handling WhatsApp account
-              </div>
-              <div className="stack stack-4" style={{ alignItems: "center" }}>
-                {!qrLoadFailed ? (
-                  <div className="qr">
-                    <img
-                      src={inquiryClientApi.getQrCodeUrl(qrTick)}
-                      alt="WhatsApp pairing QR code for inquiry handling"
-                      onError={() => setQrLoadFailed(true)}
-                    />
-                    <span className="qr__corner qr__corner--tl" />
-                    <span className="qr__corner qr__corner--tr" />
-                    <span className="qr__corner qr__corner--bl" />
-                    <span className="qr__corner qr__corner--br" />
-                  </div>
-                ) : (
-                  <div className="qr-skeleton">
-                    <span
-                      className="spinner"
-                      style={{ width: 22, height: 22 }}
-                    />
-                    <span>Waiting for WhatsApp to generate a code…</span>
-                  </div>
-                )}
-                <ol
-                  className="stack stack-2 small muted"
-                  style={{ margin: 0, paddingLeft: 18 }}
-                >
-                  <li>
-                    Open WhatsApp on the phone that should handle inquiries.
-                  </li>
-                  <li>
-                    Go to <strong>Settings → Linked devices</strong>.
-                  </li>
-                  <li>
-                    Tap <strong>Link a device</strong> and scan the code.
-                  </li>
-                </ol>
-                <p className="faint small" style={{ textAlign: "center" }}>
-                  This pairs a second, independent linked device from the
-                  Connection page's WhatsApp account — pairing one never affects
-                  the other. The code refreshes automatically; you never need to
-                  reload the page.
-                </p>
-              </div>
-            </Panel>
-          ) : (
-            statusDisplay && (
-              <Note tone={statusNoteTone} icon={<IconMessage size={16} />}>
-                <strong>Inquiry bot: {statusDisplay.label}.</strong>{" "}
-                {statusDisplay.hint}
-                {inquiryStatus && !inquiryStatus.client_database_configured && (
-                  <>
-                    {" "}
-                    <strong>CLIENT_DATABASE_URL is not set</strong> — client
-                    records are in-memory only and will be lost on restart.
-                  </>
-                )}
-              </Note>
-            )
+          {inquiryStatus && inquiryStatus.status !== "listening" && (
+            <Note tone="info" icon={<IconMessage size={16} />}>
+              No number is currently watching for client inquiries. Assign one on the{" "}
+              <Link to="/">Connection page</Link> under "Number for Client Inquiry".
+            </Note>
           )}
 
           {allClients.length > 0 && (
@@ -664,82 +647,16 @@ export default function InquiryClientsPage() {
               expandedPhone={expandedPhone}
               setExpandedPhone={setExpandedPhone}
               freshPhones={freshPhones}
-              onViewMatches={(phone) =>
-                navigate(`/inquiries/${encodeURIComponent(phone)}/matches`)
-              }
-              matchCountFor={matchCountFor}
+              onViewMatches={(phone, view) => {
+                setMatchesInitialView(view);
+                setMatchesPhone(phone);
+              }}
+              countsFor={countsFor}
+              onEdit={handleEdit}
+              onDelete={setDeleteTarget}
+              editBusyPhone={editBusyPhone}
             />
           )}
-        </>
-      )}
-
-      {source === "property" && (
-        <>
-          {allLeads.length > 0 && (
-            <div className="stat-grid">
-              <Stat
-                label="Total enquiries"
-                value={allLeads.length}
-                icon={<IconUsers size={13} />}
-                delay={0}
-              />
-              <Stat
-                label="About a specific property"
-                value={propertyLeadCount}
-                icon={<IconBuilding size={13} />}
-                tone="ok"
-                delay={60}
-              />
-              {propertyLeadCount < allLeads.length && (
-                <Stat
-                  label="General (Contact section)"
-                  value={allLeads.length - propertyLeadCount}
-                  icon={<IconMessage size={13} />}
-                  delay={120}
-                />
-              )}
-            </div>
-          )}
-
-          {error && (
-            <Note tone="bad" icon={<IconAlert size={17} />}>
-              <strong>Backend unreachable.</strong> {error} — the last loaded
-              data is still shown below, and polling continues in the
-              background.
-            </Note>
-          )}
-
-          {loading && (
-            <Panel>
-              <div className="stack stack-3">
-                <div className="row-flex faint small">
-                  <span className="spinner" /> Loading website enquiries…
-                </div>
-                <SkeletonRows rows={6} />
-              </div>
-            </Panel>
-          )}
-
-          {leads !== null && allLeads.length === 0 && (
-            <Panel>
-              <EmptyState
-                icon={<IconInbox size={38} />}
-                title="No website enquiries yet"
-                body="Leads appear here the moment someone leaves their name and WhatsApp number on the public landing page — either from a property's own page, or the home page's Contact section."
-              />
-            </Panel>
-          )}
-
-          {allLeads.length > 0 && (
-            <LeadTable
-              leads={allLeads}
-              propertyCache={propertyCache}
-              expandedLeadId={expandedLeadId}
-              setExpandedLeadId={setExpandedLeadId}
-            />
-          )}
-        </>
-      )}
 
       {addOpen && (
         <ConfirmDialog
@@ -787,6 +704,70 @@ export default function InquiryClientsPage() {
           }
         />
       )}
+
+      {editBlocked && (() => {
+        const client = allClients.find((c) => c.phone === editBlocked);
+        const counts = countsFor(editBlocked);
+        return (
+          <ConfirmDialog
+            title="Clear the current assignments first"
+            confirmLabel="Open properties"
+            cancelLabel="Close"
+            onConfirm={() => {
+              const phone = editBlocked;
+              setEditBlocked(null);
+              setMatchesInitialView("main");
+              setMatchesPhone(phone);
+            }}
+            onClose={() => setEditBlocked(null)}
+            body={
+              <p className="section-head__sub" style={{ margin: 0 }}>
+                {client?.name || editBlocked} still has{" "}
+                <strong>
+                  {counts?.assigned ?? 0} propert{(counts?.assigned ?? 0) === 1 ? "y" : "ies"}
+                </strong>{" "}
+                out with an agent for a site visit. Editing the requirements re-runs matching, which would
+                rewrite the property list underneath visits that are already booked — clear those assignments
+                from the properties dialog first, then edit.
+              </p>
+            }
+          />
+        );
+      })()}
+
+      {deleteTarget && (
+        <ConfirmDialog
+          title="Delete this inquiry?"
+          confirmLabel="Delete inquiry"
+          tone="danger"
+          busy={deleteBusy}
+          onConfirm={handleDelete}
+          onClose={() => !deleteBusy && setDeleteTarget(null)}
+          body={
+            <div className="stack stack-3">
+              <p className="section-head__sub" style={{ margin: 0 }}>
+                Removes <strong>{deleteTarget.name || deleteTarget.phone}</strong> ({deleteTarget.phone}) — their
+                requirements, matches and hand-picked properties.
+              </p>
+              <p className="section-head__sub" style={{ margin: 0 }}>
+                Any site visit still out with an agent is cancelled and those agents are messaged on WhatsApp.
+                <strong> Completed visits are kept</strong>, so if this number ever enquires again, the properties
+                they have already been shown still read as completed.
+              </p>
+            </div>
+          }
+        />
+      )}
+
+      {matchesPhone && (
+        <ClientMatchesDialog
+          phone={matchesPhone}
+          clientName={allClients.find((c) => c.phone === matchesPhone)?.name ?? null}
+          initialView={matchesInitialView}
+          onClose={() => setMatchesPhone(null)}
+          onChanged={() => invalidateCounts(matchesPhone)}
+        />
+      )}
     </div>
   );
 }
@@ -800,15 +781,24 @@ function ClientTable({
   setExpandedPhone,
   freshPhones,
   onViewMatches,
-  matchCountFor,
+  countsFor,
+  onEdit,
+  onDelete,
+  editBusyPhone,
 }: {
   clients: InquiryClientRecord[];
   query: string;
   expandedPhone: string | null;
   setExpandedPhone: (phone: string | null) => void;
   freshPhones: Set<string>;
-  onViewMatches: (phone: string) => void;
-  matchCountFor: (phone: string) => number | null;
+  onViewMatches: (phone: string, view: DialogView) => void;
+  countsFor: (phone: string) => ClientPropertyCounts | null;
+  /** Opens this client's pre-filled requirements form — refused by the
+   *  caller while any of their properties is still out with an agent. */
+  onEdit: (client: InquiryClientRecord) => void;
+  /** Raises the delete confirmation; the caller owns the actual delete. */
+  onDelete: (client: InquiryClientRecord) => void;
+  editBusyPhone: string | null;
 }) {
   return (
     <div className="table-frame anim-rise">
@@ -826,94 +816,168 @@ function ClientTable({
               <th>Areas</th>
               <th>Updated</th>
               <th>Matches</th>
-              <th>Status</th>
+              <th>Completed</th>
+              <th className="cell-pipeline">Status</th>
+              <th>Actions</th>
             </tr>
           </thead>
           <tbody>
             {clients.map((client) => {
-              const isExpanded = expandedPhone === client.phone;
+              const isOpen = expandedPhone === client.phone;
               return (
-                <Fragment key={client.phone}>
-                  <tr
-                    className={[
-                      "row",
-                      isExpanded && "row--open",
-                      freshPhones.has(client.phone) && "row--new",
-                    ]
-                      .filter(Boolean)
-                      .join(" ")}
-                    tabIndex={0}
-                    role="button"
-                    aria-expanded={isExpanded}
-                    onClick={() =>
-                      setExpandedPhone(isExpanded ? null : client.phone)
+                <tr
+                  key={client.phone}
+                  className={[
+                    "row",
+                    isOpen && "row--open",
+                    freshPhones.has(client.phone) && "row--new",
+                  ]
+                    .filter(Boolean)
+                    .join(" ")}
+                  tabIndex={0}
+                  role="button"
+                  onClick={() => setExpandedPhone(client.phone)}
+                  onKeyDown={(event) => {
+                    if (event.key === "Enter" || event.key === " ") {
+                      event.preventDefault();
+                      setExpandedPhone(client.phone);
                     }
-                    onKeyDown={(event) => {
-                      if (event.key === "Enter" || event.key === " ") {
-                        event.preventDefault();
-                        setExpandedPhone(isExpanded ? null : client.phone);
-                      }
-                    }}
+                  }}
+                >
+                  <td>
+                    <ClientStatusBadge client={client} />
+                  </td>
+                  <td
+                    className="cell-truncate cell-strong"
+                    title={client.name ?? undefined}
                   >
-                    <td>
-                      <ClientStatusBadge client={client} />
-                    </td>
-                    <td
-                      className="cell-truncate cell-strong"
-                      title={client.name ?? undefined}
-                    >
-                      <Highlight text={client.name ?? "—"} query={query} />
-                    </td>
-                    <td className="cell-truncate">
-                      <Copyable text={client.phone} />
-                    </td>
-                    <td>{client.purpose ?? "—"}</td>
-                    <td>{client.property_type ?? "—"}</td>
-                    <td>{client.bhk ?? "—"}</td>
-                    <td className="cell-num" style={{ textAlign: "right" }}>
-                      {formatBudgetRange(
-                        client.budget_min_inr,
-                        client.budget_max_inr,
-                      )}
-                    </td>
-                    <td
-                      className="cell-truncate"
-                      title={client.preferred_areas ?? undefined}
-                    >
-                      <Highlight
-                        text={client.preferred_areas ?? "—"}
-                        query={query}
-                      />
-                    </td>
-                    <td className="cell-num" style={{ whiteSpace: "nowrap" }}>
-                      {client.updated_at
-                        ? relativeTime(new Date(client.updated_at))
-                        : "—"}
-                    </td>
-                    <td onClick={(event) => event.stopPropagation()}>
-                      <MatchesCell
-                        matchCount={matchCountFor(client.phone)}
-                        onOpen={() => onViewMatches(client.phone)}
-                      />
-                    </td>
-                    <td>
-                      <PipelineStatusBadge status={pipelineStatus(client, matchCountFor(client.phone))} />
-                    </td>
-                  </tr>
-                  {isExpanded && (
-                    <tr>
-                      <td className="detail-cell" colSpan={11}>
-                        <ClientDetail client={client} />
-                      </td>
-                    </tr>
-                  )}
-                </Fragment>
+                    <Highlight text={client.name ?? "—"} query={query} />
+                  </td>
+                  <td className="cell-truncate">
+                    <Copyable text={client.phone} />
+                  </td>
+                  <td>{client.purpose ?? "—"}</td>
+                  <td>{client.property_type ?? "—"}</td>
+                  <td>{client.bhk ?? "—"}</td>
+                  <td className="cell-num" style={{ textAlign: "right" }}>
+                    {formatBudgetRange(
+                      client.budget_min_inr,
+                      client.budget_max_inr,
+                    )}
+                  </td>
+                  <td
+                    className="cell-truncate"
+                    title={client.preferred_areas ?? undefined}
+                  >
+                    <Highlight
+                      text={client.preferred_areas ?? "—"}
+                      query={query}
+                    />
+                  </td>
+                  <td className="cell-num" style={{ whiteSpace: "nowrap" }}>
+                    {client.updated_at
+                      ? relativeTime(new Date(client.updated_at))
+                      : "—"}
+                  </td>
+                  <td onClick={(event) => event.stopPropagation()}>
+                    <MatchesCell
+                      counts={countsFor(client.phone)}
+                      onOpen={() => onViewMatches(client.phone, "main")}
+                    />
+                  </td>
+                  <td onClick={(event) => event.stopPropagation()}>
+                    <CompletedCell
+                      counts={countsFor(client.phone)}
+                      onOpen={() => onViewMatches(client.phone, "completed")}
+                    />
+                  </td>
+                  <td className="cell-pipeline">
+                    <PipelineStatusBadge status={pipelineStatus(client, countsFor(client.phone))} />
+                  </td>
+                  {/* Owns its own clicks — the row itself opens the client
+                      detail dialog, which is not what either of these
+                      means. */}
+                  <td onClick={(event) => event.stopPropagation()}>
+                    <div className="row-flex" style={{ gap: 6, flexWrap: "nowrap" }}>
+                      <Button
+                        size="sm"
+                        variant="ghost"
+                        icon={<IconEdit size={14} />}
+                        busy={editBusyPhone === client.phone}
+                        onClick={() => onEdit(client)}
+                        title="Edit this client's requirements"
+                      >
+                        Edit
+                      </Button>
+                      <Button
+                        size="sm"
+                        variant="ghost"
+                        icon={<IconTrash size={14} />}
+                        onClick={() => onDelete(client)}
+                        title="Delete this inquiry"
+                      >
+                        Delete
+                      </Button>
+                    </div>
+                  </td>
+                </tr>
               );
             })}
           </tbody>
         </table>
       </div>
+
+      {expandedPhone && (() => {
+        const client = clients.find((c) => c.phone === expandedPhone);
+        return client ? (
+          <ClientDetailDialog client={client} onClose={() => setExpandedPhone(null)} />
+        ) : null;
+      })()}
     </div>
+  );
+}
+
+/* ------------------------------------------------------------- dialogs */
+
+function ClientDetailDialog({ client, onClose }: { client: InquiryClientRecord; onClose: () => void }) {
+  useEffect(() => {
+    const onKeyDown = (event: KeyboardEvent) => {
+      if (event.key === "Escape") {
+        event.stopPropagation();
+        onClose();
+      }
+    };
+    document.addEventListener("keydown", onKeyDown);
+    return () => document.removeEventListener("keydown", onKeyDown);
+  }, [onClose]);
+
+  return createPortal(
+    <div className="modal-scrim" onMouseDown={(event) => event.target === event.currentTarget && onClose()}>
+      <div className="detail-modal anim-rise" role="dialog" aria-modal="true" aria-label="Client details">
+        <div className="detail-modal__head">
+          <div style={{ minWidth: 0 }}>
+            <div className="detail-modal__eyebrow">Client</div>
+            <h2 className="detail-modal__title cell-truncate">{client.name ?? client.phone}</h2>
+            <div className="detail-modal__sub cell-truncate">{client.phone}</div>
+            <div className="detail-modal__badges">
+              <ClientStatusBadge client={client} />
+            </div>
+          </div>
+          <button type="button" className="toast__close" onClick={onClose} aria-label="Close">
+            <IconX size={15} />
+          </button>
+        </div>
+        <div className="detail-modal__body">
+          <ClientDetail client={client} />
+        </div>
+        <div className="detail-modal__foot">
+          <Button variant="ghost" onClick={onClose}>
+            Close
+          </Button>
+        </div>
+      </div>
+    </div>,
+    document.body,
   );
 }
 
@@ -992,19 +1056,57 @@ function ClientDetail({ client }: { client: InquiryClientRecord }) {
 
 /* ---------------------------------------------------- AgentManagement UI */
 
-function MatchesCell({ matchCount, onOpen }: { matchCount: number | null; onOpen: () => void }) {
-  if (matchCount === null) return <span className="faint small">—</span>;
-  if (matchCount === 0) return <span className="faint small">No matches</span>;
+/** Scored matches AND hand-picked properties, as one number — they are
+ *  all just "properties lined up for this client" from here, and the
+ *  dialog this opens shows them together anyway. */
+function MatchesCell({
+  counts,
+  onOpen,
+  emptyLabel = "No matches",
+}: {
+  counts: ClientPropertyCounts | null;
+  onOpen: () => void;
+  /** What an empty cell reads. The Property Interest tab overrides it:
+   *  nothing there was ever matched, so "No matches" would describe a
+   *  process that doesn't run on those rows. */
+  emptyLabel?: string;
+}) {
+  // null means "not fetched yet, still loading" (see matchCounts' own
+  // comment) — a tiny spinner reads as "still working" rather than the
+  // dash it briefly used to show, which looked identical to "no matches".
+  if (counts === null) return <span className="spinner" style={{ width: 12, height: 12, verticalAlign: "middle" }} />;
+  if (counts.total === 0) return <span className="faint small">{emptyLabel}</span>;
   return (
     <button type="button" className="pill-accent" onClick={onOpen}>
-      {matchCount} {matchCount === 1 ? "property" : "properties"}
+      {counts.total} {counts.total === 1 ? "property" : "properties"}
     </button>
   );
 }
 
-function PipelineStatusBadge({ status }: { status: "assigned" | "matched" | "new" }) {
-  if (status === "assigned") return <Badge tone="ok">Assigned</Badge>;
-  if (status === "matched") return <Badge tone="accent">Matched</Badge>;
+/** Same button as MatchesCell above, green instead of accent (see
+ *  styles/controls.css's own comment on .pill-ok) — opens the same dialog
+ *  straight to its Completed tab. Properties counted here are exactly the
+ *  ones MatchesCell's own total just subtracted out. */
+function CompletedCell({ counts, onOpen }: { counts: ClientPropertyCounts | null; onOpen: () => void }) {
+  if (counts === null) return <span className="spinner" style={{ width: 12, height: 12, verticalAlign: "middle" }} />;
+  if (counts.completed === 0) return <span className="faint small">—</span>;
+  return (
+    <button type="button" className="pill-ok" onClick={onOpen}>
+      <IconCheck size={12} strokeWidth={2.4} />
+      {counts.completed} completed
+    </button>
+  );
+}
+
+function PipelineStatusBadge({ status }: { status: PipelineStatus }) {
+  if (status.kind === "partial")
+    return (
+      <Badge tone="warn" title="Some of this client's properties are still waiting to be handed off">
+        {status.assigned} assigned · {status.remaining} remaining
+      </Badge>
+    );
+  if (status.kind === "assigned") return <Badge tone="ok">Assigned</Badge>;
+  if (status.kind === "matched") return <Badge tone="accent">Matched</Badge>;
   return <Badge tone="info">New</Badge>;
 }
 
@@ -1026,267 +1128,4 @@ function formatBudgetRange(min: number | null, max: number | null): string {
     return `${formatCompactInr(min)} – ${formatCompactInr(max)}`;
   if (min !== null) return `${formatCompactInr(min)}+`;
   return `Up to ${formatCompactInr(max as number)}`;
-}
-
-/* ------------------------------------------------------------ lead table */
-
-/**
- * The "Property Interest" tab's table — leads from the public landing
- * page's own enquiry form (LandingPage/), NOT the WhatsApp registration
- * flow above. Someone here didn't state open requirements the way a
- * whatsapp-inquiry client does; they looked at one specific listing (or
- * the home page) and liked it enough to leave their number, so the point
- * of this table is simply: who, and about what.
- */
-function LeadTable({
-  leads,
-  propertyCache,
-  expandedLeadId,
-  setExpandedLeadId,
-}: {
-  leads: LandingLeadRecord[];
-  propertyCache: Record<string, PropertyRecord | null>;
-  expandedLeadId: string | null;
-  setExpandedLeadId: (leadId: string | null) => void;
-}) {
-  return (
-    <div className="table-frame anim-rise">
-      <div className="table-scroll">
-        <table className="table">
-          <thead>
-            <tr>
-              <th>Name</th>
-              <th>WhatsApp</th>
-              <th>Property</th>
-              <th>Submitted</th>
-            </tr>
-          </thead>
-          <tbody>
-            {leads.map((lead) => {
-              const isExpanded = expandedLeadId === lead.lead_id;
-              // Absent from the cache means "not fetched yet" (either this
-              // row has never been expanded, or the fetch is still in
-              // flight) — kept distinct from `null` ("fetched, gone") so
-              // the detail below can show a loading state instead of
-              // flashing "no longer available" first.
-              const propertyState = lead.property_record_id
-                ? propertyCache[lead.property_record_id]
-                : null;
-              const propertyLoading =
-                Boolean(lead.property_record_id) &&
-                !(lead.property_record_id! in propertyCache);
-              return (
-                <Fragment key={lead.lead_id}>
-                  <tr
-                    className={["row", isExpanded && "row--open"]
-                      .filter(Boolean)
-                      .join(" ")}
-                    tabIndex={0}
-                    role="button"
-                    aria-expanded={isExpanded}
-                    onClick={() =>
-                      setExpandedLeadId(isExpanded ? null : lead.lead_id)
-                    }
-                    onKeyDown={(event) => {
-                      if (event.key === "Enter" || event.key === " ") {
-                        event.preventDefault();
-                        setExpandedLeadId(isExpanded ? null : lead.lead_id);
-                      }
-                    }}
-                  >
-                    <td className="cell-truncate cell-strong">{lead.name}</td>
-                    <td className="cell-truncate">
-                      <Copyable text={lead.whatsapp_number} />
-                    </td>
-                    <td
-                      className="cell-truncate"
-                      title={lead.property_label ?? undefined}
-                    >
-                      {lead.property_label ?? (
-                        <span className="faint">General enquiry</span>
-                      )}
-                    </td>
-                    <td className="cell-num" style={{ whiteSpace: "nowrap" }}>
-                      {lead.created_at
-                        ? relativeTime(new Date(lead.created_at))
-                        : "—"}
-                    </td>
-                  </tr>
-                  {isExpanded && (
-                    <tr>
-                      <td className="detail-cell" colSpan={4}>
-                        <LeadDetail
-                          lead={lead}
-                          property={propertyState}
-                          loading={propertyLoading}
-                        />
-                      </td>
-                    </tr>
-                  )}
-                </Fragment>
-              );
-            })}
-          </tbody>
-        </table>
-      </div>
-    </div>
-  );
-}
-
-/**
- * The "division" a row expands into: client info first, full property
- * information underneath — exactly the order a human reading this would
- * want it (who is this, then what are they asking about).
- */
-function LeadDetail({
-  lead,
-  property,
-  loading,
-}: {
-  lead: LandingLeadRecord;
-  property: PropertyRecord | null;
-  loading: boolean;
-}) {
-  return (
-    <div className="detail stack stack-4">
-      <div className="detail__grid">
-        <div className="detail__block">
-          <div className="detail__k">Contact</div>
-          <div className="detail__v">{lead.name}</div>
-          <div className="detail__v" style={{ marginTop: 4 }}>
-            <Copyable text={lead.whatsapp_number} />
-          </div>
-        </div>
-
-        <div className="detail__block">
-          <div className="detail__k">Submitted</div>
-          <div className="detail__v">
-            {lead.created_at ? relativeTime(new Date(lead.created_at)) : "—"}
-          </div>
-          <div className="faint small" style={{ marginTop: 4 }}>
-            From the public website —{" "}
-            {lead.property_record_id
-              ? "a property page"
-              : "the Contact section"}
-          </div>
-        </div>
-      </div>
-
-      {lead.property_record_id ? (
-        property ? (
-          <PropertySummaryBlock property={property} />
-        ) : loading ? (
-          <div className="row-flex faint small">
-            <span className="spinner" style={{ width: 12, height: 12 }} />{" "}
-            Loading property…
-          </div>
-        ) : (
-          <Note tone="warn" icon={<IconAlert size={16} />}>
-            <strong>That property is no longer available.</strong> They enquired
-            about "{lead.property_label ?? "a property"}", which has since been
-            edited, unpublished, or deleted.
-          </Note>
-        )
-      ) : (
-        <Note tone="info" icon={<IconMessage size={16} />}>
-          Submitted from the site's general Contact section — not tied to any
-          one listing.
-        </Note>
-      )}
-    </div>
-  );
-}
-
-/**
- * Full property information for a lead that named one — everything this
- * internal tool itself knows about the listing (unlike the public landing
- * page, this can show the address and the owner/broker's contact, since
- * it's the client's own team looking, not a stranger).
- */
-function PropertySummaryBlock({ property }: { property: PropertyRecord }) {
-  const location = [property.area_name, property.address]
-    .filter(Boolean)
-    .join(" · ");
-
-  return (
-    <div className="stack stack-3">
-      <div className="detail__k">Property they're interested in</div>
-
-      {property.image_urls.length > 0 && (
-        <div className="detail__gallery">
-          {property.image_urls.map((src, index) => (
-            <div key={index} className="detail__photo">
-              <img
-                src={src}
-                alt={`${property.society_name ?? "Property"} photo ${index + 1}`}
-              />
-            </div>
-          ))}
-        </div>
-      )}
-
-      <div className="detail__grid">
-        <div className="detail__block">
-          <div className="detail__k">Listing</div>
-          <div className="detail__v">
-            {[property.bhk, property.property_type].filter(Boolean).join(" ") ||
-              "—"}
-          </div>
-          <div className="faint small" style={{ marginTop: 4 }}>
-            {property.society_name ?? property.area_name ?? "—"}
-          </div>
-        </div>
-
-        <div className="detail__block">
-          <div className="detail__k">Price</div>
-          <div className="detail__v">
-            {formatPrice(property.price_text, property.price_amount_inr)}
-          </div>
-          <div style={{ marginTop: 6 }}>
-            <Badge tone={property.listing_type === "Rent" ? "info" : "ok"}>
-              {property.listing_type}
-            </Badge>
-          </div>
-        </div>
-
-        <div className="detail__block">
-          <div className="detail__k">Carpet area</div>
-          <div className="detail__v">
-            {formatCarpetArea(
-              property.carpet_area_sqft,
-              property.carpet_area_unit,
-            )}
-          </div>
-        </div>
-
-        {location && (
-          <div className="detail__block">
-            <div className="detail__k">
-              <IconPin size={11} /> Location
-            </div>
-            <div className="detail__v">{location}</div>
-          </div>
-        )}
-
-        {(property.contact_name || property.contact_phone) && (
-          <div className="detail__block">
-            <div className="detail__k">Owner / broker contact</div>
-            <div className="detail__v">{property.contact_name ?? "—"}</div>
-            {property.contact_phone && (
-              <div className="faint small" style={{ marginTop: 4 }}>
-                <Copyable text={property.contact_phone} />
-              </div>
-            )}
-          </div>
-        )}
-      </div>
-
-      {property.description && (
-        <div className="detail__block">
-          <div className="detail__k">Description</div>
-          <div className="detail__msg">{property.description}</div>
-        </div>
-      )}
-    </div>
-  );
 }

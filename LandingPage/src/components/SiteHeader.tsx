@@ -1,15 +1,24 @@
 import { useEffect, useState } from "react";
 import { useLocation, useNavigate } from "react-router-dom";
-import { scrollToSection, useScrollState } from "../hooks/useScroll";
+import { isHomeRoute, scrollToSection, useScrollState } from "../hooks/useScroll";
 import { site } from "../lib/siteConfig";
 import { IconClose, IconMenu } from "./Icons";
 
+/**
+ * The reading sections, in document order — used for the nav links, the
+ * drawer, the footer links and the scroll-spy.
+ *
+ * "contact" is NOT here even though the section exists: it is where the
+ * requirements form lives, and it already has a dedicated primary button
+ * ("Enquire now", below) sitting right next to this list. A plain "Contact"
+ * link beside it was the same destination dressed as something quieter,
+ * which only made the one action the site is for easier to miss.
+ */
 export const SECTIONS = [
   { id: "home", label: "Home" },
   { id: "properties", label: "Properties" },
   { id: "about", label: "About" },
   { id: "process", label: "How it works" },
-  { id: "contact", label: "Contact" },
 ] as const;
 
 /**
@@ -24,7 +33,7 @@ export const SECTIONS = [
 export default function SiteHeader() {
   const navigate = useNavigate();
   const location = useLocation();
-  const onHome = location.pathname === "/";
+  const onHome = isHomeRoute(location.pathname);
   const [drawerOpen, setDrawerOpen] = useState(false);
 
   const { stuck, progress, activeId } = useScrollState(SECTIONS.map((section) => section.id));
@@ -123,6 +132,18 @@ export default function SiteHeader() {
             {section.label}
           </button>
         ))}
+
+        {/* The header's "Enquire now" is hidden below 900px, which is
+            exactly when this drawer exists — so it has to appear here, or
+            the mobile menu is the one place with no way to the form. */}
+        <button
+          type="button"
+          className="drawer__link drawer__link--cta"
+          onClick={() => goToSection("contact")}
+          tabIndex={drawerOpen ? 0 : -1}
+        >
+          Enquire now
+        </button>
       </div>
     </>
   );

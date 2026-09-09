@@ -63,7 +63,7 @@ export default function AgentFormDialog({
       } else {
         const created = await agentApi.createAgent(body);
         toast.push({ tone: "ok", title: "Agent added", message: created.name });
-        onSaved({ ...created, active_clients: [], completed_visits: [] });
+        onSaved({ ...created, active_clients: [], completed_visits: [], visits_this_month: 0 });
       }
     } catch (err) {
       toast.push({ tone: "bad", title: mode === "edit" ? "Couldn't update this agent" : "Couldn't add this agent", message: friendlyError(err) });

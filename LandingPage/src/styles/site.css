@@ -191,6 +191,10 @@
 .drawer__link.is-active {
   color: var(--gold-200);
 }
+.drawer__link--cta {
+  border-bottom: 0;
+  color: var(--gold-200);
+}
 
 @media (max-width: 900px) {
   .nav {
@@ -784,23 +788,65 @@
     linear-gradient(170deg, var(--ink-850), var(--ink-1000));
   padding: clamp(34px, 5vw, 66px);
   display: grid;
-  grid-template-columns: 1fr 1fr;
+  /* The copy column no longer needs to match the form's height — the form
+     is a full requirements form now, not two fields — so it holds its own
+     width and both columns start at the top rather than floating mid-card. */
+  grid-template-columns: minmax(0, 0.9fr) minmax(0, 1.1fr);
   gap: clamp(30px, 5vw, 64px);
-  align-items: center;
+  align-items: start;
+}
+
+/* Sticks alongside the form on wide screens: the form is long enough that
+   the copy explaining it would otherwise scroll away before it's read. */
+.contact__copy {
+  position: sticky;
+  top: calc(var(--header-h) + 30px);
+}
+
+.contact__points {
+  list-style: none;
+  margin: 26px 0 0;
+  padding: 0;
+  display: grid;
+  gap: 12px;
+}
+.contact__points li {
+  display: flex;
+  gap: 11px;
+  align-items: flex-start;
+  font-size: 14.5px;
+  color: var(--text-soft);
+  line-height: 1.55;
+}
+.contact__points svg {
+  flex: none;
+  margin-top: 3px;
+  color: var(--gold-200);
 }
 
 @media (max-width: 900px) {
   .contact {
     grid-template-columns: 1fr;
   }
+  /* Stacked, "sticky" would pin the copy over the form the whole way down. */
+  .contact__copy {
+    position: static;
+  }
 }
 
 /* ============================ lead form ============================ */
 
+/* The SHORT form — name and WhatsApp number, nothing else — shown on each
+   property page's enquiry card. Someone reading one specific listing has
+   already told us what they want by being on that page; the long
+   requirements form (.req-form below) is for the home page, where they
+   haven't. */
 .lead-form {
   display: grid;
   gap: 14px;
 }
+
+/* ========================= form fields ========================= */
 
 .field {
   display: grid;
@@ -814,9 +860,13 @@
   color: var(--text-faint);
 }
 
-.field input {
+.field input,
+.field select,
+.field textarea {
   width: 100%;
   padding: 15px 18px;
+  /* NB: this is the background shorthand, so it clears background-image —
+     the select's arrow is applied after this rule, deliberately. */
   border-radius: var(--r-md);
   border: 1px solid var(--hairline-strong);
   background: rgba(0, 0, 0, 0.32);
@@ -828,20 +878,59 @@
     box-shadow var(--t-fast) linear,
     background-color var(--t-fast) linear;
 }
-.field input::placeholder {
+.field input::placeholder,
+.field textarea::placeholder {
   color: var(--text-faint);
 }
-.field input:hover {
+.field input:hover:not(:disabled),
+.field select:hover,
+.field textarea:hover {
   border-color: rgba(255, 255, 255, 0.24);
 }
-.field input:focus {
+.field input:focus,
+.field select:focus,
+.field textarea:focus {
   outline: none;
   border-color: var(--accent);
-  background: rgba(0, 0, 0, 0.45);
+  /* background-COLOR, not the shorthand: the shorthand resets
+     background-image, which would take the select's own arrow (drawn below)
+     away for exactly as long as it is focused. */
+  background-color: rgba(0, 0, 0, 0.45);
   box-shadow: 0 0 0 4px var(--accent-soft);
 }
 .field input[aria-invalid="true"] {
   border-color: #d9736b;
+}
+
+/* The number the WhatsApp link already established: shown, never editable. */
+.field input:disabled {
+  opacity: 0.72;
+  cursor: not-allowed;
+}
+
+.field textarea {
+  resize: vertical;
+  min-height: 96px;
+  line-height: 1.6;
+}
+
+/* A native select paints its own arrow in the OS' colours, which on this
+   dark card reads as a rendering fault — this replaces it with one drawn in
+   the page's own gold. */
+.field select {
+  appearance: none;
+  -webkit-appearance: none;
+  padding-right: 44px;
+  background-image: url("data:image/svg+xml,%3Csvg xmlns='http://www.w3.org/2000/svg' width='14' height='14' viewBox='0 0 24 24' fill='none' stroke='%23d9b871' stroke-width='2.2' stroke-linecap='round' stroke-linejoin='round'%3E%3Cpath d='m6 9 6 6 6-6'/%3E%3C/svg%3E");
+  background-repeat: no-repeat;
+  background-position: right 17px center;
+  cursor: pointer;
+}
+/* The dropdown list itself is drawn by the OS, so it needs its colours set
+   explicitly or it inherits a white popup under a dark page. */
+.field select option {
+  background: var(--ink-900);
+  color: var(--text);
 }
 
 .field__error {
@@ -849,7 +938,241 @@
   color: #e8918a;
 }
 
-.lead-form__note {
+/* The WhatsApp number and its Confirm button on one line. Grid rather than
+   flex so the button keeps its natural width while the input takes every
+   remaining pixel — a phone number field that shrinks as a button label
+   changes length is the sort of thing that reads as a broken layout. */
+.field__row {
+  display: grid;
+  gap: 10px;
+}
+.field__row--action {
+  grid-template-columns: 1fr auto;
+  align-items: center;
+}
+.field__action {
+  padding: 14px 22px;
+}
+/* Fired once when a visitor tries to move on with a plausible number that
+   hasn't been confirmed yet — draws the eye to Confirm without opening
+   anything on its own. Runs once and stops (see the component's
+   onAnimationEnd), so it never nags on a loop. */
+.field__action.is-pulsing {
+  animation: confirm-pulse 900ms ease-out;
+}
+@keyframes confirm-pulse {
+  0% {
+    box-shadow: 0 0 0 0 var(--accent-glow);
+  }
+  60% {
+    box-shadow: 0 0 0 10px transparent;
+  }
+  100% {
+    box-shadow: 0 0 0 0 transparent;
+  }
+}
+/* Under ~380px the two of them stop fitting side by side and the input gets
+   too narrow to read a number back in — so they stack instead. */
+@media (max-width: 380px) {
+  .field__row--action {
+    grid-template-columns: 1fr;
+  }
+}
+
+/* ===================== WhatsApp number confirmation =====================
+
+   components/PhoneVerifyDialog.tsx — the 4-digit code that turns "a number
+   someone typed" into "a number someone owns". Deliberately the only modal
+   on this site: it is the one moment the page genuinely cannot continue
+   past, and everything else here is designed to sit inline instead. */
+
+.otp-backdrop {
+  position: fixed;
+  inset: 0;
+  z-index: 120;
+  display: grid;
+  place-items: center;
+  padding: 20px;
+  background: rgba(4, 4, 6, 0.78);
+  backdrop-filter: blur(6px);
+  animation: otp-fade-in 200ms var(--ease-out) both;
+}
+
+@keyframes otp-fade-in {
+  from {
+    opacity: 0;
+  }
+  to {
+    opacity: 1;
+  }
+}
+
+.otp {
+  position: relative;
+  width: min(420px, 100%);
+  display: grid;
+  justify-items: center;
+  gap: 14px;
+  padding: 34px 28px 26px;
+  border-radius: var(--r-lg);
+  border: 1px solid var(--accent-line);
+  background: var(--ink-850);
+  box-shadow: var(--shadow-lg);
+  text-align: center;
+  animation: fade-up 320ms var(--ease-out) both;
+}
+
+.otp__close {
+  position: absolute;
+  top: 12px;
+  right: 12px;
+  display: grid;
+  place-items: center;
+  width: 34px;
+  height: 34px;
+  border-radius: 50%;
+  color: var(--text-soft);
+  background: transparent;
+}
+.otp__close:hover {
+  color: var(--text);
+  background: var(--glass-2);
+}
+
+.otp__icon {
+  display: grid;
+  place-items: center;
+  width: 46px;
+  height: 46px;
+  border-radius: 50%;
+  border: 1px solid var(--accent-line);
+  background: var(--accent-soft);
+  color: var(--gold-200);
+}
+
+.otp__title {
+  margin: 0;
+  font-family: var(--font-display);
+  font-size: 22px;
+  font-weight: 400;
+}
+
+.otp__sub {
+  margin: 0;
+  max-width: 34ch;
+  color: var(--text-soft);
+  font-size: 13.5px;
+  line-height: 1.55;
+}
+.otp__sub strong {
+  color: var(--text);
+  font-weight: 600;
+  white-space: nowrap;
+}
+
+.otp__boxes {
+  display: flex;
+  gap: 12px;
+  margin-top: 4px;
+}
+
+/* One character, centred, big enough to read back at arm's length — the
+   whole point is that someone can glance at a notification and copy four
+   digits without concentrating. */
+.otp__box {
+  width: 56px;
+  height: 64px;
+  border-radius: var(--r-md);
+  border: 1.5px solid var(--hairline-strong);
+  background: rgba(255, 255, 255, 0.04);
+  color: var(--text);
+  font-size: 26px;
+  font-weight: 600;
+  text-align: center;
+  transition:
+    border-color var(--t-fast) linear,
+    box-shadow var(--t-fast) linear,
+    background-color var(--t-fast) linear;
+}
+.otp__box.is-filled {
+  border-color: var(--accent-line);
+  background: rgba(255, 255, 255, 0.06);
+}
+.otp__box:focus {
+  outline: none;
+  border-color: var(--accent);
+  box-shadow: 0 0 0 4px var(--accent-soft);
+}
+.otp__box.is-error {
+  border-color: #d9736b;
+}
+.otp__box:disabled {
+  opacity: 0.6;
+}
+
+.otp__error {
+  margin: 0;
+  display: flex;
+  gap: 8px;
+  align-items: flex-start;
+  max-width: 36ch;
+  color: #e8918a;
+  font-size: 12.5px;
+  line-height: 1.5;
+  text-align: left;
+}
+.otp__error svg {
+  flex: none;
+  margin-top: 1px;
+}
+
+.otp__note {
+  margin: 0;
+  color: var(--text-faint);
+  font-size: 12.5px;
+}
+
+/* Full-width, and the only button in the dialog that ever checks the code
+   — every digit box just fills, nothing checks until this is pressed. */
+.otp__done {
+  width: 100%;
+  margin-top: 6px;
+  padding: 13px 26px;
+}
+
+.otp__actions {
+  display: flex;
+  gap: 22px;
+  align-items: center;
+  justify-content: center;
+  margin-top: 2px;
+  padding-top: 4px;
+  border-top: 1px solid var(--hairline);
+  width: 100%;
+}
+
+.otp__link {
+  background: none;
+  color: var(--gold-200);
+  font-size: 13px;
+  padding: 4px 2px;
+  border-bottom: 1px solid transparent;
+}
+.otp__link:hover:not(:disabled) {
+  border-bottom-color: var(--accent-line);
+}
+.otp__link:disabled {
+  color: var(--text-faint);
+  cursor: default;
+}
+
+.field__hint {
+  font-size: 12.5px;
+  color: var(--text-faint);
+}
+
+.lead-form__note,
+.req-form__note {
   margin: 4px 0 0;
   font-size: 12.5px;
   color: var(--text-faint);
@@ -887,6 +1210,102 @@
   margin: 0;
   color: var(--text-soft);
   font-size: 14.5px;
+}
+
+/* ========================= requirements form =========================
+
+   The one form on the site (components/RequirementsForm.tsx), shown in the
+   contact section and in the property page's enquiry card. It reuses .field
+   above wholesale — everything here is what the two-field lead form it
+   replaced never needed. */
+
+.req-form {
+  display: grid;
+  gap: 16px;
+}
+
+/* Every field EXCEPT the WhatsApp number. Grouping them is not cosmetic:
+   this is the element that catches focus moving into any of them and asks
+   for the number first (see RequirementsForm's guardPhoneFirst). */
+.req-form__rest {
+  display: grid;
+  gap: 16px;
+}
+
+.req-form__pair {
+  display: grid;
+  grid-template-columns: 1fr 1fr;
+  gap: 12px;
+}
+
+.req-form__badge {
+  justify-self: start;
+  padding: 7px 14px;
+  border-radius: var(--r-pill);
+  border: 1px solid var(--accent-line);
+  background: var(--accent-soft);
+  color: var(--gold-200);
+  font-size: 12px;
+  letter-spacing: 0.04em;
+}
+
+.req-form--loading {
+  gap: 18px;
+}
+.req-form__skeleton {
+  height: 52px;
+  width: 100%;
+}
+
+/* Buy / Rent / Sell. Same shape as the property filters at the top of the
+   page, so a visitor recognises it as the same kind of control. */
+.seg {
+  display: flex;
+  flex-wrap: wrap;
+  gap: 10px;
+}
+.seg__btn {
+  border: 1px solid var(--hairline-strong);
+  background: rgba(0, 0, 0, 0.32);
+  color: var(--text-soft);
+  padding: 12px 26px;
+  border-radius: var(--r-pill);
+  font-size: 14px;
+  font-weight: 500;
+  transition:
+    color var(--t-fast) linear,
+    border-color var(--t-fast) linear,
+    background-color var(--t-fast) linear;
+}
+.seg__btn:hover {
+  color: var(--text);
+  border-color: rgba(255, 255, 255, 0.24);
+}
+.seg__btn.is-active {
+  color: #16120a;
+  background-image: var(--accent-text);
+  border-color: transparent;
+  font-weight: 600;
+}
+
+/* An expired link, or details that couldn't be loaded — information, not a
+   failure, so it is deliberately not painted in the error red below. */
+.form-note {
+  display: flex;
+  gap: 10px;
+  align-items: flex-start;
+  margin: 0;
+  padding: 13px 16px;
+  border-radius: var(--r-md);
+  border: 1px solid var(--accent-line);
+  background: var(--accent-soft);
+  color: var(--gold-200);
+  font-size: 13.5px;
+  line-height: 1.5;
+}
+.form-note svg {
+  flex: none;
+  margin-top: 2px;
 }
 
 .form-error {
@@ -935,12 +1354,13 @@
   color: var(--gold-200);
 }
 
-/* ====================== floating WhatsApp button ====================== */
+/* ========================= floating CTA button ========================= */
 
-/* Persistent, because the entire point of the site is to start a WhatsApp
-   conversation — and a visitor who is ready to do that three sections down
-   shouldn't have to hunt for the way to. */
-.wa-fab {
+/* Persistent, because the entire point of the site is to hear what someone
+   is looking for — and a visitor who becomes ready to say so three sections
+   down shouldn't have to hunt for the way to. It used to be a wa.me link
+   built from a placeholder number; it now scrolls to the real form. */
+.cta-fab {
   position: fixed;
   right: clamp(16px, 3vw, 30px);
   bottom: clamp(16px, 3vw, 30px);
@@ -961,15 +1381,17 @@
     transform var(--t-base) var(--ease-spring),
     box-shadow var(--t-base) var(--ease-out);
 }
-.wa-fab:hover {
+.cta-fab:hover {
   transform: translateY(-3px) scale(1.03);
   box-shadow: var(--shadow-lg), var(--shadow-gold);
 }
+/* Below this the label would take most of the screen's width, so the icon
+   carries it — the same control, just down to its shortest form. */
 @media (max-width: 560px) {
-  .wa-fab span {
+  .cta-fab span {
     display: none;
   }
-  .wa-fab {
+  .cta-fab {
     padding: 15px;
   }
 }

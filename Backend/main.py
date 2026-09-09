@@ -25,24 +25,25 @@ refused before FastAPI ever sees them, surfacing in the browser as "Could
 not reach the backend."
 
 Neither --reload-exclude is optional: uvicorn's --reload watches this
-entire directory recursively by default, which includes venv/ and both
-WhatsApp session stores (Service/WhatsAppDataFetchingService/session/
-whatsapp_session.db and Service/WhatsAppInquiryHandlingService/session/
-whatsapp_inquiry_session.db). Without excluding venv/, something as
-ordinary as `pip install`-ing a new dependency mid-session (venv/ files
-change) triggers a full server restart — killing BOTH live WhatsApp client
-connections (and any pairing handshake in progress) along with them, even
-though nothing about the application code itself changed. Without
-excluding *.db, it's worse: those two session files are rewritten by the
-neonize/whatsmeow client on ordinary WhatsApp traffic (e.g. every inbound
-inquiry message), so the reload watcher restarts the whole process
-practically every time someone messages the bot — which also wipes the
-in-memory, per-process registration-form token store
+entire directory recursively by default, which includes venv/ and every
+linked WhatsApp number's session store (one .db file per connection under
+Service/WhatsAppDataFetchingService/session/ — see
+whatsapp_connection_manager.py; there can be several now that the
+Connection page supports linking more than one number). Without excluding
+venv/, something as ordinary as `pip install`-ing a new dependency
+mid-session (venv/ files change) triggers a full server restart — killing
+every live WhatsApp connection (and any pairing handshake in progress)
+along with them, even though nothing about the application code itself
+changed. Without excluding *.db, it's worse: those session files are
+rewritten by the neonize/whatsmeow client on ordinary WhatsApp traffic (e.g.
+every inbound inquiry message), so the reload watcher restarts the whole
+process practically every time someone messages the bot — which also wipes
+the in-memory, per-process registration-form token store
 (Service/WhatsAppInquiryHandlingService/form_token_service.py) and
 invitation tracker, so a link sent moments earlier comes back "This link
 is no longer valid" the instant it's opened, well before its real 24-hour
-TTL. Both files live only under Service/*/session/, so this exclude
-can't accidentally mask a real code change elsewhere.
+TTL. Every session file lives only under Service/*/session/, so this
+exclude can't accidentally mask a real code change elsewhere.
 
 On startup, spawns the WhatsApp client (Service/WhatsAppDataFetchingService/whatsapp_client.py) on a
 background thread. It prints its own progress (pairing, group/personal-chat
@@ -80,8 +81,10 @@ from Controller.WhatsAppDataFetchingController.area_filter_controller import rou
 from Controller.WhatsAppDataFetchingController.display_settings_controller import router as display_settings_router
 from Controller.WhatsAppDataFetchingController.duplicate_detection_controller import router as duplicate_detection_router
 from Controller.WhatsAppDataFetchingController.property_controller import router as property_router
+from Controller.WhatsAppDataFetchingController.whatsapp_connections_controller import router as whatsapp_connections_router
 from Controller.WhatsAppDataFetchingController.whatsapp_controller import router as whatsapp_router
 from Controller.WhatsAppInquiryHandlingController.inquiry_form_controller import router as inquiry_form_router
+from Controller.WhatsAppInquiryHandlingController.phone_verification_controller import router as phone_verification_router
 from Controller.WhatsAppInquiryHandlingController.whatsapp_inquiry_controller import router as whatsapp_inquiry_router
 from Controller.InstagramInquiryHandlingController.instagram_controller import router as instagram_router
 from Controller.LandingPageController.landing_page_controller import router as landing_page_router
@@ -153,23 +156,18 @@ async def lifespan(_app: FastAPI):
     finally:
         heartbeat.cancel()
 
-    step_logger.step("FastAPI server is up. Launching WhatsApp client in the background...")
+    step_logger.step("FastAPI server is up. Launching WhatsApp connections in the background...")
+    # whatsapp_service owns wiring the property-message handler AND starting
+    # whatsapp_connection_manager, which owns every linked WhatsApp number
+    # (however many there are) and staggers their client construction
+    # internally — see its own module docstring's Concurrency note for why
+    # that matters: the underlying neonize (whatsmeow) Go library has an
+    # internal shared map that isn't synchronized against concurrent client
+    # construction, and starting two at the exact same instant can crash the
+    # ENTIRE process with an unrecoverable Go-runtime error.
     whatsapp_service.start_agent_in_background()
-    # Deliberately staggered, not started together: the underlying neonize
-    # (whatsmeow) Go library has an internal shared map that isn't
-    # synchronized against concurrent client construction — starting both
-    # WhatsApp clients (this app runs two: whatsappDataFetching and
-    # whatsappInquiryHandling) at the exact same instant reliably crashes
-    # the ENTIRE process with a Go-runtime "fatal error: concurrent map
-    # writes", which is not a Python exception and cannot be caught or
-    # recovered from. Giving the first client a head start to finish its
-    # own Go-side setup avoids that specific collision window. This is a
-    # mitigation, not a guarantee the underlying library is safe under all
-    # concurrent use — if this crash recurs later (not just at startup),
-    # the real fix is running the two clients in separate OS processes.
-    await asyncio.sleep(8)
     whatsapp_inquiry_service.start_agent_in_background()
-    # No stagger needed here, unlike the two WhatsApp clients above — the
+    # No stagger needed here, unlike the WhatsApp connections above — the
     # Instagram connection is a plain HTTPS keepalive check, not a
     # neonize/whatsmeow Go client, so it shares none of that library's
     # concurrent-construction crash risk.
@@ -241,12 +239,14 @@ app.add_middleware(
 app.add_middleware(GZipMiddleware, minimum_size=1024)
 
 app.include_router(whatsapp_router, prefix="/api")
+app.include_router(whatsapp_connections_router, prefix="/api")
 app.include_router(area_filter_router, prefix="/api")
 app.include_router(display_settings_router, prefix="/api")
 app.include_router(duplicate_detection_router, prefix="/api")
 app.include_router(property_router, prefix="/api")
 app.include_router(whatsapp_inquiry_router, prefix="/api")
 app.include_router(inquiry_form_router, prefix="/api")
+app.include_router(phone_verification_router, prefix="/api")
 app.include_router(matching_router, prefix="/api")
 app.include_router(instagram_router, prefix="/api")
 app.include_router(landing_page_router, prefix="/api")

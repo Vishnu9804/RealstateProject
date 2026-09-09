@@ -48,3 +48,17 @@ def get_leads(limit: int = 100) -> List[LandingLeadRecord]:
     """Read side of the enquiry form, for the client's own use. Not called
     by the public site — it only ever POSTs to /landing/leads."""
     return landing_page_service.get_leads(limit=limit)
+
+
+@router.get("/leads/for-phone/{phone}", response_model=List[str])
+def get_lead_property_ids(phone: str) -> List[str]:
+    """For the internal tool's Inquiries page only (components/
+    ClientMatchesDialog.tsx) — distinct property ids this phone number
+    enquired about via this site's own form, newest first. Powers the
+    "Web Site Property Inquiry" section: every website enquiry folds into
+    the same ClientRecord table a WhatsApp registration produces (see
+    Service/LandingPageService/landing_page_service.py's
+    _sync_to_inquiries), so this is how the dialog knows which of that
+    client's properties were specifically asked about here, separately
+    from whichever scored or were hand-picked."""
+    return landing_page_service.get_property_ids_for_phone(phone)

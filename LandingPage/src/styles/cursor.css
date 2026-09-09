@@ -40,7 +40,9 @@ button,
 .nav__link,
 .drawer__link,
 .filter-btn,
-.wa-fab,
+.seg__btn,
+.cta-fab,
+select,
 .brand {
   cursor: var(--cursor-arrow-hover);
 }

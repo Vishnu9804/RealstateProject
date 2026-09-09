@@ -892,26 +892,31 @@
    Taken clean out of flow (position: absolute) so it never widens
    .table-with-rail and never pushes .table-frame over by so much as a
    pixel — the table sits at exactly the x-position it always has. The rail
-   just hangs in whatever blank margin already exists there.
-   Still one div per row, in the same order as tbody, still positioned by
-   plain CSS with no JS — vertical page scroll (see .table-scroll's own
-   comment: the page owns vertical scrolling, the table only scrolls
-   horizontally within itself) moves this exactly as fast as the rows next
-   to it, because it never leaves the normal page-scroll flow to begin
-   with; there's nothing to fall behind. */
+   just hangs in whatever blank margin already exists there. Vertical page
+   scroll (see .table-scroll's own comment: the page owns vertical
+   scrolling, the table only scrolls horizontally within itself) moves this
+   exactly as fast as the rows next to it, because it never leaves the
+   normal page-scroll flow to begin with; there's nothing to fall behind.
+
+   Each slot is placed at its OWN row's measured top/height rather than at
+   a fixed stride — see components/ui/RowRail.tsx for why: rows whose text
+   wraps are taller than their neighbours, and a uniform stride drifted
+   further out of alignment with every such row, leaving the toggles near
+   the bottom of a page sitting between two rows instead of beside one. */
 .table-with-rail { position: relative; }
 .row-icon-rail {
   position: absolute;
-  top: 43px; /* clears the table's own header row, so slot 0 lines up with the first data row */
-  right: calc(100% + 8px);
-  display: flex;
-  flex-direction: column;
-  align-items: flex-end;
+  top: 0;
+  right: calc(100% + 6px);
+  bottom: 0;
+  width: 26px;
 }
 .row-icon-slot {
-  height: 62px;
+  position: absolute;
+  right: 0;
   display: flex;
   align-items: center;
+  justify-content: flex-end;
 }
 
 .row-indicator-chip {
@@ -933,8 +938,8 @@
 
 /* ---- Landing Page page — the round select toggle in the icon rail ------ */
 .select-toggle {
-  width: 30px;
-  height: 30px;
+  width: 22px;
+  height: 22px;
   flex: none;
   border-radius: 50%;
   border: 1.5px solid var(--rim-strong);
@@ -951,7 +956,7 @@
     color var(--t-fast) var(--ease-out),
     box-shadow var(--t-base) var(--ease-out);
 }
-.select-toggle svg { transform: scale(0.5); transition: transform var(--t-base) var(--ease-spring); }
+.select-toggle svg { width: 12px; height: 12px; transform: scale(0.5); transition: transform var(--t-base) var(--ease-spring); }
 .select-toggle:hover { border-color: var(--ink-4); transform: scale(1.08); box-shadow: var(--elev-2); }
 .select-toggle--add {
   color: #fff;
@@ -1355,3 +1360,218 @@ mark.hl {
 @media (max-width: 640px) {
   .pager { justify-content: center; }
 }
+
+/* =========================================================================
+   Client matches dialog — the Inquiries table's "N properties" opens this
+   over the client list rather than navigating away, so the operator never
+   loses their place in the table they were reading.
+   ========================================================================= */
+
+/* .detail-modal sets its own width, so a wide variant has to override that
+   rather than only raising max-width (an inline maxWidth alone does
+   nothing against `width: min(760px, 100%)`). */
+.detail-modal--wide { width: min(1180px, 100%); max-height: min(92vh, 940px); }
+
+.matches-dialog__tabs {
+  display: flex;
+  align-items: center;
+  gap: 12px;
+  padding: 14px 26px;
+  border-bottom: 1px solid var(--rim);
+  background: var(--plane-0);
+}
+
+/* Section heading = label, count, then a rule running out to the edge, so
+   High/Medium/Low read as strata of one list rather than three panels. */
+.matches-dialog__section-head {
+  display: flex;
+  align-items: center;
+  gap: 10px;
+}
+.matches-dialog__section-count {
+  display: inline-flex;
+  align-items: center;
+  justify-content: center;
+  min-width: 20px;
+  height: 20px;
+  padding: 0 6px;
+  border-radius: var(--r-pill);
+  background: var(--plane-2);
+  border: 1px solid var(--rim);
+  font-size: 11.5px;
+  font-weight: 640;
+  color: var(--ink-3);
+  font-variant-numeric: tabular-nums;
+}
+.matches-dialog__rule {
+  flex: 1;
+  height: 1px;
+  background: linear-gradient(to right, var(--rim), transparent);
+}
+
+.matches-grid {
+  display: grid;
+  grid-template-columns: repeat(auto-fill, minmax(290px, 1fr));
+  gap: 14px;
+}
+
+/* ---- one property card ------------------------------------------------- */
+.match-card {
+  position: relative;
+  display: flex;
+  flex-direction: column;
+  gap: 10px;
+  padding: 16px 16px 14px;
+  border-radius: var(--r-md);
+  border: 1px solid var(--rim);
+  background: var(--plane-1);
+  cursor: pointer;
+  transition:
+    transform var(--t-base) var(--ease-out),
+    border-color var(--t-fast) var(--ease-out),
+    box-shadow var(--t-base) var(--ease-out),
+    background-color var(--t-fast) var(--ease-out);
+}
+.match-card:hover {
+  transform: translateY(-2px);
+  border-color: var(--rim-strong);
+  background: var(--plane-2);
+  box-shadow: var(--elev-2);
+}
+.match-card:focus-visible { outline: 2px solid var(--accent); outline-offset: 2px; }
+.match-card--selected {
+  border-color: color-mix(in oklab, var(--accent) 55%, transparent);
+  background: color-mix(in oklab, var(--accent) 10%, var(--plane-1));
+  box-shadow: var(--elev-2), var(--glow-accent);
+}
+/* Already out with an agent — green all the way through, so a full round
+   of hand-offs is legible at a glance without reading a single badge. */
+.match-card--assigned {
+  border-color: color-mix(in oklab, var(--ok) 48%, transparent);
+  background: color-mix(in oklab, var(--ok) 12%, var(--plane-1));
+}
+/* Assigned cards stay idle on hover — no lift, no growth — since there is
+   nothing left to click into selecting; only the background tints up a
+   touch to acknowledge the hover happened. */
+.match-card--assigned:hover { background: color-mix(in oklab, var(--ok) 17%, var(--plane-1)); transform: none; box-shadow: none; }
+.match-card--assigned.match-card--selected {
+  border-color: color-mix(in oklab, var(--ok) 70%, transparent);
+  box-shadow: var(--elev-2), 0 0 0 3px color-mix(in oklab, var(--ok) 22%, transparent);
+}
+
+/* The checkbox sits on the card's own top-left corner rather than in a
+   rail beside it — a grid of cards has no single left edge to hang one
+   from, and this keeps it visually welded to the card it selects. Sitting
+   ON the card rather than in a gutter, the unchecked state needs a
+   brighter plate than the rail version or it disappears into the card. */
+.match-card__check {
+  position: absolute;
+  top: -8px;
+  left: -8px;
+  z-index: 1;
+  background: var(--plane-3);
+  border-color: var(--rim-strong);
+  color: var(--ink-4);
+  box-shadow: var(--elev-2);
+}
+.match-card__check.select-toggle--add { color: #fff; }
+.match-card:hover .match-card__check { border-color: var(--ink-4); }
+
+/* .cell-truncate is a TABLE rule (max-width: 190px) — reused in dialog
+   headers for the ellipsis alone, where that width would clip a client
+   name or a requirements line to a third of the room it actually has. */
+.detail-modal__head .cell-truncate { max-width: 100%; }
+
+.match-card__head { display: flex; align-items: flex-start; justify-content: space-between; gap: 10px; }
+.match-card__score {
+  flex: none;
+  padding: 4px 9px;
+  border-radius: var(--r-pill);
+  font-size: 12px;
+  font-weight: 680;
+  font-variant-numeric: tabular-nums;
+  border: 1px solid transparent;
+}
+.match-card__score--high {
+  color: var(--ok);
+  background: color-mix(in oklab, var(--ok) 16%, transparent);
+  border-color: color-mix(in oklab, var(--ok) 40%, transparent);
+}
+.match-card__score--medium {
+  color: var(--warn);
+  background: color-mix(in oklab, var(--warn) 16%, transparent);
+  border-color: color-mix(in oklab, var(--warn) 40%, transparent);
+}
+.match-card__score--low {
+  color: var(--bad);
+  background: color-mix(in oklab, var(--bad) 14%, transparent);
+  border-color: color-mix(in oklab, var(--bad) 34%, transparent);
+}
+
+.match-card__facts { display: flex; flex-wrap: wrap; gap: 6px; }
+.match-card__facts .fact { padding: 4px 8px; font-size: 11.5px; }
+.match-card__badges { display: flex; flex-wrap: wrap; gap: 6px; }
+.match-card__reason {
+  font-size: 12px;
+  line-height: 1.5;
+  color: var(--ink-3);
+  display: -webkit-box;
+  -webkit-line-clamp: 2;
+  line-clamp: 2;
+  -webkit-box-orient: vertical;
+  overflow: hidden;
+}
+.match-card__foot {
+  display: flex;
+  align-items: baseline;
+  justify-content: space-between;
+  gap: 10px;
+  margin-top: auto;
+  padding-top: 10px;
+  border-top: 1px solid var(--rim);
+}
+.match-card__foot .pcard__price { font-size: 17px; }
+
+/* The property dialog's footer carries three or four actions (Select,
+   two Move-tos, sometimes Remove) — it has to be allowed to wrap. */
+.detail-modal__foot--wrap { flex-wrap: wrap; row-gap: 8px; }
+
+/* ---- Agents page — one active site visit inside AgentVisitsDialog ------ */
+/* Active rows get the same card boundary every other row/card in the app
+   uses (border + subtle elevation), so a list of several no longer reads
+   as one undifferentiated block of text. Completed rows deliberately keep
+   their old flat look — only their notes callout below gets the same
+   treatment. */
+.visit-row {
+  border: 1px solid var(--rim);
+  border-radius: var(--r-md);
+  background: var(--plane-1);
+  box-shadow: var(--elev-1);
+  transition: transform var(--t-base) var(--ease-out), border-color var(--t-fast) var(--ease-out), box-shadow var(--t-base) var(--ease-out);
+}
+.visit-row:hover { border-color: var(--rim-strong); box-shadow: var(--elev-2); transform: translateY(-1px); }
+
+/* A completed visit's notes used to be near-invisible ("faint small") next
+   to everything else in the row — this gives them the same callout
+   treatment as an info Note, just sized for a compact row. */
+.visit-row__notes {
+  display: flex;
+  align-items: flex-start;
+  gap: 6px;
+  margin-top: 2px;
+  padding: 7px 10px;
+  border-radius: var(--r-sm);
+  border: 1px solid color-mix(in oklab, var(--info) 30%, transparent);
+  background: color-mix(in oklab, var(--info) 9%, var(--plane-1));
+  font-size: 12.5px;
+  line-height: 1.5;
+  color: var(--ink-2);
+}
+.visit-row__notes svg { flex: none; margin-top: 2px; color: var(--info); }
+
+/* The Inquiries table's Status cell can read "2 assigned · 1 remaining",
+   which is several times wider than the "Assigned"/"New" it replaced —
+   give the column room to hold it on one line rather than letting the
+   badge wrap mid-phrase or squeeze the columns beside it. */
+.cell-pipeline { white-space: nowrap; min-width: 176px; }
+.cell-pipeline .badge { white-space: nowrap; }

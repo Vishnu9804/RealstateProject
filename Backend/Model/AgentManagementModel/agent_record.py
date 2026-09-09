@@ -35,6 +35,11 @@ class AssignedClientSummary(BaseModel):
     budget_max_inr: Optional[float] = None
     property_record_id: str
     property_label: str
+    # When this specific visit became active — the Agents page's per-agent
+    # dialog lists active visits oldest-first, using this. Optional only
+    # for the in-memory fallback's pre-existing rows; every real write
+    # (record_assignment, reopen_visit) always sets it.
+    assigned_at: Optional[datetime] = None
 
 
 class AgentSummary(AgentRecord):
@@ -44,7 +49,17 @@ class AgentSummary(AgentRecord):
     AgentAssignmentRow (see Service/AgentManagementService/agent_store.py),
     never stored pre-joined, the same pattern MatchedProperty uses over
     MatchScore. `len(active_clients)` is therefore a real active-VISIT
-    count, not a distinct-client count."""
+    count, not a distinct-client count.
+
+    `visits_this_month` is likewise computed at read time, from
+    completed_visits — AgentRecord.monthly_visits is a static counter that
+    nothing has ever incremented (see Database/agent_models.py's own
+    docstring: it was laid down before this feature's completed-visit
+    history existed), so it always read 0. Now that visits ARE tracked,
+    counting them directly is the accurate number; monthly_visits itself
+    is left alone rather than repurposed, since a column silently changing
+    what it means is its own kind of bug."""
 
     active_clients: List[AssignedClientSummary] = Field(default_factory=list)
     completed_visits: List[VisitRecord] = Field(default_factory=list)
+    visits_this_month: int = 0

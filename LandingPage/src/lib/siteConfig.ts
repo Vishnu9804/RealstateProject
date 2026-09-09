@@ -1,6 +1,13 @@
 /**
  * Everything about the site that is the CLIENT'S, not the code's: the name
- * on the door, the phone number, the sales copy.
+ * on the door, the city, the sales copy.
+ *
+ * There is deliberately no phone number here any more. Every "contact us"
+ * control used to open a wa.me link built from a placeholder number, which
+ * meant the one thing the site exists to do was pointed at nobody. They all
+ * now scroll to the requirements form at the bottom of the home page
+ * (components/RequirementsForm.tsx), which reaches the real business
+ * through the API — nothing to configure, nothing to leave stale.
  *
  * Collected in one file on purpose. Every one of these is a thing the
  * client will want changed at some point, and none of them is a thing that
@@ -12,17 +19,6 @@ export const site = {
   brand: "Aurum",
   brandAccent: "Estates",
   city: "Surat",
-
-  /**
-   * PLACEHOLDER — replace with the client's real WhatsApp number in
-   * international format, digits only (country code, no "+", no spaces).
-   * It is used to build wa.me links, which is what every "Chat on WhatsApp"
-   * button on the site opens.
-   */
-  whatsappNumber: "919999999999",
-
-  /** Prefilled first message on those wa.me links. */
-  whatsappGreeting: "Hi! I found your website and I'd like to know more about a property.",
 
   hero: {
     eyebrow: "Curated residences",
@@ -75,11 +71,11 @@ export const site = {
 
   contact: {
     title: "Let's find yours",
-    lede: "Leave your name and WhatsApp number. We reply personally, usually within a few hours, and never pass your number on to anyone.",
+    lede: "Tell us what you're looking for — budget, area, the shape of the place. We read every one of these ourselves and reply on WhatsApp, usually within a few hours.",
+    points: [
+      "A real person replies — not an auto-responder",
+      "Only properties that match what you actually asked for",
+      "Your number is never shared, sold or broadcast",
+    ],
   },
 } as const;
-
-/** The wa.me link every "Chat on WhatsApp" control on the site opens. */
-export function whatsappLink(message: string = site.whatsappGreeting): string {
-  return `https://wa.me/${site.whatsappNumber}?text=${encodeURIComponent(message)}`;
-}

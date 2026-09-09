@@ -10,7 +10,7 @@ from __future__ import annotations
 from datetime import datetime
 from typing import List, Optional, Tuple
 
-from sqlalchemy import func, select
+from sqlalchemy import delete, func, select
 
 from Database.client_models import ClientRow
 from Database.client_session import get_client_session
@@ -57,6 +57,21 @@ def upsert_client(record: ClientRecord) -> ClientRecord:
         session.flush()
         session.refresh(row)
         return _to_pydantic(row)
+
+
+def delete_client(phone: str) -> bool:
+    """Removes one client row. Everything that FOREIGN-KEYs to it (matches,
+    manual properties) must already be gone — see
+    Controller/WhatsAppInquiryHandlingController/whatsapp_inquiry_controller.py's
+    delete_client, which is the only caller and clears those first.
+
+    Deliberately does NOT touch agent_visits: those rows carry no FK to
+    this table on purpose (Database/agent_visit_models.py), and a completed
+    visit is permanent history — if this same number ever enquires again,
+    the properties they already saw must still read as completed."""
+    with get_client_session() as session:
+        result = session.execute(delete(ClientRow).where(ClientRow.phone == phone))
+        return result.rowcount > 0
 
 
 def get_all_clients(limit: int) -> List[ClientRecord]:

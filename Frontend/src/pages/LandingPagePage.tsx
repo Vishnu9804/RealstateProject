@@ -27,6 +27,7 @@ import {
 } from "../lib/propertyDetailCache";
 import { useToast } from "../components/ui/Toast";
 import FilterPopover from "../components/ui/FilterPopover";
+import RowRail from "../components/ui/RowRail";
 import ConfirmDialog from "../components/ui/ConfirmDialog";
 import PropertyFormDialog from "../components/PropertyFormDialog";
 import { COLUMNS, FilterTrigger, Pager, PropertyDetailDialog } from "./DashboardPage";
@@ -76,6 +77,7 @@ export default function LandingPagePage() {
   const [filters, setFilters] = useState<FilterState>({});
   const [openFilter, setOpenFilter] = useState<{ key: string; anchor: HTMLElement } | null>(null);
   const [page, setPage] = useState(1);
+  const tableWrapRef = useRef<HTMLDivElement>(null);
 
   const [selected, setSelected] = useState<Set<string>>(new Set());
   const [confirmKind, setConfirmKind] = useState<"send" | "remove" | null>(null);
@@ -244,24 +246,26 @@ export default function LandingPagePage() {
   }
 
   // The polled list never carries real photos (see propertyApi.getProperties)
-  // — fetch the one full record before showing its detail or Edit dialog,
-  // same pattern as the Properties page. lib/propertyDetailCache.ts is
-  // shared with it (and with the Inquiries page), so a property opened
-  // there recently is reused here with no fetch and no re-downloaded photos.
-  async function openDetail(recordId: string) {
+  // — fetch the one full record in the background to backfill them, same
+  // pattern as the Properties page. lib/propertyDetailCache.ts is shared
+  // with it (and with the Inquiries page), so a property opened there
+  // recently is reused here with no fetch and no re-downloaded photos.
+  // The dialog itself opens immediately with whatever this row already has
+  // (everything except photos) rather than waiting on that fetch first —
+  // see DashboardPage's own openDetail for why.
+  function openDetail(recordId: string) {
+    setDetailId(recordId);
     const cached = getCachedPropertyDetail(recordId);
     if (cached) {
       updateLocalProperty(recordId, cached);
-      setDetailId(recordId);
       return;
     }
-    try {
-      const full = await propertyApi.getProperty(recordId);
-      updateLocalProperty(recordId, full);
-      setDetailId(recordId);
-    } catch (err) {
-      toast.push({ tone: "bad", title: "Couldn't open this property", message: friendlyError(err) });
-    }
+    propertyApi
+      .getProperty(recordId)
+      .then((full) => updateLocalProperty(recordId, full))
+      .catch((err) => {
+        toast.push({ tone: "bad", title: "Couldn't load this property's photos", message: friendlyError(err) });
+      });
   }
 
   async function openEdit(property: PropertyRecord) {
@@ -489,22 +493,25 @@ export default function LandingPagePage() {
 
       {activeList.length > 0 && (
         <>
-          <div className="table-with-rail">
-            <div className="row-icon-rail">
-              {pageItems.map((property) => (
-                <div key={property.record_id} className="row-icon-slot">
+          <div className="table-with-rail" ref={tableWrapRef}>
+            <RowRail containerRef={tableWrapRef} count={pageItems.length}>
+              {(index) => {
+                const property = pageItems[index];
+                if (!property) return null;
+                const isSelected = selected.has(property.record_id);
+                return (
                   <button
                     type="button"
-                    className={`select-toggle${selected.has(property.record_id) ? ` select-toggle--${tab === "ready" ? "add" : "remove"}` : ""}`}
+                    className={`select-toggle${isSelected ? ` select-toggle--${tab === "ready" ? "add" : "remove"}` : ""}`}
                     onClick={() => toggleSelect(property.record_id)}
-                    aria-pressed={selected.has(property.record_id)}
-                    aria-label={selected.has(property.record_id) ? "Deselect this property" : "Select this property"}
+                    aria-pressed={isSelected}
+                    aria-label={isSelected ? "Deselect this property" : "Select this property"}
                   >
-                    <IconCheck size={14} strokeWidth={2.4} />
+                    <IconCheck size={12} strokeWidth={2.4} />
                   </button>
-                </div>
-              ))}
-            </div>
+                );
+              }}
+            </RowRail>
 
             <div className="table-frame anim-rise">
               <div className="table-scroll">
@@ -533,6 +540,7 @@ export default function LandingPagePage() {
                     {pageItems.map((property) => (
                       <tr
                         key={property.record_id}
+                        data-rail-row=""
                         className="row"
                         tabIndex={0}
                         role="button"

@@ -1,14 +1,14 @@
-import { useEffect, useMemo, useState } from "react";
-import { useLocation } from "react-router-dom";
+import { useEffect, useMemo, useRef, useState } from "react";
+import { useLocation, useParams } from "react-router-dom";
 import { landingApi } from "../api/landingApi";
 import type { LandingProperty } from "../api/types";
 import { scrollToSection } from "../hooks/useScroll";
 import { getCachedPropertyList, setCachedPropertyList } from "../lib/propertyCache";
-import { site, whatsappLink } from "../lib/siteConfig";
-import LeadForm from "../components/LeadForm";
+import { site } from "../lib/siteConfig";
 import PropertyCard from "../components/PropertyCard";
+import RequirementsForm from "../components/RequirementsForm";
 import Reveal from "../components/Reveal";
-import { IconAlert, IconArrowRight, IconChat, IconCheck, IconKey, IconSearch, IconShield, IconWhatsApp } from "../components/Icons";
+import { IconAlert, IconArrowRight, IconChat, IconCheck, IconKey, IconSearch, IconShield } from "../components/Icons";
 
 const STEP_ICONS = { chat: IconChat, search: IconSearch, shield: IconShield, key: IconKey };
 
@@ -35,6 +35,11 @@ const SLOW_LOAD_HINT_MS = 4000;
  */
 export default function HomePage() {
   const location = useLocation();
+  // Present only on /enquire/:token — the link our WhatsApp and Instagram
+  // messages send. It means "this visitor is already known to us": the form
+  // at the bottom prefills from it, and the effect further down carries
+  // them there without making them scroll past a page they didn't come for.
+  const { token } = useParams<{ token: string }>();
   // Seeded from sessionStorage, not null, whenever a recent copy exists —
   // returning to this page (the back button after opening a property, most
   // often) then paints the grid instantly instead of re-running the loading
@@ -93,6 +98,22 @@ export default function HomePage() {
     return () => window.cancelAnimationFrame(frame);
   }, [location.state]);
 
+  // Arriving on /enquire/:token: land them on the form itself.
+  //
+  // It runs twice on purpose. The first pass starts the scroll immediately,
+  // so nothing appears to hang; the second fires once the property grid has
+  // replaced its skeletons, because that changes the document's height and
+  // would otherwise leave the first scroll short of the form. `settled`
+  // makes sure that second pass happens exactly once — after it, the page
+  // is the visitor's to scroll, not ours.
+  const tokenScrollSettled = useRef(false);
+  useEffect(() => {
+    if (!token || tokenScrollSettled.current) return;
+    if (properties !== null) tokenScrollSettled.current = true;
+    const frame = window.requestAnimationFrame(() => scrollToSection("contact"));
+    return () => window.cancelAnimationFrame(frame);
+  }, [token, properties]);
+
   const counts = useMemo(() => {
     const list = properties ?? [];
     return {
@@ -135,10 +156,14 @@ export default function HomePage() {
               Browse properties
               <IconArrowRight />
             </button>
-            <a className="btn btn--ghost" href={whatsappLink()} target="_blank" rel="noreferrer noopener">
-              <IconWhatsApp size={16} />
-              Talk to us
-            </a>
+            {/* Deliberately worded differently from the floating button in
+                SiteFooter, which goes to the same place — two identical
+                labels on one screen read as one control that has been
+                duplicated by mistake. */}
+            <button type="button" className="btn btn--ghost" onClick={() => scrollToSection("contact")}>
+              <IconChat size={16} />
+              Tell us what you're looking for
+            </button>
           </div>
 
           <div className="hero__stats">
@@ -239,13 +264,13 @@ export default function HomePage() {
                     <IconAlert size={26} />
                     <h3 className="empty__title">Listings are taking a moment</h3>
                     <p>
-                      We couldn't load the collection just now. Please refresh in a minute — or simply message us on WhatsApp
-                      and we'll send you what's available.
+                      We couldn't load the collection just now. Please refresh in a minute — or tell us what you're after
+                      below and we'll send you what's available.
                     </p>
-                    <a className="btn btn--primary btn--sm" href={whatsappLink()} target="_blank" rel="noreferrer noopener">
-                      <IconWhatsApp size={15} />
-                      Ask on WhatsApp
-                    </a>
+                    <button type="button" className="btn btn--primary btn--sm" onClick={() => scrollToSection("contact")}>
+                      Tell us your requirements
+                      <IconArrowRight size={15} />
+                    </button>
                   </>
                 ) : counts.all === 0 ? (
                   <>
@@ -346,28 +371,30 @@ export default function HomePage() {
 
       <hr className="rule" />
 
-      {/* ============================== contact ============================== */}
+      {/* ============================== contact ==============================
+          Every "tell us about your requirements" control on this site — the
+          hero button, the header's Enquire now, the floating button, the
+          property page, and the link our WhatsApp/Instagram messages send —
+          ends here. There is one form, and this is it. */}
       <section id="contact" className="section section--tight">
         <div className="shell">
           <Reveal>
             <div className="contact">
-              <div>
-                <p className="eyebrow">Get in touch</p>
+              <div className="contact__copy">
+                <p className="eyebrow">Tell us about your requirements</p>
                 <h2 className="display display--md">{site.contact.title}</h2>
                 <p className="lede">{site.contact.lede}</p>
-                <a
-                  className="btn btn--ghost"
-                  href={whatsappLink()}
-                  target="_blank"
-                  rel="noreferrer noopener"
-                  style={{ marginTop: 26 }}
-                >
-                  <IconWhatsApp size={16} />
-                  Or message us directly
-                </a>
+                <ul className="contact__points">
+                  {site.contact.points.map((point) => (
+                    <li key={point}>
+                      <IconCheck size={16} />
+                      {point}
+                    </li>
+                  ))}
+                </ul>
               </div>
 
-              <LeadForm submitLabel="Send my details" />
+              <RequirementsForm token={token} idPrefix="home" />
             </div>
           </Reveal>
         </div>

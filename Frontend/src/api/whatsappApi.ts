@@ -1,25 +1,36 @@
 import { API_BASE_URL, apiClient } from "./client";
-import type { MonitoringSelectionResponse, WhatsAppGroup, WhatsAppPersonalChat, WhatsAppStatusResponse } from "./types";
+import type { ConnectionRole, WhatsAppConnection, WhatsAppStatusResponse } from "./types";
 
 export const whatsappApi = {
   getStatus: (): Promise<WhatsAppStatusResponse> => apiClient.get("/whatsapp/status"),
 
+  getConnections: (): Promise<WhatsAppConnection[]> => apiClient.get("/whatsapp/connections"),
+
   /**
-   * Not a JSON endpoint — the backend returns a raw PNG (or 404 if no QR
-   * is available right now). Returns a URL for an <img> tag rather than
-   * fetching it here; `cacheBustToken` should change on every poll tick so
-   * the browser doesn't serve a stale cached image once WhatsApp rotates
-   * to a new QR code.
+   * Not a JSON endpoint — the backend returns a raw PNG (or 404 if nothing
+   * is being onboarded right now). Returns a URL for an <img> tag rather
+   * than fetching it here; `cacheBustToken` should change on every poll
+   * tick so the browser doesn't serve a stale cached image once WhatsApp
+   * rotates to a new QR code.
    */
-  getQrCodeUrl: (cacheBustToken: number | string): string => `${API_BASE_URL}/whatsapp/qr?t=${cacheBustToken}`,
+  getPendingQrUrl: (cacheBustToken: number | string): string => `${API_BASE_URL}/whatsapp/connections/qr?t=${cacheBustToken}`,
 
-  getGroups: (): Promise<WhatsAppGroup[]> => apiClient.get("/whatsapp/groups"),
-  getMonitoredGroups: (): Promise<WhatsAppGroup[]> => apiClient.get("/whatsapp/groups/monitored"),
-  getMonitoredPersonalChats: (): Promise<WhatsAppPersonalChat[]> => apiClient.get("/whatsapp/personal-chats/monitored"),
+  /** Starts linking a new number — call when the operator taps "Add a
+   *  number". Safe to call again while one is already in progress. */
+  startOnboarding: (): Promise<WhatsAppConnection> => apiClient.post("/whatsapp/connections/onboard"),
 
-  submitMonitoringSelection: (groupJids: string[], personalPhoneNumbers: string[]): Promise<MonitoringSelectionResponse> =>
-    apiClient.post("/whatsapp/monitoring-selection", {
+  /** Backs out of an in-progress onboarding before it's scanned. */
+  cancelOnboarding: (): Promise<void> => apiClient.delete("/whatsapp/connections/onboard"),
+
+  updateRoles: (connectionId: string, roles: ConnectionRole[]): Promise<WhatsAppConnection> =>
+    apiClient.patch(`/whatsapp/connections/${encodeURIComponent(connectionId)}/roles`, { roles }),
+
+  updatePropertySelection: (connectionId: string, groupJids: string[], personalNumbers: string[]): Promise<WhatsAppConnection> =>
+    apiClient.post(`/whatsapp/connections/${encodeURIComponent(connectionId)}/property-selection`, {
       group_jids: groupJids,
-      personal_phone_numbers: personalPhoneNumbers,
+      personal_numbers: personalNumbers,
     }),
+
+  unlinkConnection: (connectionId: string): Promise<void> =>
+    apiClient.delete(`/whatsapp/connections/${encodeURIComponent(connectionId)}`),
 };

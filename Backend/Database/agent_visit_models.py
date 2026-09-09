@@ -20,7 +20,7 @@ import uuid
 from datetime import datetime
 from typing import Optional
 
-from sqlalchemy import DateTime, String, Text, func
+from sqlalchemy import DateTime, Float, String, Text, func
 from sqlalchemy.orm import Mapped, mapped_column
 
 from Database.client_models import ClientBase
@@ -46,6 +46,14 @@ class AgentVisitRow(ClientBase):
     # have none; every new completion always sets it.
     property_record_id: Mapped[Optional[str]] = mapped_column(String, nullable=True)
     property_label: Mapped[Optional[str]] = mapped_column(String, nullable=True)
+
+    # Snapshot of the assignment's own budget at completion time, same
+    # reasoning as property_record_id/property_label above — lets a later
+    # "Mark as still active" (agent_store.reopen_visit) recreate the
+    # active assignment without the budget it carried simply vanishing.
+    # Nullable for the same pre-existing-rows reason as those two.
+    budget_min_inr: Mapped[Optional[float]] = mapped_column(Float, nullable=True)
+    budget_max_inr: Mapped[Optional[float]] = mapped_column(Float, nullable=True)
 
     # Free text — "additional information about the client if they want to
     # enter something price-related" (the feature's own wording): no

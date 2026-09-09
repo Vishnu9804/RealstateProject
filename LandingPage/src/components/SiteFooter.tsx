@@ -1,8 +1,8 @@
 import { useNavigate } from "react-router-dom";
 import { scrollToSection } from "../hooks/useScroll";
-import { site, whatsappLink } from "../lib/siteConfig";
+import { site } from "../lib/siteConfig";
 import { SECTIONS } from "./SiteHeader";
-import { IconWhatsApp } from "./Icons";
+import { IconChat } from "./Icons";
 
 export default function SiteFooter({ onHome }: { onHome: boolean }) {
   const navigate = useNavigate();
@@ -29,6 +29,9 @@ export default function SiteFooter({ onHome }: { onHome: boolean }) {
               {section.label}
             </button>
           ))}
+          <button type="button" onClick={() => goToSection("contact")}>
+            Enquire
+          </button>
         </nav>
 
         <span>
@@ -36,12 +39,17 @@ export default function SiteFooter({ onHome }: { onHome: boolean }) {
         </span>
       </div>
 
-      {/* Always reachable, because starting a WhatsApp conversation is the
-          single thing this whole site is for. */}
-      <a className="wa-fab" href={whatsappLink()} target="_blank" rel="noreferrer noopener">
-        <IconWhatsApp />
-        <span>Chat on WhatsApp</span>
-      </a>
+      {/* Always reachable, because telling us what you're after is the one
+          thing this whole site is for — and someone who becomes ready to do
+          that three sections down shouldn't have to hunt for the way to.
+          It used to open a wa.me link built from a placeholder number; it
+          now goes to the actual form, and says something different from the
+          hero's button on purpose (two identical labels on one screen read
+          as one control duplicated by mistake). */}
+      <button type="button" className="cta-fab" onClick={() => goToSection("contact")}>
+        <IconChat size={18} />
+        <span>Tell us about your requirements</span>
+      </button>
     </footer>
   );
 }

@@ -16,5 +16,13 @@ class VisitRecord(BaseModel):
     client_name: Optional[str] = None
     property_record_id: Optional[str] = None
     property_label: Optional[str] = None
+    # Snapshotted from the active assignment at completion time (same
+    # reasoning as client_name/property_label above) so a later "Mark as
+    # still active" (Service/AgentManagementService/agent_store.py's
+    # reopen_visit) can recreate the assignment without the budget it
+    # carried simply vanishing. Rows completed before this field existed
+    # are null, same as property_record_id above.
+    budget_min_inr: Optional[float] = None
+    budget_max_inr: Optional[float] = None
     notes: Optional[str] = None
     completed_at: Optional[datetime] = None

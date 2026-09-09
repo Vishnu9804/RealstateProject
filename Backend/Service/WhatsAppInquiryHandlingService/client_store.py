@@ -67,6 +67,23 @@ def upsert_client(record: ClientRecord) -> ClientRecord:
     return saved
 
 
+def delete_client(phone: str) -> bool:
+    """Removes one client entirely. Returns False when there was nothing to
+    remove. Callers must clear whatever references this client first (see
+    Controller/WhatsAppInquiryHandlingController/whatsapp_inquiry_controller.py's
+    delete_client) — completed VISITS are the deliberate exception and are
+    always kept, so a future enquiry from the same number still sees the
+    properties it has already been shown."""
+    if is_client_database_configured():
+        return client_repository.delete_client(phone)
+    global _version_counter
+    if phone not in _clients:
+        return False
+    del _clients[phone]
+    _version_counter += 1
+    return True
+
+
 def client_exists(phone: str) -> bool:
     return get_client_by_phone(phone) is not None
 

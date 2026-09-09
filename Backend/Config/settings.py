@@ -83,9 +83,15 @@ class Settings(BaseSettings):
     # phone (it resolves to the phone's own loopback, not this machine), so
     # rather than hardcode that broken default, `_fill_lan_defaults` below
     # fills this in with this machine's actual LAN IP (e.g.
-    # "http://192.168.1.50:5173/whatsapp-inquiry") whenever it's left unset
-    # — set it explicitly here only to point at a real deployed frontend
-    # (e.g. once Step 12 hosts one) instead of a LAN dev server.
+    # "http://192.168.1.50:5174/enquire") whenever it's left unset — set it
+    # explicitly here only to point at a real deployed site instead of a LAN
+    # dev server.
+    #
+    # It points at the PUBLIC SITE (LandingPage/, port 5174), not the
+    # internal tool: the form is no longer a standalone page of its own but
+    # the requirements section at the bottom of the landing page, and
+    # "/enquire/{token}" is the route that opens that page already scrolled
+    # to it and prefilled (see LandingPage/src/App.tsx).
     inquiry_form_base_url: str = ""
     # Extra origin main.py's CORS allow-list accepts, beyond the hardcoded
     # localhost ones. Left blank by default and auto-filled (see
@@ -104,7 +110,7 @@ class Settings(BaseSettings):
         if not self.inquiry_form_base_url or not self.frontend_lan_origin:
             lan_ip = _detect_lan_ip()
             if not self.inquiry_form_base_url:
-                self.inquiry_form_base_url = f"http://{lan_ip}:5173/whatsapp-inquiry"
+                self.inquiry_form_base_url = f"http://{lan_ip}:5174/enquire"
             if not self.frontend_lan_origin and lan_ip != "127.0.0.1":
                 self.frontend_lan_origin = f"http://{lan_ip}:5173"
         return self

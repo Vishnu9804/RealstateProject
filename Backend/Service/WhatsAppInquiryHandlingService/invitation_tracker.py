@@ -25,6 +25,18 @@ def mark_invited(phone: str) -> None:
         _invited_phones.add(phone)
 
 
+def forget(phone: str) -> None:
+    """Drops the "already invited" mark for one number, so it is treated as
+    a first-time texter again. Called only when that inquiry is deleted
+    outright (see Controller/WhatsAppInquiryHandlingController/
+    whatsapp_inquiry_controller.py's delete_client) — without this, a
+    deleted number that messages again would get neither the welcome nor a
+    fresh form link, because this tracker still remembered a link it sent
+    for a client that no longer exists."""
+    with _lock:
+        _invited_phones.discard(phone)
+
+
 def was_invited(phone: str) -> bool:
     with _lock:
         return phone in _invited_phones

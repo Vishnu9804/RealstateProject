@@ -380,6 +380,7 @@
 
 /* ---- spinner ---------------------------------------------------------- */
 .spinner {
+  display: inline-block;
   width: 16px;
   height: 16px;
   border-radius: 50%;
@@ -454,3 +455,32 @@ kbd {
   font-weight: 620;
   color: var(--ink-2);
 }
+
+/* ---- completed pill: same shape as .pill-accent (see its own comment),
+   green instead of accent — used both on the Inquiries table's own
+   "N completed" cell and as the toggle button inside the matches dialog
+   that switches to the Completed view, so the two read as one control
+   split across two places rather than two different-looking buttons that
+   happen to mean the same thing. */
+.pill-ok {
+  display: inline-flex;
+  align-items: center;
+  gap: 6px;
+  border: none;
+  padding: 5px 12px;
+  border-radius: var(--r-pill);
+  background: linear-gradient(135deg, color-mix(in oklab, var(--ok) 85%, white 12%) 0%, var(--ok) 55%, color-mix(in oklab, var(--ok) 78%, black 18%) 100%);
+  color: #fff;
+  font-size: 12.5px;
+  font-weight: 650;
+  white-space: nowrap;
+  cursor: pointer;
+  transition: transform var(--t-fast) var(--ease-out), box-shadow var(--t-fast) var(--ease-out);
+}
+.pill-ok:hover { transform: translateY(-1px); box-shadow: var(--elev-2); }
+.pill-ok--active { box-shadow: 0 0 0 2px color-mix(in oklab, var(--ok) 55%, transparent), var(--elev-2); }
+
+/* Flips a directional icon horizontally for reuse in the opposite sense —
+   e.g. IconArrowRight as a Back button's icon — instead of hand-drawing a
+   mirror-image icon just for direction. */
+.icon-flip-x { transform: scaleX(-1); }

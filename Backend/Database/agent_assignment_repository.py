@@ -7,6 +7,10 @@ from __future__ import annotations
 
 from typing import List, Optional
 
+# Aliased: this module already defines its own module-level `delete(agent_id,
+# client_phone, property_record_id)` below, which would shadow the imported
+# name by the time any function here actually runs.
+from sqlalchemy import delete as sql_delete
 from sqlalchemy import select
 
 from Database.agent_assignment_models import AgentAssignmentRow
@@ -86,6 +90,32 @@ def get_active_property_ids_for_client(client_phone: str) -> List[str]:
     )
     with get_client_session() as session:
         return list(session.execute(stmt).scalars().all())
+
+
+def get_active_for_property(property_record_id: str) -> List[ActiveAssignment]:
+    """Every active visit currently out against ONE property, across every
+    agent and every client — the full rows, not just ids, because the caller
+    needs to know which agents to tell when this property is taken off the
+    market (see Service/WhatsAppDataFetchingService/soldout_property_service.py).
+    Read before delete_all_for_property below, which is what actually calls
+    them off."""
+    stmt = select(AgentAssignmentRow).where(AgentAssignmentRow.property_record_id == property_record_id)
+    with get_client_session() as session:
+        rows = list(session.execute(stmt).scalars().all())
+    return [_to_pydantic(row) for row in rows]
+
+
+def delete_all_for_property(property_record_id: str) -> int:
+    """Cancels every active visit against one property in a single
+    statement, and returns how many rows went. Only ACTIVE assignments —
+    completed visits live in a different table entirely (see
+    Database/agent_visit_models.py) and are permanent history that this must
+    never touch."""
+    with get_client_session() as session:
+        result = session.execute(
+            sql_delete(AgentAssignmentRow).where(AgentAssignmentRow.property_record_id == property_record_id)
+        )
+        return result.rowcount or 0
 
 
 def get_one(agent_id: str, client_phone: str, property_record_id: str) -> Optional[ActiveAssignment]:

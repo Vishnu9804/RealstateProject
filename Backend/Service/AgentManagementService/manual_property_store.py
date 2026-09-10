@@ -42,6 +42,21 @@ def clear_for_client(client_phone: str) -> None:
     _manual_properties.pop(client_phone, None)
 
 
+def remove_property_for_all_clients(property_record_id: str) -> int:
+    """Un-picks one property for every client that had it hand-picked, and
+    returns how many hand-picks were removed — the property-shaped sibling
+    of clear_for_client above. Used when a property is sold out, never as an
+    operator action."""
+    if is_client_database_configured():
+        return manual_property_repository.delete_all_for_property(property_record_id)
+    removed = 0
+    for client_phone, record_ids in _manual_properties.items():
+        if property_record_id in record_ids:
+            record_ids.remove(property_record_id)
+            removed += 1
+    return removed
+
+
 def get_manual_properties(client_phone: str) -> List[str]:
     if is_client_database_configured():
         return manual_property_repository.get_for_client(client_phone)

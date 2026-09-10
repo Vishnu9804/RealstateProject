@@ -297,3 +297,22 @@
   animation: none;
 }
 .chip--filter strong { font-weight: 640; }
+
+/* ---- the row-action "Move to" menu (components/ui/MoveMenu.tsx) --------
+   Same portal/anchor machinery as the filter popover above, so it inherits
+   the identical surface, shadow and open animation - only narrower, only as
+   tall as its handful of options, and with a danger tone for a destination
+   that cannot be undone. Deliberately a modifier rather than a second
+   component: two floating panels that look almost-but-not-quite the same is
+   worse than one that is reused. */
+.popover--menu { width: 216px; max-height: none; }
+.popover--menu .popover__head { padding: 10px 14px; }
+.popover--menu .popover__list { padding: 6px; overflow: visible; }
+.popover--menu .popover__opt { justify-content: space-between; }
+.popover--menu .popover__opt svg { flex: none; opacity: 0.5; }
+.popover__opt--danger { color: var(--bad); }
+.popover__opt--danger:hover {
+  color: var(--bad);
+  background: color-mix(in oklab, var(--bad) 12%, transparent);
+  border-color: color-mix(in oklab, var(--bad) 38%, transparent);
+}

@@ -133,6 +133,14 @@ def init_db() -> None:
     # table is silently never created.
     from Database import broker_requirement_models  # noqa: F401
 
+    # Same import-for-side-effect reasoning again, for the sold-out
+    # properties table: defining SoldOutPropertyRow is what registers
+    # `soldout_properties` on the Base above. Nothing else on this startup
+    # path imports it (the sold-out service is only reached through its own
+    # HTTP routes), so without this line that table is silently never
+    # created and the very first "Move to Sold out" fails.
+    from Database import soldout_property_models  # noqa: F401
+
     # Same import-for-side-effect reasoning, for the client-records tables:
     # ClientBase is a second declarative base (kept separate from Base so
     # the two features' models can never accidentally collide), but both

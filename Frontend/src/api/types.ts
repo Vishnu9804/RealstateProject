@@ -30,6 +30,13 @@ export interface WhatsAppStatusResponse {
   duplicate_message_count: number;
   needs_review_property_count: number;
   outsider_property_count: number;
+  /** Properties whose deal has closed. They no longer live in the property
+   *  table at all (see Backend/Service/WhatsAppDataFetchingService/
+   *  soldout_property_service.py), so this is NOT part of
+   *  structured_property_count. Doubles as the Sold out view's change
+   *  signal — rows there are only ever inserted or deleted, never edited,
+   *  so a count is all that view needs to know whether to re-fetch. */
+  soldout_property_count: number;
   /** Opaque "did the property list change" token — a count + latest-edit
    *  timestamp under the hood, but callers only ever compare it for
    *  equality against what they last saw. Bumps on any add/edit/move/
@@ -402,6 +409,35 @@ export interface PropertyRecord {
   on_landing_page: boolean;
   landing_page_updated_at: string | null;
   qualified_at: string | null;
+}
+
+/**
+ * Mirrors Backend/Model/WhatsAppDataFetchingModel/soldout_property.py's
+ * SoldOutPropertyRecord — a property whose deal has closed and which has
+ * therefore been MOVED out of the property table into `soldout_properties`.
+ *
+ * Structurally a PropertyRecord plus the moment it sold, on purpose: it is
+ * still the same listing, so the Sold out view reuses the Properties page's
+ * own table/cards/detail dialog unchanged rather than growing a parallel
+ * set of components that would drift.
+ */
+export interface SoldOutPropertyRecord extends PropertyRecord {
+  sold_out_at: string;
+  /** Already IST-formatted by the backend, same as formatted_timestamp. */
+  formatted_sold_out_at: string;
+}
+
+/** What POST /soldout-properties actually did — the consequences of closing
+ *  one deal, reported back so the operator sees them rather than just
+ *  "done". `agents_notified` counts agents REACHED on WhatsApp, so a
+ *  message that failed to send is visible instead of assumed delivered. */
+export interface SoldOutMoveResult {
+  property: SoldOutPropertyRecord;
+  cancelled_visits: number;
+  agents_notified: number;
+  agents_failed: number;
+  cleared_matches: number;
+  cleared_manual_picks: number;
 }
 
 /**

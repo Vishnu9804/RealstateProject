@@ -82,6 +82,7 @@ from Controller.WhatsAppDataFetchingController.area_knowledge_controller import 
 from Controller.WhatsAppDataFetchingController.broker_requirement_controller import router as broker_requirement_router
 from Controller.WhatsAppDataFetchingController.display_settings_controller import router as display_settings_router
 from Controller.WhatsAppDataFetchingController.property_controller import router as property_router
+from Controller.WhatsAppDataFetchingController.soldout_property_controller import router as soldout_property_router
 from Controller.WhatsAppDataFetchingController.whatsapp_connections_controller import router as whatsapp_connections_router
 from Controller.WhatsAppDataFetchingController.whatsapp_controller import router as whatsapp_router
 from Controller.WhatsAppInquiryHandlingController.inquiry_form_controller import router as inquiry_form_router
@@ -257,6 +258,7 @@ app.include_router(area_filter_router, prefix="/api")
 app.include_router(area_knowledge_router, prefix="/api")
 app.include_router(display_settings_router, prefix="/api")
 app.include_router(property_router, prefix="/api")
+app.include_router(soldout_property_router, prefix="/api")
 app.include_router(broker_requirement_router, prefix="/api")
 app.include_router(whatsapp_inquiry_router, prefix="/api")
 app.include_router(inquiry_form_router, prefix="/api")

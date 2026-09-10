@@ -2,6 +2,7 @@ import { useEffect, useState } from "react";
 import { createPortal } from "react-dom";
 import { ApiError } from "../api/client";
 import { propertyApi } from "../api/propertyApi";
+import { soldoutPropertyApi } from "../api/soldoutPropertyApi";
 import type { PropertyRecord } from "../api/types";
 import { friendlyError } from "../lib/apiError";
 import { formatCarpetArea, formatPrice, formatPricePerUnit } from "../lib/formatters";
@@ -19,7 +20,7 @@ import { sourceDetail, sourceLabel } from "../lib/propertyFilters";
 function findInPropertyListCache(recordId: string): PropertyRecord | null {
   return getCachedPropertyList()?.data.find((property) => property.record_id === recordId) ?? null;
 }
-import { Button, Copyable, EmptyState, Note, SkeletonRows } from "./ui/Primitives";
+import { Badge, Button, Copyable, EmptyState, Note, SkeletonRows } from "./ui/Primitives";
 import { IconAlert, IconBuilding, IconCheck, IconMessage, IconPin, IconRuler, IconX } from "./ui/Icons";
 
 /** Backs the Select/Deselect button in this dialog's footer — used by
@@ -74,10 +75,14 @@ export default function PropertyReadOnlyDialog({
     () => getCachedPropertyDetail(recordId) ?? findInPropertyListCache(recordId) ?? undefined,
   );
   const [notFound, setNotFound] = useState(false);
+  // True when this property was found in the sold-out table rather than the
+  // live one — see the 404 branch below.
+  const [soldOut, setSoldOut] = useState(false);
   const [error, setError] = useState<string | null>(null);
 
   useEffect(() => {
     let cancelled = false;
+    setSoldOut(false);
     const cachedDetail = getCachedPropertyDetail(recordId);
     if (cachedDetail) {
       setProperty(cachedDetail);
@@ -108,8 +113,27 @@ export default function PropertyReadOnlyDialog({
       .catch((err) => {
         if (cancelled) return;
         if (err instanceof ApiError && err.status === 404) {
-          setNotFound(true);
-          setProperty(null);
+          // A 404 here has two quite different meanings, and saying the
+          // wrong one is worse than saying nothing: the property may have
+          // been deleted, or its deal may have CLOSED — in which case it
+          // still exists, just in the sold-out table. This dialog is opened
+          // from visit history (AgentVisitsDialog, ClientMatchesDialog's
+          // Completed section), which is exactly where a sold property turns
+          // up, so it's worth one extra lookup to tell the operator which it
+          // was. Deliberately NOT written to setCachedPropertyDetail: that
+          // cache is read as "live properties" by several other screens.
+          soldoutPropertyApi
+            .getSoldOutProperty(recordId)
+            .then((sold) => {
+              if (cancelled) return;
+              setProperty(sold);
+              setSoldOut(true);
+            })
+            .catch(() => {
+              if (cancelled) return;
+              setNotFound(true);
+              setProperty(null);
+            });
         } else {
           setError(friendlyError(err));
         }
@@ -188,7 +212,21 @@ export default function PropertyReadOnlyDialog({
         )}
 
         {property && (
-          <PropertyReadOnlyBody property={property} badges={badges} onClose={onClose} selectAction={selectAction} />
+          <PropertyReadOnlyBody
+            property={property}
+            badges={
+              soldOut ? (
+                <>
+                  <Badge tone="ok">Sold out</Badge>
+                  {badges}
+                </>
+              ) : (
+                badges
+              )
+            }
+            onClose={onClose}
+            selectAction={selectAction}
+          />
         )}
       </div>
     </div>,

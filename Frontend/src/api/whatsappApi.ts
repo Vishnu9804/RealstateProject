@@ -31,6 +31,15 @@ export const whatsappApi = {
       personal_numbers: personalNumbers,
     }),
 
+  /** The Requirement selection's own endpoint. Completely independent of
+   *  updatePropertySelection above — saving one never touches the other,
+   *  and the same group/number may be in both. */
+  updateRequirementSelection: (connectionId: string, groupJids: string[], personalNumbers: string[]): Promise<WhatsAppConnection> =>
+    apiClient.post(`/whatsapp/connections/${encodeURIComponent(connectionId)}/requirement-selection`, {
+      group_jids: groupJids,
+      personal_numbers: personalNumbers,
+    }),
+
   unlinkConnection: (connectionId: string): Promise<void> =>
     apiClient.delete(`/whatsapp/connections/${encodeURIComponent(connectionId)}`),
 };

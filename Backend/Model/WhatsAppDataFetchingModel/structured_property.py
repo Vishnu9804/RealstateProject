@@ -78,24 +78,24 @@ class StructuredProperty(BaseModel):
     # property_pipeline_service.update_property). ---
     review_status: Literal["accepted", "outsider"] = "accepted"
 
-    # --- independent of review_status: set True by the duplicate-detection
-    # stage (see property_pipeline_service.handle_batch_ready) when a match
-    # is UNCERTAIN, so the property is pulled into a dedicated "needs
-    # review" queue regardless of whether it's a Main or Outsider property.
-    # Cleared back to False once a human accepts it — the property then
-    # simply shows up in whichever of Main/Outsider its review_status
-    # already says, unchanged. ---
+    # --- independent of review_status: set True by the LLM structuring
+    # stage (see property_structurer.py's PART 4) for a property it could
+    # barely extract anything from — a fragment with almost no usable
+    # information, not merely one with a field or two missing. The bar is
+    # deliberately extreme, and enforced twice: the prompt sets it, and
+    # _apply_information_review re-checks it deterministically against what
+    # was actually extracted, so this queue stays tiny by construction.
+    #
+    # A flagged property is excluded from client-property matching entirely
+    # (see Service/ClientPropertyMatchingService/matching_service.py) —
+    # there is nothing in it to match on. It exists only so a human can
+    # read the relevant part of the original message (carried in
+    # `description`, see property_structurer._apply_information_review),
+    # fill the details in by hand, and file it into Main or Outsider.
+    # Cleared back to False at that point, after which the property behaves
+    # exactly like any other. ---
     needs_review: bool = False
     review_notes: Optional[str] = None
-    # --- set alongside needs_review whenever the duplicate-detection stage
-    # (Service/WhatsAppDataFetchingService/duplicate_detection_service.py) found a specific
-    # existing property this one might be a duplicate of — HIGH_CONFIDENCE_DUPLICATE
-    # or UNCERTAIN with a matched candidate. record_id of that OTHER property
-    # (never this one's own), so the review UI can fetch it and show a
-    # side-by-side comparison. None when flagged for an unrelated reason
-    # (e.g. outside every client-selected area, with no duplicate candidate
-    # involved) — the review UI falls back to a plain explanation then. ---
-    duplicate_of_record_id: Optional[str] = None
 
     # --- the Landing Page page's own state — never set by the LLM, and not
     # part of the Add/Edit dialog either (see PropertyContentFields): these

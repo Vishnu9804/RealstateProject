@@ -3,7 +3,8 @@ requirement embedding, per-field scoring, and the match-score cache
 together into the two operations the Controller layer needs:
 
   - recompute_for_client: runs the full pipeline for one client (embed
-    requirements, score every stored property, cache the result). Called
+    requirements, score every matchable stored property — see
+    _is_matchable — and cache the result). Called
     automatically whenever that client's requirements change (see
     Service/WhatsAppInquiryHandlingService/client_store.py's
     upsert_client) and manually via the dashboard's Refresh action.
@@ -68,12 +69,12 @@ def recompute_for_client(phone: str) -> Optional[ClientMatchResult]:
     if has_requirements(client):
         vector = _embed_requirements(client)
         # score_property returns None for anything below scoring.LOW_CUTOFF
-        # (currently 80%) — filtered out here so those never reach the
+        # (currently 70%) — filtered out here so those never reach the
         # cache or the dashboard, in any bucket.
         scores = [
             score
             for prop in property_vector_store.get_all_properties(limit=_MAX_PROPERTIES_SCORED)
-            if (score := scoring.score_property(client, prop, vector)) is not None
+            if _is_matchable(prop) and (score := scoring.score_property(client, prop, vector)) is not None
         ]
 
     computed_at = _now()
@@ -84,6 +85,23 @@ def recompute_for_client(phone: str) -> Optional[ClientMatchResult]:
         f"{len(result.low)} low (out of {len(scores)} scored)."
     )
     return result
+
+
+def _is_matchable(prop: EmbeddedProperty) -> bool:
+    """Only Main and Outsider properties are matched against a client's
+    requirements. A property in the review queue (needs_review) is one the
+    LLM could extract almost nothing from — no location, no price, no
+    configuration (see Model/WhatsAppDataFetchingModel/structured_property.py's
+    own comment on the flag) — so there is nothing for scoring to compare,
+    and showing it as a "match" would put an empty row in front of a client.
+
+    Applied at BOTH ends on purpose: here, so a flagged property is never
+    scored or cached in the first place, and again in _build_result, so a
+    score cached before this rule existed can't surface one either. Once a
+    human completes a flagged property and files it into Main/Outsider, it
+    becomes matchable like any other property and is picked up by that
+    client's next recompute."""
+    return not prop.needs_review
 
 
 def get_cached_result(phone: str) -> Optional[ClientMatchResult]:
@@ -180,7 +198,9 @@ def _read_scores(phone: str) -> tuple[List[MatchScore], Optional[datetime]]:
 
 def _build_result(client: ClientRecord, scores: List[MatchScore], computed_at: Optional[datetime]) -> ClientMatchResult:
     properties_by_id = {
-        prop.record_id: prop for prop in property_vector_store.get_all_properties(limit=_MAX_PROPERTIES_SCORED)
+        prop.record_id: prop
+        for prop in property_vector_store.get_all_properties(limit=_MAX_PROPERTIES_SCORED)
+        if _is_matchable(prop)
     }
     high: List[MatchedProperty] = []
     medium: List[MatchedProperty] = []

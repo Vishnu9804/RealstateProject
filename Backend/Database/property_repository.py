@@ -1,9 +1,8 @@
 """Postgres + pgvector implementation of the property store — the
 production backend behind Service/WhatsAppDataFetchingService/property_vector_store.py once
 DATABASE_URL is set. Same contract as the in-memory version it sits
-alongside: add_property, find_top_candidates, get_all_properties,
-get_property_count, update_property, delete_property. Callers never call
-this module directly.
+alongside: add_property, get_all_properties, get_property_count,
+update_property, delete_property. Callers never call this module directly.
 """
 
 from __future__ import annotations
@@ -14,9 +13,10 @@ from typing import Any, Dict, List, Optional, Tuple
 from sqlalchemy import func, select
 from sqlalchemy.orm import Session, defer
 
-from Database.models import PropertyRow
+from Database.models import PropertyRow, WhatsAppMessageRow
 from Database.session import get_session
 from Model.WhatsAppDataFetchingModel.embedded_property import EmbeddedProperty
+from Service.WhatsAppDataFetchingService import message_fingerprint
 
 # Content fields a human can edit from the Properties page (Add/Edit dialog)
 # — everything else on the row (record_id, sender/group metadata, message
@@ -62,6 +62,19 @@ _COLUMNS = (
     "description",
     "instagram_reel_url",
     "image_urls",
+    "review_status",
+    "needs_review",
+    "review_notes",
+    "on_landing_page",
+    "landing_page_updated_at",
+    "qualified_at",
+)
+
+# The WhatsApp-message fields StructuredProperty/EmbeddedProperty still carry
+# flat (nothing outside this file changes shape) but that now live on
+# WhatsAppMessageRow, one row per source_message_id, instead of being
+# repeated on every PropertyRow — see that model's own docstring.
+_MESSAGE_FIELDS = (
     "group_name",
     "chat_type",
     "sender_name",
@@ -69,31 +82,79 @@ _COLUMNS = (
     "sender_phone",
     "message_text",
     "message_timestamp",
-    "review_status",
-    "needs_review",
-    "review_notes",
-    "duplicate_of_record_id",
-    "on_landing_page",
-    "landing_page_updated_at",
-    "qualified_at",
 )
 
 
 def add_property(prop: EmbeddedProperty) -> None:
     with get_session() as session:
+        _ensure_message_row(session, prop)
         session.add(_to_row(prop))
 
 
-def find_top_candidates(vector: List[float], k: int) -> List[Tuple[EmbeddedProperty, float]]:
-    """Ranks by pgvector's cosine distance (`<=>`), ascending — closest
-    first — then converts to a similarity score. Retrieval only: the final
-    duplicate/new decision happens field-by-field in
-    Service/WhatsAppDataFetchingService/duplicate_detection_service.py, never here."""
+def _ensure_message_row(session: Session, prop: EmbeddedProperty) -> None:
+    """Creates the WhatsAppMessageRow for prop.source_message_id the first
+    time it's seen; a no-op for every later property pulled from the same
+    message (see StructuredProperty.record_id's own comment on multi-property
+    messages) — this is exactly what stops the message text from being
+    stored more than once. Flushed immediately so the row exists before the
+    PropertyRow insert that references it via the source_message_id foreign
+    key, even within the same add_property call.
+
+    This is also where the message's content fingerprint is recorded, so
+    it's written exactly once per message alongside the text it describes —
+    see find_message_id_by_fingerprint for what reads it back."""
+    if session.get(WhatsAppMessageRow, prop.source_message_id) is not None:
+        return
+    text = prop.message_text
+    session.add(
+        WhatsAppMessageRow(
+            id=prop.source_message_id,
+            text_fingerprint=(
+                message_fingerprint.fingerprint(text) if message_fingerprint.is_fingerprintable(text) else None
+            ),
+            **{name: getattr(prop, name) for name in _MESSAGE_FIELDS},
+        )
+    )
+    session.flush()
+
+
+def find_message_id_by_fingerprint(text_fingerprint: str) -> Optional[str]:
+    """The id of an already-stored message whose text matches this
+    fingerprint, or None. One indexed equality lookup returning a single
+    short string — no message text is transferred, and the cost does not
+    grow with the size of the table (see Service/WhatsAppDataFetchingService/
+    message_fingerprint.py for why the pipeline asks the question this way)."""
+    stmt = select(WhatsAppMessageRow.id).where(WhatsAppMessageRow.text_fingerprint == text_fingerprint).limit(1)
     with get_session() as session:
-        distance = PropertyRow.embedding.cosine_distance(vector)
-        stmt = select(PropertyRow, (1 - distance).label("similarity")).order_by(distance).limit(k)
-        rows = session.execute(stmt).all()
-        return [(_to_pydantic(row), float(similarity)) for row, similarity in rows]
+        return session.execute(stmt).scalar_one_or_none()
+
+
+def backfill_message_fingerprints() -> int:
+    """Fills text_fingerprint on message rows written before that column
+    existed, and returns how many were updated. Called once from
+    Database/session.py's init_db.
+
+    Done here in Python, with the same message_fingerprint.fingerprint()
+    the runtime check uses, rather than as SQL in the migration: an
+    equivalent SQL expression would have to re-implement the normalization,
+    and Postgres's `\\s` does not treat the non-breaking spaces common in
+    WhatsApp text as whitespace the way Python's str.split() does. A
+    fingerprint computed even slightly differently from the one the check
+    computes is worse than none at all — it would never match, silently.
+
+    Idempotent: after the first run no row has a NULL fingerprint, so this
+    selects nothing and returns 0."""
+    stmt = select(WhatsAppMessageRow).where(WhatsAppMessageRow.text_fingerprint.is_(None))
+    with get_session() as session:
+        filled = 0
+        for row in session.execute(stmt).scalars().all():
+            # A blank-text row has no fingerprint to give (see
+            # message_fingerprint.is_fingerprintable) and stays NULL —
+            # excluded from the count so this reports what it actually did.
+            if message_fingerprint.is_fingerprintable(row.message_text):
+                row.text_fingerprint = message_fingerprint.fingerprint(row.message_text)
+                filled += 1
+        return filled
 
 
 def get_all_properties(limit: int) -> List[EmbeddedProperty]:
@@ -108,12 +169,12 @@ def get_all_properties_summary(limit: int) -> List[Tuple[EmbeddedProperty, int]]
     """Same rows as get_all_properties, minus the two columns a list view
     never needs the CONTENTS of: `image_urls` (each entry is a data URL —
     this column alone can run to several megabytes per row, see
-    get_landing_page_properties's own comment) and `embedding`/
-    `field_embeddings` (only ever used for vector search, never for
-    display). `defer(...)` keeps SQLAlchemy from even asking Postgres to
-    ship those bytes back for this query; `json_array_length` computes the
-    photo count server-side from the same column so the caller still gets
-    an accurate count without the pixels crossing the wire at all.
+    get_landing_page_properties's own comment) and `embedding` (only ever
+    used by match scoring, never for display). `defer(...)` keeps SQLAlchemy
+    from even asking Postgres to ship those bytes back for this query;
+    `json_array_length` computes the photo count server-side from the same
+    column so the caller still gets an accurate count without the pixels
+    crossing the wire at all.
 
     This is what backs the Properties/Landing Page/Inquiries pages' polling
     — the thing that made them slow to load. A caller that actually needs
@@ -122,7 +183,7 @@ def get_all_properties_summary(limit: int) -> List[Tuple[EmbeddedProperty, int]]
     row."""
     stmt = (
         select(PropertyRow, func.json_array_length(PropertyRow.image_urls).label("image_count"))
-        .options(defer(PropertyRow.image_urls), defer(PropertyRow.embedding), defer(PropertyRow.field_embeddings))
+        .options(defer(PropertyRow.image_urls), defer(PropertyRow.embedding))
         .order_by(PropertyRow.id.desc())
         .limit(limit)
     )
@@ -187,20 +248,12 @@ def get_property(record_id: str) -> Optional[EmbeddedProperty]:
         return _to_pydantic(row) if row is not None else None
 
 
-def find_by_source_message_id(source_message_id: str, limit: int = 5) -> List[EmbeddedProperty]:
-    stmt = select(PropertyRow).where(PropertyRow.source_message_id == source_message_id).limit(limit)
-    with get_session() as session:
-        rows = list(session.execute(stmt).scalars().all())
-    return [_to_pydantic(row) for row in rows]
-
-
 def update_property(
     record_id: str,
     review_status: Optional[str] = None,
     needs_review: Optional[bool] = None,
     content_updates: Optional[Dict[str, Any]] = None,
     embedding: Optional[List[float]] = None,
-    field_embeddings: Optional[dict] = None,
     embedding_model: Optional[str] = None,
     on_landing_page: Optional[bool] = None,
     qualified_at: Optional[datetime] = None,
@@ -231,8 +284,6 @@ def update_property(
                     setattr(row, key, value)
         if embedding is not None:
             row.embedding = embedding
-        if field_embeddings is not None:
-            row.field_embeddings = field_embeddings
         if embedding_model is not None:
             row.embedding_model = embedding_model
         if on_landing_page is not None:
@@ -274,13 +325,13 @@ def _to_row(prop: EmbeddedProperty) -> PropertyRow:
         **data,
         record_id=prop.record_id,
         embedding=prop.embedding,
-        field_embeddings=prop.field_embeddings,
         embedding_model=prop.embedding_model,
     )
 
 
 def _to_pydantic(row: PropertyRow) -> EmbeddedProperty:
     data = {name: getattr(row, name) for name in _COLUMNS}
+    data.update({name: getattr(row.message, name) for name in _MESSAGE_FIELDS})
     return EmbeddedProperty(
         **data,
         # A row written before record_id existed has none stored — fall
@@ -290,7 +341,6 @@ def _to_pydantic(row: PropertyRow) -> EmbeddedProperty:
         # so it can never be left as the column's raw None here).
         record_id=row.record_id or f"legacy-{row.id}",
         embedding=list(row.embedding),
-        field_embeddings=dict(row.field_embeddings or {}),
         embedding_model=row.embedding_model,
     )
 
@@ -300,18 +350,20 @@ _SUMMARY_COLUMNS = tuple(name for name in _COLUMNS if name != "image_urls")
 
 def _to_pydantic_summary(row: PropertyRow) -> EmbeddedProperty:
     """Like _to_pydantic, but never touches the row's deferred
-    image_urls/embedding/field_embeddings attributes — doing so would fire
-    one extra SELECT per row (SQLAlchemy lazy-loads a deferred column on
-    first access), defeating the whole point of deferring them in
+    image_urls/embedding attributes — doing so would fire one extra SELECT
+    per row (SQLAlchemy lazy-loads a deferred column on first access),
+    defeating the whole point of deferring them in
     get_all_properties_summary's query. image_urls is set to [] here; the
     real count travels alongside as this function's caller's own tuple
-    element, computed in SQL instead."""
+    element, computed in SQL instead. row.message is always eager-loaded
+    (see PropertyRow.message's lazy="joined"), so reading it here costs no
+    extra query either."""
     data = {name: getattr(row, name) for name in _SUMMARY_COLUMNS}
+    data.update({name: getattr(row.message, name) for name in _MESSAGE_FIELDS})
     return EmbeddedProperty(
         **data,
         record_id=row.record_id or f"legacy-{row.id}",
         image_urls=[],
         embedding=[],
-        field_embeddings={},
         embedding_model=row.embedding_model,
     )

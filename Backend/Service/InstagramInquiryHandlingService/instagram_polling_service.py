@@ -104,6 +104,25 @@ _was_connected_last_cycle: Optional[bool] = None
 _user_locks_guard = threading.Lock()
 _user_locks: dict[str, threading.Lock] = {}
 
+# Shortest gap between two DMs to the same person about the same property.
+#
+# Someone commenting four times in twenty seconds (which happens, and is in
+# the logs) gets ONE property sequence and no nudges — the nudge is for
+# "they came back later", not for a burst. Anything past this window is a
+# genuine second visit and does get a nudge, so the comment reply pointing
+# at their inbox stays true. Deliberately short: the whole point of the fix
+# is that a real re-comment produces a real DM, and a long cooldown would
+# quietly recreate the original bug.
+_NUDGE_COOLDOWN_SECONDS = 60
+
+# dedupe_key -> monotonic time of the last DM sent for it. In memory only:
+# it exists to smooth out a burst arriving within seconds, so surviving a
+# restart buys nothing (the cost of losing it is at most one extra nudge).
+# Only ever written while holding that person's lock in
+# _maybe_send_property_sequence, and dedupe_key always embeds the user id,
+# so the entries for one key are never touched by two threads at once.
+_last_dm_at: dict[str, float] = {}
+
 
 def _lock_for_user(ig_user_id: str) -> threading.Lock:
     with _user_locks_guard:
@@ -259,27 +278,71 @@ def _guarded(func, description: str, *args) -> None:
 
 
 def _handle_comment(prop: EmbeddedProperty, media_pk: str, comment) -> None:
-    comment_key = f"comment:{comment.pk}"
-    if not instagram_contact_store.is_event_processed(comment_key):
-        step_logger.info(
-            f"Instagram polling: new comment {comment.pk!r} from @{comment.user.username} on property "
-            f"{prop.record_id!r} — replying..."
-        )
-        if instagram_messenger.reply_to_comment(media_pk, int(comment.pk), templates.COMMENT_REPLY_TEXT):
-            instagram_contact_store.mark_event_processed(comment_key)
-            step_logger.success(f"Replied to Instagram comment {comment.pk} on property {prop.record_id!r}.")
+    """Two independent stages, each with its own marker: the DM stage runs
+    FIRST, then the public reply.
 
+    The order matters and is the fix for "the reply came but the DM never
+    did". The reply's only job is to point at the DM, so it must not be
+    written until it's known what the DM stage actually did — and there are
+    two entirely legitimate outcomes where no property sequence is sent:
+    the person already converted to WhatsApp (linked_phone), or they've
+    already been DMed about this exact property. Both used to return
+    silently while the reply still went out saying "Plzz check your DM!",
+    which is precisely the symptom: reply visible, inbox empty, nothing in
+    the log to explain the gap.
+
+    The two markers are separate on purpose. Sharing one meant a failure in
+    either stage re-ran the other on the next cycle — a failing reply would
+    re-trigger the DM stage every 8s.
+    """
     commenter_id = str(comment.user.pk)
-    _maybe_send_property_sequence(
+    comment_key = f"comment:{comment.pk}"
+    dm_key = f"comment_dm:{comment.pk}"
+
+    replied = instagram_contact_store.is_event_processed(comment_key)
+    dm_done = instagram_contact_store.is_event_processed(dm_key)
+    if replied and dm_done:
+        return  # fully handled in an earlier cycle; nothing to re-check
+
+    if replied and not dm_done:
+        # A comment recorded before dm_key existed. Under the old code the
+        # DM stage ran (to completion or to a logged error) in the same
+        # cycle the reply was marked, so backfill the marker instead of
+        # re-running it — re-running would nudge people about comments from
+        # days ago the moment this ships.
+        instagram_contact_store.mark_event_processed(dm_key)
+        return
+
+    step_logger.info(
+        f"Instagram polling: new comment {comment.pk!r} from @{comment.user.username} on property "
+        f"{prop.record_id!r} — replying..."
+    )
+
+    outcome = _maybe_send_property_sequence(
         prop,
         ig_user_id=commenter_id,
         ig_username=comment.user.username,
         send=lambda text: instagram_messenger.send_dm_to_user(commenter_id, text),
         # Repeat comments from the same person on the same property share
         # one DM sequence, not one per comment — otherwise someone commenting
-        # three times in a row gets the full sequence three times.
+        # three times in a row gets the full sequence three times. They do
+        # still get a short nudge DM (nudge_on_duplicate), so the reply is
+        # never left pointing at an inbox nothing arrived in.
         dedupe_key=f"dm_sent:comment:{prop.record_id}:{commenter_id}",
+        nudge_on_duplicate=True,
     )
+    if outcome == "failed":
+        # Nothing reached their inbox, so don't post a reply pointing at it
+        # and don't mark either stage — the next cycle retries both.
+        return
+    instagram_contact_store.mark_event_processed(dm_key)
+
+    reply_text = (
+        templates.COMMENT_REPLY_ON_WHATSAPP_TEXT if outcome == "converted" else templates.COMMENT_REPLY_TEXT
+    )
+    if instagram_messenger.reply_to_comment(media_pk, int(comment.pk), reply_text):
+        instagram_contact_store.mark_event_processed(comment_key)
+        step_logger.success(f"Replied to Instagram comment {comment.pk} on property {prop.record_id!r}.")
 
 
 def _handle_thread(thread) -> None:
@@ -323,7 +386,7 @@ def _handle_thread(thread) -> None:
         # _maybe_send_property_sequence's return value) — a transient send
         # failure must be retried next cycle, not silently lost because the
         # message looked "handled" the moment it was seen.
-        sent = _maybe_send_property_sequence(
+        outcome = _maybe_send_property_sequence(
             prop,
             ig_user_id=sender_id,
             ig_username=sender.username if sender else None,
@@ -338,7 +401,7 @@ def _handle_thread(thread) -> None:
             # reply.
             dedupe_key=None,
         )
-        if sent:
+        if outcome != "failed":
             instagram_contact_store.mark_event_processed(message_key)
 
 
@@ -363,14 +426,34 @@ def _match_shared_reel(message) -> Optional[EmbeddedProperty]:
 
 
 def _maybe_send_property_sequence(
-    prop: EmbeddedProperty, *, ig_user_id: str, ig_username: Optional[str], send, dedupe_key: Optional[str]
-) -> bool:
-    """Returns True whenever there's nothing left to retry — either the
-    sequence was actually sent, or there was a good reason not to (already
-    converted to WhatsApp, or dedupe_key says this was already handled).
-    Only False on a genuine send failure, so a caller tracking its own
-    message-level idempotency (see _handle_thread) knows to leave that
-    message unmarked and retry it next cycle.
+    prop: EmbeddedProperty,
+    *,
+    ig_user_id: str,
+    ig_username: Optional[str],
+    send,
+    dedupe_key: Optional[str],
+    nudge_on_duplicate: bool = False,
+) -> str:
+    """Returns WHICH of the four outcomes happened, not just pass/fail:
+
+      "sent"      — the full three-message sequence went out.
+      "nudged"    — already DMed about this property, so a single short
+                    nudge went out instead (nudge_on_duplicate only).
+      "duplicate" — already DMed about this property, nothing sent.
+      "converted" — they already gave a WhatsApp number; nothing is ever
+                    sent to their Instagram inbox again.
+      "failed"    — a genuine send failure. The ONLY value that means
+                    "retry me": callers tracking their own idempotency
+                    (see _handle_thread, _handle_comment) leave the event
+                    unmarked so the next cycle picks it up again.
+
+    This used to be a bare bool, with "sent", "duplicate" and "converted"
+    all collapsed into True and logged nowhere. That is what made the
+    reply-without-a-DM case invisible: the caller could not tell a DM that
+    was sent from one that was deliberately skipped, so it always replied
+    "check your DM", and the log recorded only the reply. Every branch now
+    also logs, so the skip is visible in the terminal at the moment it
+    happens.
 
     Held under this person's own lock for its whole duration — see the
     module docstring. Two events from the same person (two comments, or a
@@ -385,10 +468,38 @@ def _maybe_send_property_sequence(
         if existing_contact is not None and existing_contact.linked_phone:
             # Already gave a WhatsApp number — all further contact happens
             # there, never both channels at once.
-            return True
+            step_logger.info(
+                f"Instagram user {ig_user_id!r} (@{ig_username or existing_contact.ig_username}) already gave "
+                f"WhatsApp number {existing_contact.linked_phone} — no Instagram DM sent, the conversation "
+                "continues on WhatsApp."
+            )
+            return "converted"
 
         if dedupe_key is not None and instagram_contact_store.is_event_processed(dedupe_key):
-            return True
+            if not nudge_on_duplicate:
+                step_logger.info(
+                    f"Instagram user {ig_user_id!r} (@{ig_username}) was already sent the DM sequence for "
+                    f"property {prop.record_id!r} — not repeating it."
+                )
+                return "duplicate"
+            since_last_dm = time.monotonic() - _last_dm_at.get(dedupe_key, float("-inf"))
+            if since_last_dm < _NUDGE_COOLDOWN_SECONDS:
+                step_logger.info(
+                    f"Instagram user {ig_user_id!r} (@{ig_username}) was DMed about property {prop.record_id!r} "
+                    f"{since_last_dm:.0f}s ago — replying to this comment without another DM."
+                )
+                return "duplicate"
+            if not send(templates.DM_REPEAT_NUDGE_TEXT):
+                step_logger.error(
+                    f"Failed to send the Instagram nudge DM to user {ig_user_id!r} — will retry next poll."
+                )
+                return "failed"
+            _last_dm_at[dedupe_key] = time.monotonic()
+            step_logger.success(
+                f"Instagram user {ig_user_id!r} (@{ig_username}) had already been sent property "
+                f"{prop.record_id!r} — sent a short nudge DM instead of repeating the sequence."
+            )
+            return "nudged"
 
         token = form_token_service.issue_token(channel="instagram", identity=ig_user_id)
         form_link = f"{get_settings().inquiry_form_base_url.rstrip('/')}/{token}"
@@ -402,14 +513,15 @@ def _maybe_send_property_sequence(
             step_logger.error(
                 f"Failed to send the full Instagram DM sequence to user {ig_user_id!r} — will retry next poll."
             )
-            return False
+            return "failed"
 
         if dedupe_key is not None:
             instagram_contact_store.mark_event_processed(dedupe_key)
+            _last_dm_at[dedupe_key] = time.monotonic()
         instagram_contact_store.upsert_contact(
             existing_contact.model_copy(update={"ig_username": ig_username or existing_contact.ig_username})
             if existing_contact is not None
             else InstagramContactRecord(ig_user_id=ig_user_id, ig_username=ig_username, status="new")
         )
         step_logger.success(f"Sent Instagram DM sequence for property {prop.record_id!r} to user {ig_user_id!r}.")
-        return True
+        return "sent"

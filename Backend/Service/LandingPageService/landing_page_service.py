@@ -26,7 +26,7 @@ from Model.WhatsAppDataFetchingModel.embedded_property import EmbeddedProperty
 from Model.WhatsAppInquiryHandlingModel.client_record import ClientRecord
 from Service.ClientPropertyMatchingService import matching_service
 from Service.LandingPageService import lead_store
-from Service.WhatsAppDataFetchingService import property_vector_store
+from Service.WhatsAppDataFetchingService import area_filter_service, property_vector_store
 from Service.WhatsAppInquiryHandlingService import assignment_lock_service, client_store, otp_service
 from Service.WhatsAppInquiryHandlingService.phone_utils import normalize_phone
 
@@ -42,6 +42,20 @@ _MAX_CARD_IMAGES = 6
 # shapes at "/<kind>/<shortcode>/embed"; the shortcode is the only part
 # that matters, and query strings (?igsh=..., ?utm_source=...) are noise.
 _REEL_URL_PATTERN = re.compile(r"instagram\.com/(?:reel|reels|p|tv)/([A-Za-z0-9_-]+)", re.IGNORECASE)
+
+
+def get_tracked_areas() -> List[str]:
+    """The client's own selected areas, for the public form's area picker
+    (LandingPage/src/components/AreaPicker.tsx).
+
+    These are the areas the property pipeline actually tracks, so they are
+    the ones a visitor's choice can realistically be matched against — the
+    site's own hardcoded Surat list (lib/suratAreas.ts) is only there so the
+    picker still looks populated when few are configured. Safe to expose:
+    it is a list of locality NAMES, already public knowledge, with nothing
+    about any property or person attached.
+    """
+    return area_filter_service.get_area_keywords()
 
 
 def get_published_properties() -> List[LandingPropertySummary]:

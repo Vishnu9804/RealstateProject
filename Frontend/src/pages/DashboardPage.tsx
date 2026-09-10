@@ -76,7 +76,11 @@ import {
 /** The three mutually-exclusive views: Main and Outsider are the property's
  *  permanent home (review_status), toggled via the Main/Outsider capsule;
  *  Needs review is an orthogonal queue (needs_review=true, from either
- *  home) opened via its own button and left via Accept. */
+ *  home) opened via its own button. A property is in that queue because
+ *  almost nothing could be extracted from its message, and it leaves by a
+ *  human completing it and picking Main or Outsider — this is the only
+ *  page that shows the queue at all (the matching dialogs never do, since
+ *  a flagged property isn't matched). */
 export type ViewTab = "main" | "outsider" | "needsReview";
 
 const FETCH_LIMIT = 500;
@@ -778,7 +782,7 @@ export default function DashboardPage() {
             title={viewTab === "needsReview" ? "Nothing needs review" : `No ${viewTab === "outsider" ? "outsider" : "Main"} properties`}
             body={
               viewTab === "needsReview"
-                ? "Every stored property has been reviewed — new arrivals land here only when duplicate detection is unsure."
+                ? "Nothing is waiting to be completed by hand — a property only lands here when almost nothing could be extracted from its message."
                 : `No properties currently sit in ${viewTab === "outsider" ? "Outsider" : "Main"}. Switch tabs to see the rest.`
             }
           />
@@ -1441,18 +1445,6 @@ export function PropertyDetailDialog({
   const [lightboxIndex, setLightboxIndex] = useState<number | null>(null);
   const photoCount = property.image_urls.length;
 
-  // Needs review's own two-tab layout — Details (everything the dialog has
-  // always shown) and Compare (the flagged property side-by-side with
-  // whichever existing property it might be a duplicate of), so the raw
-  // scoring reason (accurate, but meaningless to read) never has to be the
-  // only way to judge a flag. Reset to Details on every property switch —
-  // reopening the dialog on a different row should never silently land on
-  // the previous row's tab. Main/Outsider properties never show this — see
-  // ReviewBadge's own "only Needs review carries this ambiguity" logic.
-  const [activeTab, setActiveTab] = useState<"details" | "compare">("details");
-  useEffect(() => setActiveTab("details"), [property.record_id]);
-  const showTabs = property.needs_review;
-
   useEffect(() => {
     const onKeyDown = (event: KeyboardEvent) => {
       if (event.key === "Escape") {
@@ -1510,20 +1502,6 @@ export function PropertyDetailDialog({
         </div>
 
         <div className="detail-modal__body">
-          {showTabs && (
-            <Segmented<"details" | "compare">
-              ariaLabel="Property details or comparison"
-              value={activeTab}
-              onChange={setActiveTab}
-              options={[
-                { value: "details", label: "Details" },
-                { value: "compare", label: "Compare" },
-              ]}
-            />
-          )}
-
-          {(!showTabs || activeTab === "details") && (
-            <>
           {photoCount > 0 && (
             <div className="detail__gallery">
               {property.image_urls.map((src, index) => (
@@ -1620,9 +1598,17 @@ export function PropertyDetailDialog({
             )}
           </div>
 
+          {/* For a flagged property this holds the extracted excerpt of the
+              original message that refers to THIS property specifically —
+              a message can list ten, and reading all ten to complete one
+              of them is the problem the excerpt solves. Labelled so it's
+              obvious that's what you're looking at, rather than a summary
+              someone wrote. The full message is still below, unchanged. */}
           {property.description && (
             <div className="detail__block">
-              <div className="detail__k">Description</div>
+              <div className="detail__k">
+                {property.needs_review ? "The part of the message about this property" : "Description"}
+              </div>
               <div className="detail__v">{property.description}</div>
             </div>
           )}
@@ -1633,10 +1619,6 @@ export function PropertyDetailDialog({
             </div>
             <div className="detail__msg">{property.message_text}</div>
           </div>
-            </>
-          )}
-
-          {showTabs && activeTab === "compare" && <ComparisonPane flagged={property} />}
         </div>
 
         <div className="detail-modal__foot">
@@ -1731,131 +1713,6 @@ export function PropertyDetailDialog({
     )}
     </>,
     document.body,
-  );
-}
-
-/** The Needs review dialog's Compare tab: the flagged property side-by-side
- *  with whichever existing property duplicate detection actually matched it
- *  against (property.duplicate_of_record_id) — a plain field-by-field table
- *  reads at a glance, unlike the scoring reason text (accurate, but built
- *  for debugging the algorithm, not for a human deciding what to do). When
- *  there's no matched candidate (flagged for an unrelated reason, e.g.
- *  outside every client-selected area), there's nothing to compare against,
- *  so this falls back to just explaining why. */
-function ComparisonPane({ flagged }: { flagged: PropertyRecord }) {
-  const [matched, setMatched] = useState<PropertyRecord | null>(null);
-  const [status, setStatus] = useState<"none" | "loading" | "loaded" | "error">(
-    flagged.duplicate_of_record_id ? "loading" : "none",
-  );
-
-  useEffect(() => {
-    const recordId = flagged.duplicate_of_record_id;
-    if (!recordId) {
-      setStatus("none");
-      setMatched(null);
-      return;
-    }
-    const cached = getCachedPropertyDetail(recordId);
-    if (cached) {
-      setMatched(cached);
-      setStatus("loaded");
-      return;
-    }
-    let cancelled = false;
-    setStatus("loading");
-    propertyApi
-      .getProperty(recordId)
-      .then((full) => {
-        if (cancelled) return;
-        setCachedPropertyDetail(full);
-        setMatched(full);
-        setStatus("loaded");
-      })
-      .catch(() => {
-        if (!cancelled) setStatus("error");
-      });
-    return () => {
-      cancelled = true;
-    };
-  }, [flagged.duplicate_of_record_id]);
-
-  if (status === "none") {
-    return (
-      <Note tone="info" icon={<IconAlert size={16} />}>
-        <strong>No specific property to compare against.</strong>{" "}
-        {flagged.review_notes ?? "This property wasn't flagged as a possible duplicate of anything in particular."}
-      </Note>
-    );
-  }
-
-  if (status === "loading") {
-    return (
-      <div className="row-flex faint small">
-        <span className="spinner" /> Loading the possible match…
-      </div>
-    );
-  }
-
-  if (status === "error" || !matched) {
-    return (
-      <Note tone="bad" icon={<IconAlert size={16} />}>
-        Couldn't load the possible match — it may have been deleted since this property was flagged.
-      </Note>
-    );
-  }
-
-  const rows: { label: string; value: (p: PropertyRecord) => string }[] = [
-    { label: "Society", value: (p) => p.society_name ?? "—" },
-    { label: "Area", value: (p) => p.area_name ?? "—" },
-    { label: "Address", value: (p) => p.address ?? "—" },
-    { label: "BHK", value: (p) => p.bhk ?? "—" },
-    { label: "Property type", value: (p) => p.property_type ?? "—" },
-    { label: "Sale / Rent", value: (p) => p.listing_type },
-    { label: "Carpet area", value: (p) => formatCarpetArea(p.carpet_area_sqft, p.carpet_area_unit) },
-    { label: "Price", value: (p) => formatPrice(p.price_text, p.price_amount_inr) },
-    { label: "Price / unit", value: (p) => formatPricePerUnit(p.price_per_unit_text, p.price_per_unit_amount_inr) },
-    { label: "Contact name", value: (p) => p.contact_name ?? "—" },
-    { label: "Contact phone", value: (p) => p.contact_phone ?? "—" },
-    { label: "Description", value: (p) => p.description ?? "—" },
-    { label: "Source", value: (p) => `${sourceLabel(p)} · ${p.chat_type === "group" ? "Group" : "Personal"}` },
-    { label: "Received", value: (p) => p.formatted_timestamp },
-  ];
-
-  return (
-    <div className="stack stack-3">
-      {flagged.review_notes && (
-        <Note tone="warn" icon={<IconAlert size={16} />}>
-          {flagged.review_notes}
-        </Note>
-      )}
-      <div className="table-scroll">
-        <table className="table compare-table">
-          <thead>
-            <tr>
-              <th>Field</th>
-              <th>This property (Needs review)</th>
-              <th>Existing property (possible duplicate)</th>
-            </tr>
-          </thead>
-          <tbody>
-            {rows.map((row) => {
-              const a = row.value(flagged);
-              const b = row.value(matched);
-              const comparable = a !== "—" && b !== "—";
-              const differs = comparable && a.trim().toLowerCase() !== b.trim().toLowerCase();
-              const cellStyle = differs ? { color: "var(--warn)", fontWeight: 600 } : undefined;
-              return (
-                <tr key={row.label}>
-                  <td className="cell-strong">{row.label}</td>
-                  <td style={cellStyle}>{a}</td>
-                  <td style={cellStyle}>{b}</td>
-                </tr>
-              );
-            })}
-          </tbody>
-        </table>
-      </div>
-    </div>
   );
 }
 

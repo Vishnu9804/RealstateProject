@@ -1,6 +1,7 @@
 """Persists the multi-number WhatsApp connection roster (which numbers are
-linked, what each is used for, and — for Property — which of its groups and
-personal numbers are selected) so all of it survives a backend restart.
+linked, what each is used for, and — for the Property role — which of its
+groups and personal numbers are selected for Property and, separately, for
+Requirement) so all of it survives a backend restart.
 Mirrors the pattern used by monitoring_selection_store.py (which this
 supersedes), but keyed per connection rather than for a single client.
 
@@ -25,7 +26,14 @@ def load() -> Optional[List[Dict[str, Any]]]:
     saved yet (or no database is configured). Each entry:
     {"connection_id": str, "session_db_path": str, "roles": [str, ...],
      "property_group_jids": [str, ...], "property_personal_numbers": [str, ...],
+     "requirement_group_jids": [str, ...], "requirement_personal_numbers": [str, ...],
      "phone_number": str | None}
+
+    The two requirement keys are absent from any roster saved before that
+    selection existed; the reader (whatsapp_connection_manager.
+    _restore_connection) defaults them to empty, which is exactly right —
+    an existing install keeps capturing properties as before and simply has
+    nothing selected for requirements until the operator picks something.
     """
     if not is_database_configured():
         return None

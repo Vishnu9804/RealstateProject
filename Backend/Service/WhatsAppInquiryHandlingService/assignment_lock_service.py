@@ -112,9 +112,50 @@ def summarize_requirements(record: Optional[ClientRecord]) -> str:
     if record.bhk:
         lines.append(f"- BHK: {record.bhk}")
     if record.budget_min_inr or record.budget_max_inr:
-        lines.append(f"- Budget: {record.budget_min_inr or '?'} - {record.budget_max_inr or '?'}")
+        lines.append(f"- Budget: {_budget_line(record.budget_min_inr, record.budget_max_inr)}")
     if record.preferred_areas:
         lines.append(f"- Preferred areas: {record.preferred_areas}")
     if record.additional_requirements:
         lines.append(f"- Notes: {record.additional_requirements}")
     return "\n".join(lines) if lines else "(no requirements on file yet)"
+
+
+_CRORE = 10_000_000
+_LAKH = 100_000
+_THOUSAND = 1_000
+
+
+def _format_compact_inr(amount: float) -> str:
+    """Indian short-scale, the way this is said out loud and the way both
+    frontends already write it (Frontend/src/lib/formatters.ts,
+    LandingPage/src/lib/format.ts): 20000000 -> "2cr", 8500000 -> "85L",
+    45000 -> "45K".
+
+    A budget is STORED as a full rupee figure and always will be — this is
+    only how it is read back to the person whose budget it is. Nobody
+    checks "20000000" against what they meant to type without counting
+    zeroes, which is exactly the mistake this message exists to let them
+    catch.
+    """
+    magnitude = abs(amount)
+    if magnitude >= _CRORE:
+        return f"{_trim(amount / _CRORE)}cr"
+    if magnitude >= _LAKH:
+        return f"{_trim(amount / _LAKH)}L"
+    if magnitude >= _THOUSAND:
+        return f"{_trim(amount / _THOUSAND)}K"
+    return _trim(amount)
+
+
+def _trim(value: float) -> str:
+    return f"{round(value, 2):g}"
+
+
+def _budget_line(budget_min: Optional[float], budget_max: Optional[float]) -> str:
+    if budget_min is not None and budget_max is not None:
+        return f"{_format_compact_inr(budget_min)} - {_format_compact_inr(budget_max)}"
+    if budget_min is not None:
+        return f"{_format_compact_inr(budget_min)}+"
+    if budget_max is not None:
+        return f"up to {_format_compact_inr(budget_max)}"
+    return "not specified"

@@ -18,11 +18,32 @@ from typing import List, Optional
 # Broad families a property type can belong to. Within a family, types are
 # near-synonyms (flat/apartment) or close siblings (villa/bungalow/row
 # house); across families is a real mismatch (see property_type_gate).
-_RESIDENTIAL_FLAT = frozenset({"flat", "flats", "apartment", "apartments", "flat/apartment"})
+_RESIDENTIAL_FLAT = frozenset(
+    {
+        "flat",
+        "flats",
+        "apartment",
+        "apartments",
+        "flat/apartment",
+        # A penthouse is the top-floor unit of an apartment building — the
+        # same kind of property as a flat, in the same kind of building,
+        # bought the same way. Someone who asks for a Flat should be shown
+        # one; someone who asks for a Penthouse should not be shown a plot.
+        "penthouse",
+        "penthouses",
+        "pent house",
+    }
+)
 _RESIDENTIAL_HOUSE = frozenset(
     {"villa", "villas", "bungalow", "bungalows", "row house", "rowhouse", "independent house", "house", "duplex"}
 )
-_LAND = frozenset({"plot", "plots", "land", "farmland", "agricultural land", "farm land"})
+# "land/plot" is here for the same reason "flat/apartment" is in the set
+# above: a CLIENT's value is split on "/" before it gets here, but a
+# PROPERTY's is not — and "Land/Plot" is one of the literal type names the
+# extractor is told to use (Agent/WhatsAppDataFetchingAgent/
+# glm_extraction_schema.py), so without it every plot listing falls through
+# to the fuzzy-text branch and scores 0.15 against a plot-hunting client.
+_LAND = frozenset({"plot", "plots", "land", "farmland", "agricultural land", "farm land", "land/plot", "plot/land"})
 _COMMERCIAL = frozenset(
     {"shop", "shops", "office", "offices", "showroom", "warehouse", "commercial space", "commercial", "godown"}
 )
@@ -35,9 +56,32 @@ _TYPE_SPLIT_RE = re.compile(r"\bor\b|\bbut open to\b|\balso consider\b|\bwilling
 # fuzzy-text fallback for no good reason.
 _FILLER_WORDS_RE = re.compile(r"\bpreferred\b|\bideally\b|\bmust be\b")
 
+# "Duplex" describes a unit's INTERNAL layout — living space spread over two
+# floors — not what kind of property it is. A "duplex flat" is a flat; a
+# "penthouse duplex" is a penthouse. Treating the modifier as a type of its
+# own is how a client who asked for a Flat ends up never seeing a duplex
+# flat: the words don't match, neither belongs to the other's family, and
+# the pair falls through to the fuzzy-text branch below and scores 0.15.
+#
+# So it is stripped whenever a real type is left behind, on BOTH sides —
+# "flat duplex" and "duplex flat" and "flat" all reduce to "flat". A BARE
+# "duplex" keeps its own meaning (a two-storey house, see
+# _RESIDENTIAL_HOUSE), which is why the fallback below matters.
+_TYPE_MODIFIERS_RE = re.compile(r"\b(?:duplex|simplex|triplex)\b")
+
 
 def normalize_token(value: str) -> str:
     return " ".join(value.lower().strip().split())
+
+
+def canonical_type_token(value: str) -> str:
+    """The comparable form of one property-type token: lowercased, collapsed,
+    and with layout modifiers dropped — unless dropping them would leave
+    nothing, in which case the modifier WAS the type and is kept as-is."""
+    token = normalize_token(value)
+    if not token:
+        return token
+    return normalize_token(_TYPE_MODIFIERS_RE.sub(" ", token)) or token
 
 
 def _family_of(token: str) -> Optional[frozenset]:
@@ -58,8 +102,8 @@ def split_client_property_types(raw: Optional[str]) -> List[str]:
         return []
     tokens = []
     for part in _TYPE_SPLIT_RE.split(raw.lower()):
-        token = normalize_token(_FILLER_WORDS_RE.sub("", part))
-        if token:
+        token = canonical_type_token(_FILLER_WORDS_RE.sub("", part))
+        if token and token not in tokens:
             tokens.append(token)
     return tokens
 
@@ -76,7 +120,7 @@ def property_type_gate(client_raw: Optional[str], property_raw: Optional[str]) -
         return 1.0
     if not property_raw:
         return 0.5
-    prop_token = normalize_token(property_raw)
+    prop_token = canonical_type_token(property_raw)
     return max(_pair_compatibility(token, prop_token, is_primary=(i == 0)) for i, token in enumerate(client_tokens))
 
 

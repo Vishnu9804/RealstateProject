@@ -993,9 +993,9 @@
   display: grid;
   place-items: center;
   padding: 20px;
-  background: rgba(4, 4, 6, 0.78);
-  backdrop-filter: blur(6px);
-  animation: otp-fade-in 200ms var(--ease-out) both;
+  background: rgba(3, 3, 5, 0.82);
+  backdrop-filter: blur(10px) saturate(120%);
+  animation: otp-fade-in 220ms var(--ease-out) both;
 }
 
 @keyframes otp-fade-in {
@@ -1007,163 +1007,329 @@
   }
 }
 
+@keyframes otp-rise {
+  from {
+    opacity: 0;
+    transform: translateY(18px) scale(0.97);
+  }
+  to {
+    opacity: 1;
+    transform: translateY(0) scale(1);
+  }
+}
+
 .otp {
   position: relative;
-  width: min(420px, 100%);
+  width: min(432px, 100%);
   display: grid;
   justify-items: center;
-  gap: 14px;
-  padding: 34px 28px 26px;
+  gap: 12px;
+  padding: 40px 30px 26px;
   border-radius: var(--r-lg);
-  border: 1px solid var(--accent-line);
-  background: var(--ink-850);
+  border: 1px solid var(--hairline-strong);
+  /* Two layers: a barely-there gold wash falling from the top edge, over
+     the same near-black the property cards sit on — so this reads as a
+     panel lifted off the page rather than a box drawn on top of it. */
+  background:
+    radial-gradient(120% 80% at 50% -10%, rgba(217, 184, 113, 0.1) 0%, transparent 60%),
+    linear-gradient(180deg, var(--ink-800) 0%, var(--ink-900) 100%);
   box-shadow: var(--shadow-lg);
   text-align: center;
-  animation: fade-up 320ms var(--ease-out) both;
+  overflow: hidden;
+  animation: otp-rise 380ms var(--ease-out) both;
+}
+
+/* A hairline of gold across the top edge only, fading out at both corners.
+   The site's signature — the same treatment the header uses. */
+.otp__edge {
+  position: absolute;
+  top: 0;
+  left: 12%;
+  right: 12%;
+  height: 1px;
+  background: linear-gradient(90deg, transparent, var(--gold-300), transparent);
+}
+
+.otp__bloom {
+  position: absolute;
+  top: -70px;
+  left: 50%;
+  width: 240px;
+  height: 240px;
+  transform: translateX(-50%);
+  border-radius: 50%;
+  background: radial-gradient(circle, var(--accent-glow) 0%, transparent 68%);
+  opacity: 0.34;
+  pointer-events: none;
+}
+
+/* Nudged in front of the bloom so every real control stays clickable. The
+   close button is excluded deliberately — it is positioned absolutely, and
+   a blanket `position: relative` here would drop it back into the grid
+   flow and land it in the middle of the dialog. */
+.otp > *:not(.otp__edge):not(.otp__bloom):not(.otp__close) {
+  position: relative;
+  z-index: 1;
 }
 
 .otp__close {
   position: absolute;
-  top: 12px;
-  right: 12px;
+  z-index: 2;
+  top: 14px;
+  right: 14px;
   display: grid;
   place-items: center;
-  width: 34px;
-  height: 34px;
+  width: 32px;
+  height: 32px;
   border-radius: 50%;
-  color: var(--text-soft);
+  border: 1px solid transparent;
+  color: var(--text-faint);
   background: transparent;
+  transition:
+    color var(--t-fast) linear,
+    border-color var(--t-fast) linear,
+    background-color var(--t-fast) linear;
 }
 .otp__close:hover {
   color: var(--text);
+  border-color: var(--hairline-strong);
   background: var(--glass-2);
 }
 
 .otp__icon {
   display: grid;
   place-items: center;
-  width: 46px;
-  height: 46px;
+  width: 54px;
+  height: 54px;
   border-radius: 50%;
   border: 1px solid var(--accent-line);
   background: var(--accent-soft);
   color: var(--gold-200);
+  box-shadow: 0 0 0 8px rgba(217, 184, 113, 0.05);
 }
 
 .otp__title {
-  margin: 0;
+  margin: 2px 0 0;
   font-family: var(--font-display);
-  font-size: 22px;
+  font-size: 25px;
   font-weight: 400;
+  letter-spacing: -0.01em;
 }
 
 .otp__sub {
-  margin: 0;
-  max-width: 34ch;
+  margin: -4px 0 0;
   color: var(--text-soft);
   font-size: 13.5px;
   line-height: 1.55;
 }
-.otp__sub strong {
-  color: var(--text);
+
+/* The number on its own line, in a pill — it is the one thing in this
+   dialog someone must actually check before typing a code, so it gets to
+   look like a value rather than part of a sentence. */
+.otp__phone {
+  display: inline-flex;
+  align-items: center;
+  gap: 7px;
+  margin-top: -4px;
+  padding: 7px 15px;
+  border-radius: var(--r-pill);
+  border: 1px solid var(--accent-line);
+  background: var(--accent-soft);
+  color: var(--gold-100);
+  font-size: 14px;
   font-weight: 600;
+  letter-spacing: 0.02em;
   white-space: nowrap;
 }
 
 .otp__boxes {
   display: flex;
-  gap: 12px;
-  margin-top: 4px;
+  gap: 11px;
+  margin-top: 8px;
 }
 
 /* One character, centred, big enough to read back at arm's length — the
    whole point is that someone can glance at a notification and copy four
    digits without concentrating. */
 .otp__box {
-  width: 56px;
-  height: 64px;
+  width: 60px;
+  height: 68px;
   border-radius: var(--r-md);
   border: 1.5px solid var(--hairline-strong);
-  background: rgba(255, 255, 255, 0.04);
+  background: rgba(0, 0, 0, 0.34);
   color: var(--text);
-  font-size: 26px;
+  font-size: 28px;
   font-weight: 600;
   text-align: center;
+  caret-color: var(--accent);
   transition:
     border-color var(--t-fast) linear,
     box-shadow var(--t-fast) linear,
+    color var(--t-fast) linear,
+    transform var(--t-fast) var(--ease-spring),
     background-color var(--t-fast) linear;
 }
 .otp__box.is-filled {
   border-color: var(--accent-line);
-  background: rgba(255, 255, 255, 0.06);
+  background: rgba(217, 184, 113, 0.07);
+  color: var(--gold-100);
 }
 .otp__box:focus {
   outline: none;
   border-color: var(--accent);
+  background-color: rgba(0, 0, 0, 0.5);
   box-shadow: 0 0 0 4px var(--accent-soft);
+  transform: translateY(-2px);
 }
 .otp__box.is-error {
   border-color: #d9736b;
+  color: #e8918a;
+  background: rgba(217, 115, 107, 0.07);
 }
 .otp__box:disabled {
   opacity: 0.6;
 }
 
-.otp__error {
+/* A wrong code is worth feeling, not just reading — one short shake, then
+   the boxes clear and focus goes back to the first one. */
+.otp.is-shaking {
+  animation:
+    otp-rise 380ms var(--ease-out) both,
+    otp-shake 380ms var(--ease-inout) 1;
+}
+@keyframes otp-shake {
+  0%,
+  100% {
+    transform: translateX(0);
+  }
+  20% {
+    transform: translateX(-7px);
+  }
+  40% {
+    transform: translateX(6px);
+  }
+  60% {
+    transform: translateX(-4px);
+  }
+  80% {
+    transform: translateX(2px);
+  }
+}
+
+/* Fixed height for error / resent / hint alike, so nothing below shifts as
+   they swap. Three lines' worth: the longest error runs to two. */
+.otp__msg {
+  display: grid;
+  place-items: center;
+  min-height: 34px;
+  width: 100%;
+}
+
+.otp__error,
+.otp__note,
+.otp__hint {
   margin: 0;
   display: flex;
-  gap: 8px;
-  align-items: flex-start;
-  max-width: 36ch;
-  color: #e8918a;
+  gap: 7px;
+  align-items: center;
+  justify-content: center;
+  max-width: 38ch;
   font-size: 12.5px;
   line-height: 1.5;
+}
+.otp__error {
+  color: #e8918a;
+  align-items: flex-start;
   text-align: left;
 }
 .otp__error svg {
   flex: none;
   margin-top: 1px;
 }
-
 .otp__note {
-  margin: 0;
+  color: var(--gold-200);
+}
+.otp__hint {
   color: var(--text-faint);
-  font-size: 12.5px;
 }
 
 /* Full-width, and the only button in the dialog that ever checks the code
    — every digit box just fills, nothing checks until this is pressed. */
 .otp__done {
   width: 100%;
-  margin-top: 6px;
-  padding: 13px 26px;
+  margin-top: 2px;
+  padding: 15px 26px;
+  font-size: 14.5px;
 }
 
 .otp__actions {
-  display: flex;
-  gap: 22px;
-  align-items: center;
-  justify-content: center;
-  margin-top: 2px;
-  padding-top: 4px;
-  border-top: 1px solid var(--hairline);
+  display: grid;
+  grid-template-columns: 1fr 1fr;
+  gap: 10px;
   width: 100%;
+  margin-top: 14px;
+  padding-top: 18px;
+  border-top: 1px solid var(--hairline);
 }
 
-.otp__link {
-  background: none;
-  color: var(--gold-200);
-  font-size: 13px;
-  padding: 4px 2px;
-  border-bottom: 1px solid transparent;
+/* Real buttons, not underlined text: these two are the whole escape route
+   out of this dialog (the code never arrived / the number was wrong), and
+   a link buried under a primary button is easy to miss entirely. */
+.otp__action {
+  display: inline-flex;
+  align-items: center;
+  justify-content: center;
+  gap: 8px;
+  padding: 11px 12px;
+  border-radius: var(--r-pill);
+  border: 1px solid var(--hairline-strong);
+  background: var(--glass-1);
+  color: var(--text-soft);
+  font-size: 12.5px;
+  font-weight: 500;
+  white-space: nowrap;
+  transition:
+    color var(--t-fast) linear,
+    border-color var(--t-fast) linear,
+    transform var(--t-fast) var(--ease-out),
+    background-color var(--t-fast) linear;
 }
-.otp__link:hover:not(:disabled) {
-  border-bottom-color: var(--accent-line);
+.otp__action:hover:not(:disabled) {
+  color: var(--gold-100);
+  border-color: var(--accent-line);
+  background: var(--accent-soft);
+  transform: translateY(-1px);
 }
-.otp__link:disabled {
+.otp__action:disabled {
   color: var(--text-faint);
+  border-color: var(--hairline);
+  background: transparent;
   cursor: default;
+}
+.otp__action svg {
+  flex: none;
+  opacity: 0.9;
+}
+
+/* Under ~400px four 60px boxes plus their gaps stop fitting — they shrink
+   rather than overflow, and the two footer buttons stack. */
+@media (max-width: 400px) {
+  .otp {
+    padding: 34px 20px 22px;
+  }
+  .otp__box {
+    width: 100%;
+    max-width: 60px;
+    height: 62px;
+    font-size: 24px;
+  }
+  .otp__boxes {
+    width: 100%;
+    gap: 9px;
+  }
+  .otp__actions {
+    grid-template-columns: 1fr;
+  }
 }
 
 .field__hint {
@@ -1257,8 +1423,8 @@
   width: 100%;
 }
 
-/* Buy / Rent / Sell. Same shape as the property filters at the top of the
-   page, so a visitor recognises it as the same kind of control. */
+/* Buy / Rent. Same shape as the property filters at the top of the page,
+   so a visitor recognises it as the same kind of control. */
 .seg {
   display: flex;
   flex-wrap: wrap;
@@ -1286,6 +1452,195 @@
   background-image: var(--accent-text);
   border-color: transparent;
   font-weight: 600;
+}
+
+/* ===================== preferred areas (capsules) =====================
+
+   components/AreaPicker.tsx. Three stacked rows — what's chosen, a search
+   box, and everything still available — because that top-to-bottom order
+   is the order the question is actually answered in. */
+
+.areas {
+  display: grid;
+  gap: 10px;
+}
+
+/* Chosen areas, in gold, above the search — the answer, sitting apart from
+   the menu it was picked from. */
+.areas__selected {
+  display: flex;
+  flex-wrap: wrap;
+  gap: 8px;
+  align-items: center;
+}
+
+.areas__pick {
+  display: inline-flex;
+  align-items: center;
+  gap: 4px;
+  padding: 8px 8px 8px 15px;
+  border-radius: var(--r-pill);
+  border: 1px solid transparent;
+  background-image: var(--accent-text);
+  color: #16120a;
+  font-size: 13px;
+  font-weight: 600;
+  animation: area-pop 240ms var(--ease-spring) both;
+}
+
+@keyframes area-pop {
+  from {
+    opacity: 0;
+    transform: scale(0.82);
+  }
+  to {
+    opacity: 1;
+    transform: scale(1);
+  }
+}
+
+.areas__remove {
+  display: grid;
+  place-items: center;
+  width: 20px;
+  height: 20px;
+  border-radius: 50%;
+  background: rgba(22, 18, 10, 0.16);
+  color: #16120a;
+  transition: background-color var(--t-fast) linear;
+}
+.areas__remove:hover:not(:disabled) {
+  background: rgba(22, 18, 10, 0.34);
+}
+
+.areas__clear {
+  padding: 6px 4px;
+  background: none;
+  color: var(--text-faint);
+  font-size: 12px;
+  border-bottom: 1px solid transparent;
+}
+.areas__clear:hover:not(:disabled) {
+  color: var(--text-soft);
+  border-bottom-color: var(--hairline-strong);
+}
+
+/* Same shell as every .field input, with the magnifier tucked inside so it
+   reads as a search rather than another thing to fill in. */
+.areas__search {
+  display: grid;
+  grid-template-columns: auto 1fr auto;
+  align-items: center;
+  gap: 10px;
+  padding: 0 14px;
+  border-radius: var(--r-md);
+  border: 1px solid var(--hairline-strong);
+  background: rgba(0, 0, 0, 0.32);
+  color: var(--text-faint);
+  transition:
+    border-color var(--t-fast) linear,
+    box-shadow var(--t-fast) linear,
+    background-color var(--t-fast) linear;
+}
+.areas__search:focus-within {
+  border-color: var(--accent);
+  background: rgba(0, 0, 0, 0.45);
+  box-shadow: 0 0 0 4px var(--accent-soft);
+  color: var(--gold-200);
+}
+/* Beats the generic `.field input` rule above — the border and background
+   belong to the wrapper here, not the input itself. */
+.areas__search input {
+  width: 100%;
+  padding: 15px 0;
+  border: none;
+  border-radius: 0;
+  background: transparent;
+  box-shadow: none;
+  color: var(--text);
+  font-size: 15px;
+}
+.areas__search input:focus {
+  outline: none;
+  border: none;
+  background: transparent;
+  box-shadow: none;
+}
+.areas__search input:hover:not(:disabled) {
+  border: none;
+}
+
+.areas__wipe {
+  display: grid;
+  place-items: center;
+  width: 24px;
+  height: 24px;
+  border-radius: 50%;
+  color: var(--text-faint);
+  background: var(--glass-2);
+}
+.areas__wipe:hover {
+  color: var(--text);
+  background: var(--glass-3);
+}
+
+/* Capped and scrollable rather than fifty capsules pushing the rest of the
+   form off the screen. Tall enough for three rows, which is where the
+   search starts being quicker than the scroll anyway. */
+.areas__options {
+  display: flex;
+  flex-wrap: wrap;
+  gap: 8px;
+  max-height: 154px;
+  overflow-y: auto;
+  padding: 4px 2px;
+  scrollbar-width: thin;
+  scrollbar-color: var(--ink-500) transparent;
+}
+.areas__options::-webkit-scrollbar {
+  width: 6px;
+}
+.areas__options::-webkit-scrollbar-thumb {
+  border-radius: 3px;
+  background: var(--ink-500);
+}
+
+.areas__chip {
+  padding: 9px 16px;
+  border-radius: var(--r-pill);
+  border: 1px solid var(--hairline);
+  background: var(--glass-1);
+  color: var(--text-soft);
+  font-size: 13px;
+  font-weight: 500;
+  transition:
+    color var(--t-fast) linear,
+    border-color var(--t-fast) linear,
+    transform var(--t-fast) var(--ease-out),
+    background-color var(--t-fast) linear;
+}
+.areas__chip:hover:not(:disabled) {
+  color: var(--gold-100);
+  border-color: var(--accent-line);
+  background: var(--accent-soft);
+  transform: translateY(-1px);
+}
+
+/* The typed-in area. Dashed, so "add something new" is visibly a different
+   action from picking one off the list. */
+.areas__chip--new {
+  display: inline-flex;
+  align-items: center;
+  gap: 6px;
+  border-style: dashed;
+  border-color: var(--accent-line);
+  color: var(--gold-200);
+}
+
+.areas__empty {
+  margin: 4px 2px;
+  color: var(--text-faint);
+  font-size: 12.5px;
 }
 
 /* An expired link, or details that couldn't be loaded — information, not a

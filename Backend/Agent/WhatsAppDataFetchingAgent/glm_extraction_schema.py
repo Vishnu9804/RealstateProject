@@ -1,6 +1,8 @@
 from typing import List, Literal, Optional
 
-from pydantic import BaseModel, Field
+from pydantic import BaseModel, Field, field_validator
+
+from Agent.WhatsAppDataFetchingAgent.glm_schema_utils import coerce_bhk_field
 
 
 class GLMPropertyListing(BaseModel):
@@ -10,7 +12,10 @@ class GLMPropertyListing(BaseModel):
     not to one."""
 
     property_type: Optional[str] = Field(
-        default=None, description='e.g. "Flat", "Row House", "Shop", "Office", "Land/Plot", "Bungalow", "Warehouse"'
+        default=None,
+        description='e.g. "Flat", "Penthouse", "Row House", "Shop", "Office", "Land/Plot", "Bungalow", "Warehouse". '
+        'Give the KIND of property only — "duplex", "simplex" and "triplex" describe the internal layout, not the '
+        'type, so a "duplex flat" is a "Flat" and a "duplex penthouse" is a "Penthouse".',
     )
     bhk: Optional[str] = Field(default=None, description='Bedroom configuration as written, e.g. "2 BHK", "1 RK".')
     society_name: Optional[str] = Field(
@@ -99,6 +104,29 @@ class GLMPropertyListing(BaseModel):
     description: Optional[str] = Field(
         default=None, description="A short, factual one/two-sentence summary written from the message content only."
     )
+    information_check_reason: Optional[str] = Field(
+        default=None,
+        description="REQUIRED, written BEFORE has_enough_information (reason first, verdict second — see "
+        "INFORMATION SUFFICIENCY). Name what this property's OWN text actually gave you, e.g. \"has area "
+        "'Vesu', 2 BHK and price 45L\" or \"only the word 'Bungalow' and nothing else at all\".",
+    )
+    has_enough_information: bool = Field(
+        default=True,
+        description="FALSE only for a fragment you could extract almost nothing from — see the INFORMATION "
+        "SUFFICIENCY rules, which set a deliberately extreme bar. A property missing one, two, or even "
+        "several fields is still TRUE: incomplete listings are completely normal and are wanted as they "
+        "are. Defaults to True (fail open) if the model omits the field, so a missing signal never sends a "
+        "usable property into the review queue.",
+    )
+    source_excerpt: Optional[str] = Field(
+        default=None,
+        description="ONLY set this when has_enough_information is false; leave it null otherwise. Copy, "
+        "VERBATIM, just the part of the message text that refers to THIS property — the one line/bullet/"
+        "fragment it came from, plus any immediately adjacent wording that belongs to it. Never the whole "
+        "message (a message can list ten properties, and nine of them are not this one), never another "
+        "property's line, and never a summary in your own words. A human reads exactly this text to fill "
+        "the property's details in by hand, so copying the wrong part is worse than copying nothing.",
+    )
     area_match_reason: Optional[str] = Field(
         default=None,
         description="REQUIRED, written BEFORE in_service_area (reason first, verdict second — see SERVICE AREA "
@@ -114,6 +142,17 @@ class GLMPropertyListing(BaseModel):
         "genuinely unsure, set this to True. Defaults to True (fail open) if the model omits the field, so a "
         "missing signal never causes a wanted property to be dropped.",
     )
+
+    # See glm_schema_utils.coerce_bhk_field: GLM occasionally emits a bare
+    # JSON number for "bhk" ("bhk": 2) instead of the string the field above
+    # asks for. Coerced to "2 BHK" here, BEFORE pydantic's own str
+    # validation runs, so one cosmetic type slip on one property can never
+    # fail validation for — and silently discard — the ENTIRE batch
+    # response. That would be exactly the "wrong auto-skip silently loses
+    # real data" failure this pipeline is built everywhere else to avoid
+    # (see property_pipeline_service.py's module docstring), just triggered
+    # one layer earlier than duplicate detection.
+    _coerce_bhk = field_validator("bhk", mode="before")(coerce_bhk_field)
 
 
 class GLMPropertyExtraction(BaseModel):
@@ -135,13 +174,25 @@ class GLMPropertyExtraction(BaseModel):
         "see the classification rules in the prompt. False for anything else, including messages that merely "
         "discuss or mention a property/area without actually offering or seeking one."
     )
+    property_lines: List[str] = Field(
+        default_factory=list,
+        description="REQUIRED whenever is_property_listing is true, and written BEFORE \"properties\" — the "
+        "same reason-before-verdict discipline as listing_type_reason/area_match_reason. One SHORT entry per "
+        "distinct property: just enough of that property's own line to tell it apart from the others, a "
+        "handful of words at most (e.g. \"Olive Club Vesu 650sqft\", \"2nd VIP Road 750sqft\"). Keep each "
+        "entry brief — this is a checklist to count and identify the properties, not a transcript, and a "
+        "long copy of every line only slows the response down. Do this by walking the message top to bottom "
+        "and noting every property line you meet, BEFORE extracting any structured fields, filtering nothing "
+        "and merging nothing. \"properties\" must then contain exactly one entry per item listed here, in "
+        "the same order. Empty list if is_property_listing is false.",
+    )
     properties: List[GLMPropertyListing] = Field(
         default_factory=list,
-        description="One entry per DISTINCT property mentioned in the message. Almost always exactly one entry. "
-        "Only include more than one when the message genuinely advertises separate properties — e.g. different "
-        "society/area, different BHK, or different price for each one. Do not split a single property's details "
-        "(like separate rooms/amenities of the same flat) into multiple entries. Empty list if "
-        "is_property_listing is false.",
+        description="One entry per DISTINCT property mentioned in the message — exactly one per snippet in "
+        "\"property_lines\" above, in the same order, same count, no exceptions. Only include more than one "
+        "when the message genuinely advertises separate properties — e.g. different society/area, different "
+        "BHK, or different price for each one. Do not split a single property's details (like separate rooms/"
+        "amenities of the same flat) into multiple entries. Empty list if is_property_listing is false.",
     )
     skip_reason: Optional[str] = Field(
         default=None, description='Why is_property_listing is false, e.g. "question, not a listing", "greeting".'

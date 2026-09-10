@@ -28,9 +28,12 @@ class MatchScore(BaseModel):
     bucket: MatchBucket
     evidence_ratio: float
     is_partial_match: bool
-    # "main" | "outsider" | "needs_review" — which of the three tabs
-    # (Service/WhatsAppDataFetchingService/duplicate_detection_service.py's
-    # review_status/needs_review) this property was in when scored.
+    # "main" | "outsider" — which tab this property was in when scored, a
+    # snapshot from that moment (the property's own review_status is the
+    # live answer, which is what the dashboard reads instead). In practice
+    # never "needs_review": a flagged property is not scored at all (see
+    # matching_service._is_matchable), though the value is still written
+    # from whatever the property said, not assumed.
     property_category: str
     field_scores: Dict[str, Optional[float]] = {}
     reason: str

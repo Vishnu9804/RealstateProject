@@ -46,9 +46,9 @@ Session lifecycle, mirroring WhatsApp's "pair once, then persist" model:
   4. On success, the *session* (instagrapi's device/auth state — never the
      password, which is only ever held in memory for the duration of one
      connect attempt) is saved through Database/settings_repository.py, the
-     same generic key-value store area_filter_service/display_settings_service/
-     duplicate_detection_service already use, so a backend restart reuses
-     it instead of asking the client to log in again.
+     same generic key-value store area_filter_service/display_settings_service
+     already use, so a backend restart reuses it instead of asking the
+     client to log in again.
   5. A background loop periodically makes one cheap authenticated call to
      confirm the session is still good (and keep it warm) — if Instagram
      ever invalidates it, status flips back to "disconnected" with a clear

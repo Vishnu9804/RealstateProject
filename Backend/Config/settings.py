@@ -58,10 +58,21 @@ class Settings(BaseSettings):
     database_url: str = ""
     # Has a working default so `.env` only needs the two secrets above —
     # override with a ZAI_MODEL env var if a different model is wanted.
-    # Switched from Gemini to GLM-4.7-FlashX (Z.ai) — meaningfully cheaper
-    # per token at production volume, which is what the earlier Gemini
-    # model was costing.
-    zai_model: str = "glm-4.7-flashx"
+    # Moved off Gemini to Z.ai for cost, then off GLM-4.7-FlashX to GLM-4.6
+    # for accuracy. FlashX was chosen as "meaningfully cheaper per token at
+    # production volume", but measured head-to-head on real broker messages
+    # it could not do this job reliably:
+    #
+    #   FlashX  4/6 correct, 30-241s, fell into repetition loops, and
+    #           repeatedly counted 8 properties then returned 5 or 7
+    #   GLM-4.6 11/11 correct, 41-47s, no loops, no undercounts
+    #
+    # The volume argument also does not hold here: batching (up to 10
+    # messages per request) turns ~500 messages/day into roughly 50 calls,
+    # so the per-token premium is small in absolute terms — while a dropped
+    # property is a lost client opportunity that never reaches the
+    # dashboard. Set ZAI_MODEL=glm-4.7-flashx to go back.
+    zai_model: str = "glm-4.6"
     # OpenAI-compatible chat-completions endpoint. Override with ZAI_BASE_URL
     # only if Z.ai's regional/mainland endpoint is needed instead.
     zai_base_url: str = "https://api.z.ai/api/paas/v4/"

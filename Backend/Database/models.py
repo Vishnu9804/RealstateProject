@@ -1,9 +1,12 @@
 """SQLAlchemy ORM models for the Postgres + pgvector schema.
 
 PropertyRow mirrors EmbeddedProperty (Model/WhatsAppDataFetchingModel/embedded_property.py)
-field-for-field on purpose — kept as a plain 1:1 mapping so converting
-between the two (see the top/bottom of Database/property_repository.py) is
-mechanical, not a design decision of its own.
+field-for-field on purpose — kept as a plain mapping so converting between
+the two (see the top/bottom of Database/property_repository.py) is
+mechanical, not a design decision of its own. The one place the two shapes
+differ is the WhatsApp message metadata: EmbeddedProperty carries it flat,
+while here it lives once on WhatsAppMessageRow and is reassembled on read
+(see that class's docstring).
 
 No index is defined on the `embedding` column yet. pgvector's ANN indexes
 (ivfflat/hnsw) need real data volume to tune sensibly (an ivfflat index
@@ -18,14 +21,48 @@ from datetime import datetime
 from typing import Optional
 
 from pgvector.sqlalchemy import Vector
-from sqlalchemy import JSON, Boolean, DateTime, Float, String, Text, func
-from sqlalchemy.orm import DeclarativeBase, Mapped, mapped_column
+from sqlalchemy import JSON, Boolean, DateTime, Float, ForeignKey, String, Text, func
+from sqlalchemy.orm import DeclarativeBase, Mapped, mapped_column, relationship
 
 from Service.WhatsAppDataFetchingService.embedding_service import EMBEDDING_DIMENSIONS
 
 
 class Base(DeclarativeBase):
     pass
+
+
+class WhatsAppMessageRow(Base):
+    """One row per raw WhatsApp message. A single message can yield more
+    than one PropertyRow (see StructuredProperty.record_id's own comment),
+    and before this table existed every one of those PropertyRow's carried
+    its own full copy of the message text and sender/group metadata — for a
+    multi-property message that meant the same (often long) text duplicated
+    across every property it produced. Storing it once here and having
+    PropertyRow.source_message_id point at it (see PropertyRow.message
+    below) removes that duplication without changing anything callers see:
+    property_repository's _to_pydantic still reassembles the same flat
+    message_text/group_name/... fields onto EmbeddedProperty."""
+
+    __tablename__ = "whatsapp_messages"
+
+    id: Mapped[str] = mapped_column(String, primary_key=True)
+    group_name: Mapped[str] = mapped_column(String, nullable=False)
+    chat_type: Mapped[str] = mapped_column(String, nullable=False)
+    sender_name: Mapped[str] = mapped_column(String, nullable=False)
+    sender_saved_name: Mapped[str] = mapped_column(String, nullable=False)
+    sender_phone: Mapped[str] = mapped_column(String, nullable=False)
+    message_text: Mapped[str] = mapped_column(Text, nullable=False)
+    message_timestamp: Mapped[datetime] = mapped_column(DateTime(timezone=True), nullable=False)
+    # sha256 of the normalized message text (see Service/
+    # WhatsAppDataFetchingService/message_fingerprint.py). Indexed, because
+    # its whole purpose is a single equality lookup: "has this exact text
+    # already produced properties?", asked once per incoming message before
+    # the LLM stage runs (see property_pipeline_service._drop_duplicate_messages).
+    # Nullable only for rows written before this column existed — those
+    # simply don't participate in that check until init_db's one-time
+    # backfill fills them in.
+    text_fingerprint: Mapped[Optional[str]] = mapped_column(String(64), nullable=True, index=True)
+    created_at: Mapped[datetime] = mapped_column(DateTime(timezone=True), server_default=func.now())
 
 
 class PropertyRow(Base):
@@ -39,7 +76,14 @@ class PropertyRow(Base):
     # by property_repository._to_pydantic falling back to this row's own
     # `id`, which is unique by construction.
     record_id: Mapped[Optional[str]] = mapped_column(String, nullable=True)
-    source_message_id: Mapped[str] = mapped_column(String, nullable=False)
+    source_message_id: Mapped[str] = mapped_column(
+        String, ForeignKey("whatsapp_messages.id"), nullable=False
+    )
+    # Eager (lazy="joined"): every query that loads a PropertyRow needs its
+    # message fields too (see property_repository's _to_pydantic), so this
+    # is always fetched in the same SELECT via a JOIN rather than firing a
+    # second query per row.
+    message: Mapped["WhatsAppMessageRow"] = relationship(lazy="joined")
 
     # --- extracted by the LLM from the message text ---
     property_type: Mapped[Optional[str]] = mapped_column(String, nullable=True)
@@ -78,28 +122,21 @@ class PropertyRow(Base):
     # get/set_instagram_media_pk.
     instagram_media_pk: Mapped[Optional[str]] = mapped_column(String, nullable=True)
 
-    # --- known for certain from WhatsApp itself, not from the LLM ---
-    group_name: Mapped[str] = mapped_column(String, nullable=False)
-    chat_type: Mapped[str] = mapped_column(String, nullable=False)
-    sender_name: Mapped[str] = mapped_column(String, nullable=False)
-    sender_saved_name: Mapped[str] = mapped_column(String, nullable=False)
-    sender_phone: Mapped[str] = mapped_column(String, nullable=False)
-    message_text: Mapped[str] = mapped_column(Text, nullable=False)
-    message_timestamp: Mapped[datetime] = mapped_column(DateTime(timezone=True), nullable=False)
+    # --- known for certain from WhatsApp itself, not from the LLM: see
+    # WhatsAppMessageRow above (this table used to carry its own copy of
+    # group_name/chat_type/sender_name/sender_saved_name/sender_phone/
+    # message_text/message_timestamp; they now live on the message row this
+    # property's source_message_id points at) ---
 
     # --- "accepted" or "outsider" — the property's permanent Main/Outsider
     # home, decided by the LLM structuring stage and movable later by a
     # human (see Database/property_repository.py's update_property) ---
     review_status: Mapped[str] = mapped_column(String, nullable=False, default="accepted")
-    # --- independent flag set by the duplicate-detection stage, cleared
-    # when a human accepts the property out of the review queue ---
+    # --- independent flag: set by the LLM structuring stage when a property
+    # carries almost no usable information (see StructuredProperty.needs_review),
+    # cleared when a human files it into Main/Outsider out of the review queue ---
     needs_review: Mapped[bool] = mapped_column(Boolean, nullable=False, default=False, server_default="false")
     review_notes: Mapped[Optional[str]] = mapped_column(Text, nullable=True)
-    # record_id of the OTHER property this one might be a duplicate of — see
-    # StructuredProperty.duplicate_of_record_id. Not a foreign key: the
-    # matched property can itself later be deleted, and a dangling reference
-    # here is harmless (the review UI just fails to load it).
-    duplicate_of_record_id: Mapped[Optional[str]] = mapped_column(String, nullable=True)
 
     # --- the Landing Page page's own state — see StructuredProperty's own
     # comment on these three for what each one means and who sets it ---
@@ -107,9 +144,11 @@ class PropertyRow(Base):
     landing_page_updated_at: Mapped[Optional[datetime]] = mapped_column(DateTime(timezone=True), nullable=True)
     qualified_at: Mapped[Optional[datetime]] = mapped_column(DateTime(timezone=True), nullable=True)
 
-    # --- computed once by the embedding stage, never recomputed here ---
+    # --- computed once by the embedding stage, never recomputed here. Read
+    # by the client-property matching feature's semantic score (Service/
+    # ClientPropertyMatchingService/scoring.py), which is now the only thing
+    # that uses it. ---
     embedding: Mapped[list] = mapped_column(Vector(EMBEDDING_DIMENSIONS), nullable=False)
-    field_embeddings: Mapped[dict] = mapped_column(JSON, nullable=False, default=dict)
     embedding_model: Mapped[str] = mapped_column(String, nullable=False)
 
     created_at: Mapped[datetime] = mapped_column(DateTime(timezone=True), server_default=func.now())

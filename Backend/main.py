@@ -78,8 +78,9 @@ if sys.platform == "win32":
 from Controller.AgentManagementController.agent_controller import router as agent_router
 from Controller.ClientPropertyMatchingController.matching_controller import router as matching_router
 from Controller.WhatsAppDataFetchingController.area_filter_controller import router as area_filter_router
+from Controller.WhatsAppDataFetchingController.area_knowledge_controller import router as area_knowledge_router
+from Controller.WhatsAppDataFetchingController.broker_requirement_controller import router as broker_requirement_router
 from Controller.WhatsAppDataFetchingController.display_settings_controller import router as display_settings_router
-from Controller.WhatsAppDataFetchingController.duplicate_detection_controller import router as duplicate_detection_router
 from Controller.WhatsAppDataFetchingController.property_controller import router as property_router
 from Controller.WhatsAppDataFetchingController.whatsapp_connections_controller import router as whatsapp_connections_router
 from Controller.WhatsAppDataFetchingController.whatsapp_controller import router as whatsapp_router
@@ -94,7 +95,7 @@ from Middleware.logging_config import configure_logging
 from Middleware import step_logger
 from Service.AgentManagementService import handoff_template_service
 from Service.ClientPropertyMatchingService import scheduled_recompute_service
-from Service.WhatsAppDataFetchingService import area_filter_service, display_settings_service, duplicate_detection_service, whatsapp_service
+from Service.WhatsAppDataFetchingService import area_filter_service, area_knowledge_service, display_settings_service, whatsapp_service
 from Service.WhatsAppInquiryHandlingService import whatsapp_inquiry_service
 from Service.InstagramInquiryHandlingService import instagram_connection_service, instagram_polling_service
 
@@ -118,7 +119,6 @@ async def _init_database() -> None:
         await asyncio.to_thread(init_db)
         await asyncio.to_thread(area_filter_service.load_from_database)
         await asyncio.to_thread(display_settings_service.load_from_database)
-        await asyncio.to_thread(duplicate_detection_service.load_from_database)
         await asyncio.to_thread(instagram_connection_service.load_from_database)
         await asyncio.to_thread(handoff_template_service.load_from_database)
         step_logger.success(
@@ -155,6 +155,19 @@ async def lifespan(_app: FastAPI):
         await _init_database()
     finally:
         heartbeat.cancel()
+
+    # Loaded AFTER the database step on purpose: it canonicalises the area
+    # spellings in its file against the client's selected areas, which the
+    # step above is what restores. Has nothing to do with DATABASE_URL
+    # otherwise — the knowledge base is a plain file at the project root
+    # (see area_knowledge_service's docstring for why it lives outside
+    # Backend/) and works identically with no database configured. Wrapped
+    # because it is a by-product of the pipeline, never a prerequisite for
+    # it: a knowledge base that fails to load must not stop the server.
+    try:
+        await asyncio.to_thread(area_knowledge_service.load_from_disk)
+    except Exception as exc:  # noqa: BLE001
+        step_logger.error(f"Could not load the area knowledge base (the pipeline is unaffected): {exc!r}")
 
     step_logger.step("FastAPI server is up. Launching WhatsApp connections in the background...")
     # whatsapp_service owns wiring the property-message handler AND starting
@@ -241,9 +254,10 @@ app.add_middleware(GZipMiddleware, minimum_size=1024)
 app.include_router(whatsapp_router, prefix="/api")
 app.include_router(whatsapp_connections_router, prefix="/api")
 app.include_router(area_filter_router, prefix="/api")
+app.include_router(area_knowledge_router, prefix="/api")
 app.include_router(display_settings_router, prefix="/api")
-app.include_router(duplicate_detection_router, prefix="/api")
 app.include_router(property_router, prefix="/api")
+app.include_router(broker_requirement_router, prefix="/api")
 app.include_router(whatsapp_inquiry_router, prefix="/api")
 app.include_router(inquiry_form_router, prefix="/api")
 app.include_router(phone_verification_router, prefix="/api")

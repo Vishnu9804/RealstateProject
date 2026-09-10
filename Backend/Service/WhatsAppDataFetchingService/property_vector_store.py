@@ -1,19 +1,16 @@
-"""Storage abstraction for accepted/under-review properties — the one
-place duplicate_detection_service.py and property_pipeline_service.py go
-to store and search properties. They never know or care which backend is
-actually active underneath:
+"""Storage abstraction for stored properties — the one place
+property_pipeline_service.py goes to store and read properties. It never
+knows or cares which backend is actually active underneath:
 
-  - DATABASE_URL unset (the default, until the final "connect the
-    database" step): falls back to the in-memory brute-force
-    implementation this module has had since Step 6/7 — the exact same
-    code, unchanged, already covered by tests/test_duplicate_detection.py.
+  - DATABASE_URL unset: falls back to the in-memory implementation this
+    module has had since Step 6/7 — the exact same code, unchanged.
   - DATABASE_URL set: delegates to Database/property_repository.py
     (Postgres + pgvector).
 
-This is also, deliberately, the ONLY place accepted/under-review properties
-are held — the same data this module searches for similarity is the same
-data the API reads for display. There is no second, separate copy to keep
-in sync, in either mode.
+This is also, deliberately, the ONLY place stored properties are held — the
+same data this module reads for the pipeline is the same data the API reads
+for display. There is no second, separate copy to keep in sync, in either
+mode.
 """
 
 from __future__ import annotations
@@ -21,11 +18,10 @@ from __future__ import annotations
 from datetime import datetime, timezone
 from typing import Any, Dict, List, Optional, Tuple
 
-import numpy as np
-
 from Database import property_repository
 from Database.session import is_database_configured
 from Model.WhatsAppDataFetchingModel.embedded_property import EmbeddedProperty
+from Service.WhatsAppDataFetchingService import message_fingerprint
 
 _MAX_STORED_PROPERTIES = 1000
 
@@ -35,6 +31,13 @@ _properties: List[EmbeddedProperty] = []
 # PropertyRow.updated_at, since EmbeddedProperty itself carries no timestamp.
 # Only ever read by get_properties_version below.
 _version_counter = 0
+# In-memory fallback's stand-in for the indexed whatsapp_messages.text_fingerprint
+# column: message content fingerprint -> the id of the message that produced
+# properties under it. Only ever read by find_message_id_by_fingerprint below.
+# Deliberately NOT trimmed alongside _properties — a fingerprint is ~64 bytes
+# and forgetting one would let an already-seen message through the pre-LLM
+# duplicate check.
+_message_fingerprints: Dict[str, str] = {}
 
 
 def add_property(prop: EmbeddedProperty) -> None:
@@ -44,25 +47,24 @@ def add_property(prop: EmbeddedProperty) -> None:
     global _version_counter
     _version_counter += 1
     _properties.append(prop)
+    if message_fingerprint.is_fingerprintable(prop.message_text):
+        _message_fingerprints.setdefault(
+            message_fingerprint.fingerprint(prop.message_text), prop.source_message_id
+        )
     if len(_properties) > _MAX_STORED_PROPERTIES:
         del _properties[: len(_properties) - _MAX_STORED_PROPERTIES]
 
 
-def find_top_candidates(vector: List[float], k: int) -> List[Tuple[EmbeddedProperty, float]]:
-    """Returns up to `k` existing properties ranked by whole-property
-    embedding similarity, highest first — RETRIEVAL only. The final
-    duplicate/new decision is made field-by-field in
-    Service/WhatsAppDataFetchingService/duplicate_detection_service.py, which re-ranks these candidates
-    rather than trusting this ordering directly."""
+def find_message_id_by_fingerprint(text_fingerprint: str) -> Optional[str]:
+    """The id of an already-stored WhatsApp message whose text matches this
+    fingerprint, or None — what the pre-LLM exact-duplicate check asks (see
+    property_pipeline_service._drop_duplicate_messages). In database mode
+    this is a single indexed lookup that transfers no message text at all;
+    see Service/WhatsAppDataFetchingService/message_fingerprint.py for why
+    the question is asked this way rather than by comparing texts."""
     if is_database_configured():
-        return property_repository.find_top_candidates(vector, k)
-
-    if not _properties:
-        return []
-    query = np.array(vector)
-    scored = [(candidate, float(np.dot(query, np.array(candidate.embedding)))) for candidate in _properties]
-    scored.sort(key=lambda pair: pair[1], reverse=True)
-    return scored[:k]
+        return property_repository.find_message_id_by_fingerprint(text_fingerprint)
+    return _message_fingerprints.get(text_fingerprint)
 
 
 def get_all_properties(limit: int = 100) -> List[EmbeddedProperty]:
@@ -74,7 +76,7 @@ def get_all_properties(limit: int = 100) -> List[EmbeddedProperty]:
 def get_all_properties_summary(limit: int = 100) -> List[Tuple[EmbeddedProperty, int]]:
     """Same rows as get_all_properties, paired with each one's photo count,
     without the Postgres implementation ever loading the (potentially huge)
-    image_urls/embedding/field_embeddings columns for them — see
+    image_urls/embedding columns for them — see
     Database/property_repository.py's own version of this for why. The
     in-memory fallback already holds everything in RAM, so there's nothing
     to defer here; counting is free either way."""
@@ -140,24 +142,12 @@ def get_property(record_id: str) -> Optional[EmbeddedProperty]:
     return None
 
 
-def find_by_source_message_id(source_message_id: str, limit: int = 5) -> List[EmbeddedProperty]:
-    """Every property (there can be more than one — see
-    StructuredProperty.record_id's own comment on why source_message_id
-    isn't unique per property) that came from the same WhatsApp message.
-    Only used to recover a legacy duplicate-review flag's matched candidate
-    from free text — see property_pipeline_service._resolve_legacy_duplicate_match."""
-    if is_database_configured():
-        return property_repository.find_by_source_message_id(source_message_id, limit)
-    return [prop for prop in _properties if prop.source_message_id == source_message_id][:limit]
-
-
 def update_property(
     record_id: str,
     review_status: Optional[str] = None,
     needs_review: Optional[bool] = None,
     content_updates: Optional[Dict[str, Any]] = None,
     embedding: Optional[List[float]] = None,
-    field_embeddings: Optional[dict] = None,
     embedding_model: Optional[str] = None,
     on_landing_page: Optional[bool] = None,
     qualified_at: Optional[datetime] = None,
@@ -169,7 +159,6 @@ def update_property(
             needs_review=needs_review,
             content_updates=content_updates,
             embedding=embedding,
-            field_embeddings=field_embeddings,
             embedding_model=embedding_model,
             on_landing_page=on_landing_page,
             qualified_at=qualified_at,
@@ -187,8 +176,6 @@ def update_property(
                         setattr(prop, key, value)
             if embedding is not None:
                 prop.embedding = embedding
-            if field_embeddings is not None:
-                prop.field_embeddings = field_embeddings
             if embedding_model is not None:
                 prop.embedding_model = embedding_model
             if on_landing_page is not None:

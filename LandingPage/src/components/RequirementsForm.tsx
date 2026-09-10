@@ -1,19 +1,35 @@
 import { useEffect, useRef, useState, type FocusEvent, type FormEvent } from "react";
 import { ApiError } from "../api/client";
 import { inquiryFormApi } from "../api/inquiryFormApi";
+import { landingApi } from "../api/landingApi";
 import { phoneVerificationApi } from "../api/phoneVerificationApi";
 import type { InquiryChannel, InquiryFormPrefill, InquiryFormSubmission } from "../api/types";
 import { usePhoneVerification } from "../hooks/usePhoneVerification";
-import { isPlausiblePhone } from "../lib/format";
+import { formatBudgetDisplay, isPlausiblePhone, parseCompactInr } from "../lib/format";
+import { joinAreas, mergeAreas, splitAreas, SURAT_AREAS } from "../lib/suratAreas";
+import AreaPicker from "./AreaPicker";
 import { IconAlert, IconArrowRight, IconCheck } from "./Icons";
 import PhoneVerifyDialog from "./PhoneVerifyDialog";
 
-const PROPERTY_TYPES = ["Flat", "Row House", "Bungalow", "Shop", "Office", "Land/Plot", "Warehouse", "Other"];
+const PROPERTY_TYPES = [
+  "Flat",
+  "Penthouse",
+  "Row House",
+  "Bungalow",
+  "Shop",
+  "Office",
+  "Land/Plot",
+  "Warehouse",
+  "Other",
+];
 
+// No "Sell": this site exists to put buyers and tenants in front of what the
+// client has listed, and a seller's enquiry has no requirements to match a
+// property against — the matcher ignores the value anyway (see scoring.py's
+// _purpose_gate, which refuses to guess for anything outside buy/rent).
 const PURPOSES = [
   { value: "buy", label: "Buy" },
   { value: "rent", label: "Rent" },
-  { value: "sell", label: "Sell" },
 ] as const;
 
 const PHONE_REQUIRED_MESSAGE =
@@ -101,9 +117,15 @@ export default function RequirementsForm({
   const [purpose, setPurpose] = useState("");
   const [propertyType, setPropertyType] = useState("");
   const [bhk, setBhk] = useState("");
+  // Both budget fields hold whatever is currently ON SCREEN — raw digits
+  // while focused, the short "2cr"/"85L" form once blurred. The number the
+  // backend gets is parsed back out of it on submit (parseCompactInr), so
+  // there is only ever one string per field and no way for a display value
+  // and a "real" value to drift apart.
   const [budgetMin, setBudgetMin] = useState("");
   const [budgetMax, setBudgetMax] = useState("");
-  const [preferredAreas, setPreferredAreas] = useState("");
+  const [preferredAreas, setPreferredAreas] = useState<string[]>([]);
+  const [areaOptions, setAreaOptions] = useState<string[]>(SURAT_AREAS);
   const [additionalRequirements, setAdditionalRequirements] = useState(contextNote ?? "");
 
   const [phoneError, setPhoneError] = useState<string | null>(null);
@@ -211,17 +233,58 @@ export default function RequirementsForm({
     setPurpose(data.purpose ?? "");
     setPropertyType(data.property_type ?? "");
     setBhk(data.bhk ?? "");
-    setBudgetMin(data.budget_min_inr != null ? String(data.budget_min_inr) : "");
-    setBudgetMax(data.budget_max_inr != null ? String(data.budget_max_inr) : "");
-    setPreferredAreas(data.preferred_areas ?? "");
+    // Straight into the short form — a returning visitor reads their own
+    // saved budget back as "85L", never as a wall of zeroes to count.
+    setBudgetMin(data.budget_min_inr != null ? formatBudgetDisplay(data.budget_min_inr) : "");
+    setBudgetMax(data.budget_max_inr != null ? formatBudgetDisplay(data.budget_max_inr) : "");
+    setPreferredAreas(splitAreas(data.preferred_areas));
     // Their own saved note wins over the "interested in X" seed — that seed
     // is a convenience, not something worth overwriting real text with.
     setAdditionalRequirements(data.additional_requirements ?? contextNote ?? "");
   }
 
+  /**
+   * The area capsules the picker offers: this site's own Surat list, plus
+   * whichever areas the client has configured on the internal Settings page
+   * that it doesn't already cover. Merged, never replaced — the built-in
+   * list is what keeps the picker looking populated when only a handful are
+   * configured, and a Settings area already on it is not added twice (see
+   * lib/suratAreas.ts's mergeAreas).
+   *
+   * Failure is silent on purpose: the picker still works perfectly off the
+   * built-in list, so a dead settings call is not worth a visible error on
+   * a form someone is trying to fill in.
+   */
+  useEffect(() => {
+    let cancelled = false;
+    landingApi
+      .getAreas()
+      .then((areas) => {
+        if (!cancelled && areas.length > 0) setAreaOptions(mergeAreas(SURAT_AREAS, areas));
+      })
+      .catch(() => undefined);
+    return () => {
+      cancelled = true;
+    };
+  }, []);
+
   function onPhoneChange(value: string) {
     setPhone(value);
     if (phoneError && isPlausiblePhone(value)) setPhoneError(null);
+  }
+
+  /** Blur: show the short form ("2cr"). Focus: put the full number back, so
+   *  editing means editing digits rather than picking apart "2.5cr". Text
+   *  that isn't a number at all is left exactly as typed — this is a
+   *  convenience, not a validator. */
+  function onBudgetBlur(value: string, set: (next: string) => void) {
+    const amount = parseCompactInr(value);
+    if (amount !== null) set(formatBudgetDisplay(amount));
+  }
+
+  function onBudgetFocus(value: string, set: (next: string) => void) {
+    const amount = parseCompactInr(value);
+    if (amount !== null) set(String(amount));
   }
 
   /** Opens the code dialog, which sends the code the moment it mounts.
@@ -297,7 +360,7 @@ export default function RequirementsForm({
       return;
     }
     if (!purpose) {
-      setFormError("Please choose whether you want to buy, rent or sell.");
+      setFormError("Please choose whether you want to buy or rent.");
       return;
     }
 
@@ -314,9 +377,12 @@ export default function RequirementsForm({
       purpose: purpose || null,
       property_type: propertyType || null,
       bhk: bhk.trim() || null,
-      budget_min_inr: budgetMin ? Number(budgetMin) : null,
-      budget_max_inr: budgetMax ? Number(budgetMax) : null,
-      preferred_areas: preferredAreas.trim() || null,
+      // The full rupee figure, always — "2cr" is only ever what the FIELD
+      // shows. Nothing downstream (the matcher's budget curve, the agent
+      // hand-off, the stored client record) sees anything but the number.
+      budget_min_inr: parseCompactInr(budgetMin),
+      budget_max_inr: parseCompactInr(budgetMax),
+      preferred_areas: joinAreas(preferredAreas) || null,
       additional_requirements: additionalRequirements.trim() || null,
     };
     const verificationToken = verification.isVerified(phone) ? verification.verified?.token : undefined;
@@ -553,48 +619,66 @@ export default function RequirementsForm({
           <input
             id={`${idPrefix}-bhk`}
             type="text"
-            placeholder="e.g. 2 BHK"
+            placeholder="e.g. 3 BHK, 2/3 BHK, 3+ BHK"
             value={bhk}
             onChange={(event) => setBhk(event.target.value)}
             maxLength={40}
           />
+          {/* Each of these maps to a shape the matcher actually parses (see
+              normalization.py's parse_bhk_intent) — they are examples of
+              real behaviour, not decoration: "3+" opens up everything
+              larger, "exactly 3" closes it down again. */}
+          <span className="field__hint">
+            Write it however you think of it — “3 BHK”, “2 or 3 BHK”, “3+ BHK”, “exactly 3 BHK”, “1 RK”, “studio”.
+          </span>
         </div>
 
         <div className="field">
           <span className="field__label">Budget (₹)</span>
           <div className="req-form__pair">
+            {/* "text", not "number": the field shows "2cr" the moment it
+                loses focus, and a number input refuses to display that at
+                all (it blanks itself instead). inputMode still brings up a
+                numeric keypad, which is what is actually typed into it. */}
             <input
-              type="number"
-              inputMode="numeric"
-              min={0}
+              type="text"
+              inputMode="decimal"
+              autoComplete="off"
               placeholder="Min"
               aria-label="Minimum budget"
               value={budgetMin}
               onChange={(event) => setBudgetMin(event.target.value)}
+              onFocus={() => onBudgetFocus(budgetMin, setBudgetMin)}
+              onBlur={() => onBudgetBlur(budgetMin, setBudgetMin)}
+              maxLength={20}
             />
             <input
-              type="number"
-              inputMode="numeric"
-              min={0}
+              type="text"
+              inputMode="decimal"
+              autoComplete="off"
               placeholder="Max"
               aria-label="Maximum budget"
               value={budgetMax}
               onChange={(event) => setBudgetMax(event.target.value)}
+              onFocus={() => onBudgetFocus(budgetMax, setBudgetMax)}
+              onBlur={() => onBudgetBlur(budgetMax, setBudgetMax)}
+              maxLength={20}
             />
           </div>
+          <span className="field__hint">
+            Type the full amount — we'll shorten it for you (20000000 becomes 2cr, 8500000 becomes 85L).
+          </span>
         </div>
 
         <div className="field">
           <label className="field__label" htmlFor={`${idPrefix}-areas`}>
             Preferred areas
           </label>
-          <input
+          <AreaPicker
             id={`${idPrefix}-areas`}
-            type="text"
-            placeholder="e.g. Althan, Vesu"
-            value={preferredAreas}
-            onChange={(event) => setPreferredAreas(event.target.value)}
-            maxLength={200}
+            selected={preferredAreas}
+            onChange={setPreferredAreas}
+            options={areaOptions}
           />
         </div>
 

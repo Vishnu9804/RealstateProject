@@ -11,11 +11,23 @@ export interface WhatsAppStatusResponse {
   joined_group_count: number;
   monitored_group_count: number;
   monitored_personal_chat_count: number;
+  /** The Requirement selection's own counts, kept separate from the two
+   *  above and never added to them — the same chat can be selected on both
+   *  sides, so a combined total would double-count it. */
+  monitored_requirement_group_count: number;
+  monitored_requirement_personal_chat_count: number;
   captured_message_count: number;
   qualified_message_count: number;
   buffered_message_count: number;
+  /** Messages waiting in the requirement pipeline's own batch buffer —
+   *  a completely separate counter/timer from buffered_message_count. */
+  buffered_requirement_message_count: number;
   structured_property_count: number;
-  duplicate_property_count: number;
+  broker_requirement_count: number;
+  /** Re-posted messages recognised by their content fingerprint and skipped
+   *  before the LLM stage ever ran — see Backend/Service/
+   *  WhatsAppDataFetchingService/message_fingerprint.py. */
+  duplicate_message_count: number;
   needs_review_property_count: number;
   outsider_property_count: number;
   /** Opaque "did the property list change" token — a count + latest-edit
@@ -24,6 +36,9 @@ export interface WhatsAppStatusResponse {
    *  delete. Powers the Properties/Landing Page pages' change-driven
    *  refresh. */
   properties_version: string;
+  /** The same opaque change token, for the broker-requirements list —
+   *  powers the Broker Requirements page's change-driven refresh. */
+  requirements_version: string;
 }
 
 export interface WhatsAppGroup {
@@ -51,6 +66,12 @@ export interface WhatsAppConnection {
   joined_groups: WhatsAppGroup[];
   property_group_jids: string[];
   property_personal_numbers: string[];
+  /** The Requirement selection — an entirely separate set from the Property
+   *  one above, over the same joined_groups. Overlap is allowed and
+   *  meaningful: a chat picked for Property must NOT render as already
+   *  selected in the Requirement picker, and vice versa. */
+  requirement_group_jids: string[];
+  requirement_personal_numbers: string[];
   /** True for the not-yet-paired onboarding slot the QR code currently
    *  belongs to — not a real, usable connection yet. */
   is_pending: boolean;
@@ -259,7 +280,11 @@ export interface MatchedProperty {
   bucket: MatchBucket;
   evidence_ratio: number;
   is_partial_match: boolean;
-  property_category: "main" | "outsider" | "needs_review";
+  /** Snapshot of which tab the property sat in when it was scored. Never
+   *  read by the UI (it reads the property's live review_status instead —
+   *  see ClientMatchesDialog's categoryOf) and never "needs_review" in
+   *  practice, since a flagged property is not scored at all. */
+  property_category: string;
   field_scores: Record<string, number | null>;
   reason: string;
   property_type: string | null;
@@ -361,14 +386,16 @@ export interface PropertyRecord {
   message_text: string;
   message_timestamp: string;
   review_status: "accepted" | "outsider";
+  /** True for a property the LLM could extract almost nothing from — no
+   *  location, no price, no configuration. Deliberately rare (see
+   *  Backend/Model/.../structured_property.py's own comment). Such a
+   *  property is excluded from client-property matching until a human
+   *  completes it by hand and files it into Main or Outsider; while
+   *  flagged, `description` holds just the part of the original message
+   *  that refers to THIS property, so there is something short to work
+   *  from — `message_text` is still the whole message, as always. */
   needs_review: boolean;
   review_notes: string | null;
-  /** record_id of the OTHER property this one might be a duplicate of —
-   *  set by the duplicate-detection stage alongside needs_review. Null when
-   *  flagged for an unrelated reason (e.g. outside every client-selected
-   *  area, with no duplicate candidate involved). Used to fetch and show a
-   *  side-by-side comparison in the Needs review dialog's Comparison tab. */
-  duplicate_of_record_id: string | null;
   formatted_timestamp: string;
   /** The Landing Page page's own state — see Backend/Model/.../
    *  structured_property.py's own comment on these three. */
@@ -404,4 +431,127 @@ export interface LandingLeadRecord {
    *  which can come back empty for exactly that reason). */
   property_label: string | null;
   created_at: string | null;
+}
+
+/* --------------------------------------------------- broker requirements */
+
+/**
+ * Mirrors Backend/Model/WhatsAppDataFetchingModel/broker_requirement.py's
+ * BrokerRequirementRecord — one DEMAND (someone looking for a property),
+ * the mirror image of PropertyRecord's supply.
+ *
+ * Shaped differently from a property on purpose: a requirement has a BUDGET
+ * range rather than a price, a SIZE range rather than one carpet area, and
+ * none of the property-side state (no review_status, no needs_review, no
+ * embeddings, no landing-page flags, no photos) — see that model's own
+ * docstring for why each of those is absent rather than merely unused.
+ */
+export interface BrokerRequirementRecord {
+  record_id: string;
+  source_message_id: string;
+  requirement_type: string | null;
+  bhk: string | null;
+  /** The primary locality — simply the first of preferred_areas. */
+  area_name: string | null;
+  /** Every locality the requirement named, exactly as written. */
+  preferred_areas: string[];
+  society_name: string | null;
+  address: string | null;
+  carpet_area_min: number | null;
+  carpet_area_max: number | null;
+  carpet_area_unit: string | null;
+  budget_text: string | null;
+  budget_min_inr: number | null;
+  budget_max_inr: number | null;
+  listing_type: "Sale" | "Rent";
+  furnishing: string | null;
+  contact_name: string | null;
+  contact_phone: string | null;
+  description: string | null;
+  group_name: string;
+  chat_type: "group" | "personal";
+  sender_name: string;
+  sender_saved_name: string;
+  sender_phone: string;
+  message_text: string;
+  message_timestamp: string;
+  formatted_timestamp: string;
+}
+
+/* ------------------------------------------------- area knowledge base */
+
+/**
+ * Mirrors Backend/Model/WhatsAppDataFetchingModel/area_knowledge.py — the
+ * internal area knowledge base the property pipeline grows as a SIDE EFFECT
+ * of LLM structuring, and the analysis of how well it is doing. Read-only:
+ * nothing in the app writes to it, the pipeline does (see
+ * Backend/Service/WhatsAppDataFetchingService/area_knowledge_service.py).
+ */
+export interface AreaKnowledgeTotals {
+  batches_observed: number;
+  /** Visits to the knowledge base — one per property the LLM produced. */
+  properties_seen: number;
+  properties_recorded: number;
+  properties_skipped_no_area: number;
+  properties_all_known: number;
+  properties_with_new_places: number;
+  /** Place STRINGS checked. One visit usually checks several. */
+  place_lookups: number;
+  place_hits: number;
+  place_writes: number;
+  cross_area_collisions: number;
+  hit_rate: number;
+  area_count: number;
+  place_count: number;
+  first_observed_at: string | null;
+  last_observed_at: string | null;
+  stats_since: string | null;
+}
+
+export interface AreaKnowledgeBreakdown {
+  /** "area" | "address" | "society", or "accepted" | "outsider". */
+  name: string;
+  lookups: number;
+  hits: number;
+  writes: number;
+  hit_rate: number;
+}
+
+export interface AreaKnowledgeArea {
+  area: string;
+  place_count: number;
+  places: string[];
+  lookups: number;
+  hits: number;
+  writes: number;
+  hit_rate: number;
+  properties: number;
+  first_seen: string | null;
+  last_updated: string | null;
+}
+
+export interface AreaKnowledgeEvent {
+  at: string;
+  area: string | null;
+  source_message_id: string | null;
+  record_id: string | null;
+  review_status: string | null;
+  lookups: number;
+  hits: number;
+  writes: number;
+  hit_places: string[];
+  new_places: string[];
+  collisions: string[];
+  skipped: boolean;
+  skip_reason: string | null;
+}
+
+export interface AreaKnowledgeOverview {
+  /** Absolute path of the .py knowledge base file on the server. */
+  file_path: string;
+  totals: AreaKnowledgeTotals;
+  by_source: AreaKnowledgeBreakdown[];
+  by_status: AreaKnowledgeBreakdown[];
+  areas: AreaKnowledgeArea[];
+  events: AreaKnowledgeEvent[];
 }

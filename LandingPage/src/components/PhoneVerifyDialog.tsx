@@ -1,7 +1,7 @@
 import { useCallback, useEffect, useRef, useState, type ClipboardEvent, type KeyboardEvent } from "react";
 import { phoneVerificationApi } from "../api/phoneVerificationApi";
 import { ApiError } from "../api/client";
-import { IconAlert, IconClose, IconWhatsApp } from "./Icons";
+import { IconAlert, IconCheck, IconClose, IconEdit, IconRefresh, IconWhatsApp } from "./Icons";
 
 const CODE_LENGTH = 4;
 const RESEND_SECONDS = 30;
@@ -216,27 +216,37 @@ export default function PhoneVerifyDialog({
   return (
     <div className="otp-backdrop" role="presentation" onMouseDown={onClose}>
       <div
-        className="otp"
+        className={`otp${error ? " is-shaking" : ""}`}
         role="dialog"
         aria-modal="true"
         aria-labelledby="otp-title"
+        aria-describedby="otp-sub"
         onMouseDown={(event) => event.stopPropagation()}
       >
+        {/* The gold hairline along the top edge, and the soft bloom behind
+            the icon — the two things that make this read as the same
+            surface as the property cards rather than a browser alert. */}
+        <span className="otp__edge" aria-hidden="true" />
+        <span className="otp__bloom" aria-hidden="true" />
+
         <button type="button" className="otp__close" onClick={onClose} aria-label="Close">
-          <IconClose size={18} />
+          <IconClose size={17} />
         </button>
 
         <span className="otp__icon">
-          <IconWhatsApp size={20} />
+          <IconWhatsApp size={22} />
         </span>
 
         <h3 className="otp__title" id="otp-title">
-          Confirm your WhatsApp number
+          Confirm your number
         </h3>
-        <p className="otp__sub">
-          {sending ? "Sending a 4-digit code to " : "We've sent a 4-digit code to "}
-          <strong>{phone}</strong>. Enter it below — it'll show right in your WhatsApp notification.
+        <p className="otp__sub" id="otp-sub">
+          {sending ? "Sending a 4-digit code to" : "We've sent a 4-digit code to"}
         </p>
+        <span className="otp__phone">
+          {phone}
+          {!sending && <IconCheck size={13} />}
+        </span>
 
         <div className="otp__boxes" onPaste={onPaste}>
           {digits.map((digit, index) => (
@@ -262,34 +272,41 @@ export default function PhoneVerifyDialog({
           ))}
         </div>
 
-        {error && (
-          <p className="otp__error" role="alert">
-            <IconAlert size={15} />
-            {error}
-          </p>
-        )}
-        {!error && note && <p className="otp__note">{note}</p>}
+        {/* One reserved slot for both, so the dialog never jumps by a line
+            height the moment a code is wrong or resent. */}
+        <div className="otp__msg" aria-live="polite">
+          {error ? (
+            <p className="otp__error" role="alert">
+              <IconAlert size={15} />
+              {error}
+            </p>
+          ) : note ? (
+            <p className="otp__note">
+              <IconCheck size={14} />
+              {note}
+            </p>
+          ) : (
+            <p className="otp__hint">It shows right in your WhatsApp notification.</p>
+          )}
+        </div>
 
-        <button
-          type="button"
-          className="btn btn--primary otp__done"
-          onClick={onDone}
-          disabled={!complete || checking}
-        >
+        <button type="button" className="btn btn--primary otp__done" onClick={onDone} disabled={!complete || checking}>
           {checking ? <span className="spinner" /> : null}
-          {checking ? "Checking…" : "Done"}
+          {checking ? "Checking…" : "Confirm number"}
         </button>
 
         <div className="otp__actions">
           <button
             type="button"
-            className="otp__link"
+            className="otp__action"
             onClick={() => void sendCode(true)}
             disabled={sending || secondsLeft > 0}
           >
+            <IconRefresh size={15} />
             {secondsLeft > 0 ? `Resend in ${secondsLeft}s` : "Resend code"}
           </button>
-          <button type="button" className="otp__link" onClick={onClose}>
+          <button type="button" className="otp__action" onClick={onClose}>
+            <IconEdit size={15} />
             Change number
           </button>
         </div>

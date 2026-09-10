@@ -54,14 +54,17 @@ import {
    Categories & sections
    ======================================================================== */
 
-/** The three drawers a property can be sitting in on the Properties page.
- *  Matching deliberately scores properties in ALL THREE (a great fit that
- *  happens to be flagged for review is still a great fit — see
- *  Backend/Service/ClientPropertyMatchingService/scoring.py), so this
- *  dialog shows all three rather than hiding two behind a warning note. */
-export type PropertyCategory = "main" | "outsider" | "needs_review";
+/** The two drawers a matchable property can be sitting in on the
+ *  Properties page. There is deliberately no "needs review" drawer here:
+ *  a flagged property is one almost nothing could be extracted from, so
+ *  it is excluded from matching entirely (see Backend/Service/
+ *  ClientPropertyMatchingService/matching_service.py's _is_matchable) and
+ *  there would never be anything to show under such a tab. The Needs
+ *  review queue lives only on the Properties page, where a human completes
+ *  a flagged property and files it into one of these two. */
+export type PropertyCategory = "main" | "outsider";
 
-/** What the dialog's top row can be showing — the three review drawers
+/** What the dialog's top row can be showing — the two review drawers
  *  above, or the Completed view, which is not a drawer at all (a property
  *  there already had its visit; which drawer it happens to sit in on the
  *  Properties page stopped being the relevant fact about it the moment
@@ -73,7 +76,6 @@ export type DialogView = PropertyCategory | "completed";
 const CATEGORY_LABEL: Record<PropertyCategory, string> = {
   main: "Main",
   outsider: "Outsider",
-  needs_review: "Needs review",
 };
 
 /** Ordered exactly as the sections render: hand-picked properties first
@@ -111,23 +113,27 @@ const FIELD_SCORE_LABEL: Record<string, string> = {
 };
 
 /** Read the category off whatever is freshest. Both PropertyRecord and
- *  MatchedProperty carry `review_status`/`needs_review`; the match's own
- *  cached `property_category` is a snapshot from scoring time, so it is
- *  never consulted here — moving a property between drawers has to show
- *  up immediately, without a recompute. */
-function categoryOf(record: { review_status: "accepted" | "outsider"; needs_review: boolean }): PropertyCategory {
-  if (record.needs_review) return "needs_review";
+ *  MatchedProperty carry `review_status`; the match's own cached
+ *  `property_category` is a snapshot from scoring time, so it is never
+ *  consulted here — moving a property between drawers has to show up
+ *  immediately, without a recompute.
+ *
+ *  `needs_review` is deliberately NOT consulted: it is a flag, not a
+ *  drawer. Scored matches are never flagged (they're filtered out
+ *  server-side), but a hand-picked or website-enquired property can be —
+ *  and one a human or a client deliberately chose belongs on screen, filed
+ *  under the drawer it actually sits in, with the "Flagged for review"
+ *  note below spelling out that its data is thin. */
+function categoryOf(record: { review_status: "accepted" | "outsider" }): PropertyCategory {
   return record.review_status === "outsider" ? "outsider" : "main";
 }
 
-/** What a "move to X" button actually writes. `needs_review` is a flag on
- *  top of the accepted/outsider split rather than a third value of it, so
- *  moving OUT of review has to say which side it lands on, and moving INTO
- *  review leaves the existing side untouched. */
-function categoryPatch(target: PropertyCategory): { review_status?: "accepted" | "outsider"; needs_review: boolean } {
-  if (target === "main") return { review_status: "accepted", needs_review: false };
-  if (target === "outsider") return { review_status: "outsider", needs_review: false };
-  return { needs_review: true };
+/** What a "move to X" button actually writes. Both drawers clear
+ *  `needs_review`: filing a property into Main or Outsider IS how the
+ *  review flag gets resolved (see the Properties page's Needs review
+ *  dialog, which offers exactly these two actions). */
+function categoryPatch(target: PropertyCategory): { review_status: "accepted" | "outsider"; needs_review: boolean } {
+  return { review_status: target === "outsider" ? "outsider" : "accepted", needs_review: false };
 }
 
 /** One card in the dialog — a scored match, a hand-picked property, or
@@ -166,7 +172,7 @@ type AssignFlow = { step: "pick" } | { step: "handoff"; assignments: AgentAssign
  * focused dialog over the client list the operator was already reading.
  *
  * The shape of the screen mirrors how the work actually goes: pick the
- * drawer you're working out of (Main / Outsider / Needs review), read down
+ * drawer you're working out of (Main / Outsider), read down
  * the properties in it strongest-first, tick the ones worth showing, and
  * hand them off — without ever losing your place in the Inquiries table.
  */
@@ -265,7 +271,7 @@ export default function ClientMatchesDialog({
       .finally(() => setLoadingMatches(false));
 
     // Allowed to fail quietly (no error surfaced): the Completed tab just
-    // keeps whatever it last had — Main/Outsider/Needs review don't
+    // keeps whatever it last had — Main/Outsider don't
     // depend on this succeeding, and a genuine backend outage already
     // shows up loudly enough via the matches fetch above.
     matchingApi
@@ -452,7 +458,7 @@ export default function ClientMatchesDialog({
   }, [result, manualPropertyIds, manualIdSet, propertiesById, completedByProperty, websiteIdSet]);
 
   const countByCategory = useMemo(() => {
-    const counts: Record<PropertyCategory, number> = { main: 0, outsider: 0, needs_review: 0 };
+    const counts: Record<PropertyCategory, number> = { main: 0, outsider: 0 };
     for (const item of items) counts[item.category] += 1;
     return counts;
   }, [items]);
@@ -539,7 +545,7 @@ export default function ClientMatchesDialog({
     }
   }
 
-  /** Move one property between Main / Outsider / Needs review. Patched
+  /** Move one property between Main and Outsider. Patched
    *  locally rather than re-running the whole matching pipeline: a
    *  property changing drawers changes nothing about how well it fits
    *  this client, only where it is filed. */
@@ -693,7 +699,7 @@ export default function ClientMatchesDialog({
               ariaLabel="Which properties to show"
               value={category === "completed" ? null : category}
               onChange={setCategory}
-              options={(["main", "outsider", "needs_review"] as PropertyCategory[]).map((key) => ({
+              options={(["main", "outsider"] as PropertyCategory[]).map((key) => ({
                 value: key,
                 label: `${CATEGORY_LABEL[key]}${countByCategory[key] ? ` (${countByCategory[key]})` : ""}`,
               }))}
@@ -1264,7 +1270,7 @@ function PropertyMatchDetailDialog({
   ][];
   // Every drawer except the one it is already in — the whole point of
   // these buttons is that they never present a no-op.
-  const moveTargets = (["main", "outsider", "needs_review"] as PropertyCategory[]).filter(
+  const moveTargets = (["main", "outsider"] as PropertyCategory[]).filter(
     (target) => target !== item.category,
   );
 
@@ -1281,7 +1287,7 @@ function PropertyMatchDetailDialog({
             <div className="detail-modal__badges">
               {match && <Badge tone={BUCKET_TONE[match.bucket]}>{Math.round(match.score * 100)}% match</Badge>}
               {match?.is_partial_match && <Badge tone="info">Partial data</Badge>}
-              <Badge tone={item.category === "main" ? "ok" : item.category === "outsider" ? "info" : "warn"}>
+              <Badge tone={item.category === "main" ? "ok" : "info"}>
                 {CATEGORY_LABEL[item.category]}
               </Badge>
               {item.section === "manual" && <Badge tone="info">Manually added</Badge>}

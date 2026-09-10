@@ -1,6 +1,7 @@
 """Generic key-value settings persistence backing the various *_settings
-services (Service/WhatsAppDataFetchingService/area_filter_service.py, Service/WhatsAppDataFetchingService/display_settings_service.py,
-Service/WhatsAppDataFetchingService/duplicate_detection_service.py) once DATABASE_URL is set.
+services (Service/WhatsAppDataFetchingService/area_filter_service.py,
+Service/WhatsAppDataFetchingService/display_settings_service.py) once
+DATABASE_URL is set.
 
 Each service still owns its own shape and in-memory default — this module
 only adds a durable read/write layer underneath, loaded once at startup

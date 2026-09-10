@@ -15,13 +15,14 @@ severe mismatch still lands low and visible (Low bucket) rather than
 silently disappearing.
 
 `soft_score` is an evidence-weighted average of the remaining fields —
-budget, location, BHK, and a whole-vector semantic sanity check — mirroring
-Service/WhatsAppDataFetchingService/duplicate_detection_service.py's
-_score_candidate: any field that isn't comparable on both sides scores
-None and is excluded from both the numerator and the weight total, never
-treated as a match or a mismatch. `evidence_ratio` (how much of the total
-weight was actually backed by data) drives the `is_partial_match` flag the
-dashboard shows alongside the bucket.
+budget, location, BHK, and a whole-vector semantic sanity check: any field
+that isn't comparable on both sides scores None and is excluded from both
+the numerator and the weight total, never treated as a match or a mismatch.
+`evidence_ratio` (how much of the total weight was actually backed by data)
+drives the `is_partial_match` flag the dashboard shows alongside the bucket.
+
+Only properties that are actually matchable ever reach this — a property in
+the review queue is filtered out upstream (see matching_service._is_matchable).
 """
 
 from __future__ import annotations
@@ -44,18 +45,16 @@ from Service.ClientPropertyMatchingService import normalization
 _SOFT_WEIGHTS = {"budget": 0.40, "location": 0.30, "bhk": 0.20, "semantic": 0.10}
 
 HIGH_CUTOFF = 0.90
-MEDIUM_CUTOFF = 0.85
+MEDIUM_CUTOFF = 0.80
 # Below this, a property isn't shown as a match at all (score_property
 # returns None) — not even as "Low". Per the feature owner's explicit
-# requirement: only 80-100% should ever reach the dashboard.
-LOW_CUTOFF = 0.80
+# requirement: only 70-100% should ever reach the dashboard.
+LOW_CUTOFF = 0.70
 PARTIAL_EVIDENCE_CUTOFF = 0.6
 
 # Calibration points for graduated budget proximity — (ratio-away-from-the
-# nearest bound, score). Piecewise-linear between them, same technique as
-# duplicate_detection_service.py's _numeric_field_score but with more
-# anchor points for a smoother curve matching the feature spec's own
-# worked examples (₹89L/90L max -> ~1.0, ₹92L -> ~0.88, ₹96L -> ~somewhat
+# nearest bound, score). Piecewise-linear between them, with enough anchor
+# points for a smooth curve matching the feature spec's own worked examples (₹89L/90L max -> ~1.0, ₹92L -> ~0.88, ₹96L -> ~somewhat
 # outside, ₹1.10cr -> poor fit, ₹1.5cr -> very poor fit).
 _OVER_BUDGET_ANCHORS: Tuple[Tuple[float, float], ...] = ((0.0, 1.0), (0.05, 0.85), (0.15, 0.55), (0.30, 0.25), (0.60, 0.05))
 _UNDER_BUDGET_ANCHORS: Tuple[Tuple[float, float], ...] = ((0.0, 1.0), (0.15, 0.85), (0.40, 0.65), (1.0, 0.5))

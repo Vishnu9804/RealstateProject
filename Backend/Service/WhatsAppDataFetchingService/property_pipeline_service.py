@@ -1,48 +1,48 @@
 """Owns the "back half" of the property pipeline: receiving flushed message
 batches from the buffering stage (Service/WhatsAppDataFetchingService/message_buffer_service.py),
-running them through the LLM structuring stage (Agent/
-property_structurer.py), the embedding stage (Service/WhatsAppDataFetchingService/embedding_service.py),
-and the duplicate-detection stage (Service/WhatsAppDataFetchingService/duplicate_detection_service.py),
-then storing the result (Service/WhatsAppDataFetchingService/property_vector_store.py) for the
-Controller layer to read.
+dropping messages whose text has already been processed, running the rest
+through the LLM structuring stage (Agent/property_structurer.py) and the
+embedding stage (Service/WhatsAppDataFetchingService/embedding_service.py),
+then storing the result (Service/WhatsAppDataFetchingService/property_vector_store.py)
+for the Controller layer to read.
+
+DUPLICATES are handled once, at the front, on the raw message text rather
+than on the extracted properties (see _drop_duplicate_messages). Brokers
+re-post a listing by forwarding the identical text, so an exact content
+match is the signal that actually occurs in this domain — and catching it
+before the LLM runs means a re-post costs one indexed lookup instead of a
+structuring call, an embedding, and a scoring pass. A re-post whose text
+was edited even slightly is deliberately NOT caught here: it goes through
+the normal pipeline and is judged on its extracted fields like anything
+else.
 
 Every structured property is embedded exactly once, right here, right after
-structuring. Those vectors are what the duplicate check compares against,
-and — for properties that get stored — they are the exact vectors that end
-up in the store (later: pgvector). Nothing downstream ever re-embeds or
-recomputes them.
+structuring — the exact vector that ends up in the store, read later only
+by client-property match scoring (Service/ClientPropertyMatchingService/
+scoring.py). Nothing downstream ever re-embeds or recomputes it.
 
-Duplicate detection has three outcomes (see Model/duplicate_verdict.py), and
-NONE of them ever discards a property — a wrong auto-skip silently loses
-real data with no way to recover it, which is strictly worse than asking a
-human to glance at an extra row:
-  - HIGH_CONFIDENCE_DUPLICATE: still stored, flagged needs_review=True (same
-    review queue as UNCERTAIN) with review_notes and duplicate_of_record_id
-    pointing at the specific existing property it matched, so a human makes
-    the final call instead of the algorithm silently deleting a listing on
-    its own.
-  - HIGH_CONFIDENCE_NEW: stored as a normal property, needs_review=False.
-  - UNCERTAIN: stored, flagged with needs_review=True, review_notes
-    explaining why, and duplicate_of_record_id pointing at the candidate it
-    was uncertain against (when the uncertainty came from a specific
-    candidate rather than e.g. thin evidence generally).
+needs_review means one thing now: the LLM could barely extract anything
+from this property's own text (see Agent/WhatsAppDataFetchingAgent/
+property_structurer.py's PART 4 and _apply_information_review). It is a
+tiny queue by construction — a property missing a field or two is a normal
+property, not a review case — and a flagged property is excluded from
+client-property matching entirely, since there is nothing in it to match
+on. Nothing is ever discarded: the property is stored with the relevant
+part of the original message in `description`, so a human can fill in the
+details by hand and file it into Main or Outsider.
 
 needs_review is independent of review_status ("accepted" vs "outsider",
 i.e. which of the Main/Outsider tabs a property belongs to) — a property
 can arrive here already review_status="outsider", set by the LLM
-structuring stage (Agent/WhatsAppDataFetchingAgent/property_structurer.py)
-when it falls outside every client-selected area, and separately be
-flagged needs_review=True by an UNCERTAIN or HIGH_CONFIDENCE_DUPLICATE
-verdict. Both flags are shown at once; a human resolving the review flag
-(see update_property below) never changes which tab (Main/Outsider) the
-property is in — resolving needs_review and picking Main/Outsider happen
-together only when a human explicitly does both (see the Needs review
-dialog's Move to Main / Move to Outsider actions).
+structuring stage when it falls outside every client-selected area, and
+separately be flagged needs_review=True for carrying almost no
+information. Both are shown at once; a human resolving the review flag
+(see update_property below) picks Main or Outsider explicitly as they do
+it (see the Needs review dialog's Move to Main / Move to Outsider actions).
 """
 
 from __future__ import annotations
 
-import re
 import uuid
 from datetime import datetime, timezone
 from typing import Any, Dict, List, Optional
@@ -50,24 +50,24 @@ from typing import Any, Dict, List, Optional
 from Agent.WhatsAppDataFetchingAgent import property_structurer
 from Database.property_repository import EDITABLE_CONTENT_FIELDS
 from Middleware import step_logger
-from Model.WhatsAppDataFetchingModel.duplicate_verdict import DuplicateVerdict
 from Model.WhatsAppDataFetchingModel.embedded_property import EmbeddedProperty
 from Model.WhatsAppDataFetchingModel.property_record import PropertyRecord
 from Model.WhatsAppDataFetchingModel.structured_property import StructuredProperty
 from Model.WhatsAppDataFetchingModel.whatsapp_message import WhatsAppChatMessage
 from Service.WhatsAppDataFetchingService import (
+    area_knowledge_service,
     display_settings_service,
-    duplicate_detection_service,
     embedding_service,
+    message_fingerprint,
     property_vector_store,
     timestamp_formatting,
 )
 
-_duplicate_count = 0
-_uncertain_count = 0
+_duplicate_message_count = 0
+_needs_review_count = 0
 _outsider_count = 0
 
-_NON_API_FIELDS = {"embedding", "field_embeddings", "embedding_model"}
+_NON_API_FIELDS = {"embedding", "embedding_model"}
 
 
 def handle_batch_ready(batch: List[WhatsAppChatMessage]) -> None:
@@ -75,14 +75,24 @@ def handle_batch_ready(batch: List[WhatsAppChatMessage]) -> None:
     messages gathered, or 1 hour elapsed). Already runs on its own thread
     (see message_buffer_service.py), so the blocking GLM call here never
     stalls WhatsApp message capture."""
-    global _duplicate_count, _uncertain_count, _outsider_count
+    global _needs_review_count, _outsider_count
+
+    received_count = len(batch)
+    batch = _drop_duplicate_messages(batch)
+    if not batch:
+        step_logger.success(
+            f"Batch processed: all {received_count} message(s) were text this pipeline has already "
+            "structured before — nothing sent to GLM"
+        )
+        return
 
     step_logger.step(f"Sending batch of {len(batch)} qualified message(s) to GLM for structuring")
     properties = property_structurer.structure_batch(batch)
 
-    accepted_count = 0
-    uncertain_count_this_batch = 0
-    duplicate_count_this_batch = 0
+    _record_area_knowledge(properties)
+
+    stored_count = 0
+    needs_review_this_batch = 0
     outsider_count_this_batch = 0
 
     for prop in properties:
@@ -90,71 +100,108 @@ def handle_batch_ready(batch: List[WhatsAppChatMessage]) -> None:
         if embedded is None:
             continue
 
-        is_outsider = embedded.review_status == "outsider"
-        if is_outsider:
+        if embedded.review_status == "outsider":
             outsider_count_this_batch += 1
             _outsider_count += 1
 
-        result = duplicate_detection_service.check_duplicate(embedded)
-
-        if result.verdict == DuplicateVerdict.HIGH_CONFIDENCE_DUPLICATE:
-            duplicate_count_this_batch += 1
-            _duplicate_count += 1
-            # Flagged for review instead of skipped — an algorithm being
-            # "sure" is still a guess, and a wrong skip here would delete a
-            # real listing with no trace and no way for a human to catch it.
-            # See the module docstring above.
-            duplicate_reason = (
-                f"High-confidence duplicate of message {result.matched_source_message_id!r}: {result.reason}"
-            )
-            embedded.needs_review = True
-            embedded.duplicate_of_record_id = result.matched_record_id
-            embedded.review_notes = (
-                f"{embedded.review_notes} | {duplicate_reason}" if embedded.review_notes else duplicate_reason
-            )
+        # Set by the structuring stage, not decided here — see
+        # property_structurer._apply_information_review, which is also
+        # where the bar for it is enforced.
+        if embedded.needs_review:
+            needs_review_this_batch += 1
+            _needs_review_count += 1
             step_logger.warn(
-                f"High-confidence duplicate flagged for review, not skipped (source message "
-                f"{embedded.source_message_id!r}): {result.reason}"
+                f"Property from message {embedded.source_message_id!r} carries almost no usable "
+                f"information — stored in the review queue for a human to complete: "
+                f"{embedded.review_notes or 'no reason given'}"
             )
-        elif result.verdict == DuplicateVerdict.UNCERTAIN:
-            uncertain_count_this_batch += 1
-            _uncertain_count += 1
-            # needs_review is independent of review_status (Main/Outsider) —
-            # an outsider property flagged UNCERTAIN still shows up in the
-            # Outsider tab, just also pulled into the review queue until a
-            # human resolves it. review_notes is a single free-text field
-            # shared by both judgments, so an outsider's existing reason
-            # (set by the LLM structuring stage) is appended to rather than
-            # overwritten — losing why it was marked outsider would be a
-            # real regression, not just a cosmetic one.
-            duplicate_reason = f"Possible duplicate of message {result.matched_source_message_id!r}: {result.reason}"
-            embedded.needs_review = True
-            embedded.duplicate_of_record_id = result.matched_record_id
-            embedded.review_notes = (
-                f"{embedded.review_notes} | {duplicate_reason}" if embedded.review_notes else duplicate_reason
-            )
-            step_logger.warn(
-                f"Uncertain match, flagged for review (source message {embedded.source_message_id!r}): "
-                f"{result.reason}"
-            )
-        else:
-            step_logger.info(f"New property accepted (source message {embedded.source_message_id!r}): {result.reason}")
 
         property_vector_store.add_property(embedded)
-        accepted_count += 1
+        stored_count += 1
 
     step_logger.success(
-        f"Batch processed: {accepted_count} propert{'y' if accepted_count == 1 else 'ies'} stored "
-        f"({uncertain_count_this_batch + duplicate_count_this_batch} flagged for review — "
-        f"{duplicate_count_this_batch} high-confidence duplicate(s), {uncertain_count_this_batch} uncertain — "
-        f"{outsider_count_this_batch} outsider), out of {len(batch)} message(s)"
+        f"Batch processed: {stored_count} propert{'y' if stored_count == 1 else 'ies'} stored "
+        f"({needs_review_this_batch} needing review, {outsider_count_this_batch} outsider), out of "
+        f"{len(batch)} message(s) structured"
+        + (f" ({received_count - len(batch)} skipped as already-seen text)" if received_count != len(batch) else "")
     )
+
+
+def _drop_duplicate_messages(batch: List[WhatsAppChatMessage]) -> List[WhatsAppChatMessage]:
+    """Filters out every message whose text this pipeline has already turned
+    into properties, BEFORE the LLM stage runs — the client's own
+    observation is that a re-posted listing arrives as the identical text,
+    so this is where the duplicates in this domain actually get caught.
+
+    Two things are checked, in this order, because neither covers the other:
+      - within THIS batch, so the same text forwarded twice a minute apart
+        (both copies still unstored) is structured once, not twice;
+      - against what is already stored, via one indexed fingerprint lookup
+        per message (Service/WhatsAppDataFetchingService/message_fingerprint.py)
+        — no stored message text is ever loaded or compared.
+
+    A message whose text has no fingerprint (blank/whitespace-only after
+    normalization) is always kept: there is nothing to match it on, and
+    silently dropping it would be a guess. Same for anything the lookup
+    can't answer — this only ever skips a message it positively recognises."""
+    global _duplicate_message_count
+
+    kept: List[WhatsAppChatMessage] = []
+    seen_in_batch: Dict[str, str] = {}
+
+    for message in batch:
+        if not message_fingerprint.is_fingerprintable(message.text):
+            kept.append(message)
+            continue
+        text_fingerprint = message_fingerprint.fingerprint(message.text)
+
+        earlier_in_batch = seen_in_batch.get(text_fingerprint)
+        if earlier_in_batch is not None:
+            _duplicate_message_count += 1
+            step_logger.info(
+                f"Message {message.message_id!r} is the same text as {earlier_in_batch!r}, earlier in this "
+                "same batch — structuring it once instead of twice."
+            )
+            continue
+
+        already_stored = property_vector_store.find_message_id_by_fingerprint(text_fingerprint)
+        if already_stored is not None:
+            _duplicate_message_count += 1
+            step_logger.info(
+                f"Message {message.message_id!r} is an exact re-post of already-processed message "
+                f"{already_stored!r} — skipped before the LLM stage, so it costs nothing to structure."
+            )
+            continue
+
+        seen_in_batch[text_fingerprint] = message.message_id
+        kept.append(message)
+
+    return kept
+
+
+def _record_area_knowledge(properties: List[StructuredProperty]) -> None:
+    """Side-channel off the structuring stage: every property the LLM just
+    produced is shown to the internal area knowledge base, which files its
+    place strings (area/address/society) under its area and records whether
+    it already knew each one. See area_knowledge_service.
+
+    Deliberately observational and deliberately inert. It runs BEFORE the
+    embedding/duplicate/store stages purely so it sees the LLM's output
+    exactly as produced, and it returns the same list untouched — the
+    properties it inspects are not modified, no verdict changes, and the LLM
+    prompt is not affected in any way. This is why the whole call is
+    swallowed here: the knowledge base is a by-product, and a by-product must
+    never be able to cost a real listing. Everything downstream runs
+    identically whether this succeeds, fails, or is deleted outright."""
+    try:
+        area_knowledge_service.observe_properties(properties)
+    except Exception as exc:  # noqa: BLE001
+        step_logger.error(f"Area knowledge base update failed (properties are unaffected): {exc!r}")
 
 
 def _embed(prop: StructuredProperty) -> Optional[EmbeddedProperty]:
     try:
         vector = embedding_service.embed_property(prop)
-        field_vectors = embedding_service.embed_property_fields(prop)
     except Exception as exc:  # noqa: BLE001
         # A single bad embedding must never cost the whole batch — the
         # other properties in it are still perfectly good.
@@ -163,7 +210,6 @@ def _embed(prop: StructuredProperty) -> Optional[EmbeddedProperty]:
     return EmbeddedProperty(
         **prop.model_dump(),
         embedding=vector,
-        field_embeddings=field_vectors,
         embedding_model=embedding_service.EMBEDDING_MODEL_NAME,
     )
 
@@ -183,61 +229,7 @@ def get_property(record_id: str) -> Optional[PropertyRecord]:
     prop = property_vector_store.get_property(record_id)
     if prop is None:
         return None
-    _resolve_legacy_duplicate_match(prop)
     return _to_record(prop)
-
-
-# Matches the message id duplicate_detection_service embeds into review_notes
-# for both HIGH_CONFIDENCE_DUPLICATE ("High-confidence duplicate of message
-# '...'") and UNCERTAIN ("Possible duplicate of message '...'") — see
-# handle_batch_ready above for exactly where these strings are built.
-_MATCHED_MESSAGE_ID_PATTERN = re.compile(r"duplicate of message '([^']+)'")
-
-
-def _resolve_legacy_duplicate_match(prop: EmbeddedProperty) -> None:
-    """Best-effort recovery for rows flagged before duplicate_of_record_id
-    existed as a field: the specific candidate they were matched against was
-    only ever recorded as free text inside review_notes (a source message
-    id), never as a structured, directly-fetchable reference. Without this,
-    the Needs review dialog's Comparison tab has nothing to show for any
-    property flagged before this field was added, even though the exact
-    match is right there in the text.
-
-    Pulls the message id back out of review_notes and looks up a property
-    that came from that same message, patching `prop.duplicate_of_record_id`
-    in place — never persisted, so this costs nothing on the hot polling
-    path (get_properties never calls this) and simply re-resolves on every
-    detail-dialog open. A property flagged going forward already has this
-    field set directly by handle_batch_ready, so this is purely a bridge for
-    older rows, not the normal path."""
-    if prop.duplicate_of_record_id or not prop.needs_review or not prop.review_notes:
-        return
-    match = _MATCHED_MESSAGE_ID_PATTERN.search(prop.review_notes)
-    if not match:
-        return
-    source_message_id = match.group(1)
-    candidates = [
-        candidate
-        for candidate in property_vector_store.find_by_source_message_id(source_message_id)
-        if candidate.record_id != prop.record_id
-    ]
-    if not candidates:
-        return
-    if len(candidates) == 1:
-        prop.duplicate_of_record_id = candidates[0].record_id
-        return
-    # A single WhatsApp message can yield more than one property (see
-    # StructuredProperty.record_id's own comment) — when it does, the message
-    # id alone doesn't say which of them was the actual match. Re-run the
-    # same field-level scoring duplicate detection used at flag time (see
-    # duplicate_detection_service.check_duplicate) against each candidate and
-    # pick the highest-scoring one, rather than an arbitrary one.
-    settings = duplicate_detection_service.get_settings()
-    best = max(
-        candidates,
-        key=lambda candidate: duplicate_detection_service._score_candidate(prop, candidate, settings)[0],
-    )
-    prop.duplicate_of_record_id = best.record_id
 
 
 def get_property_count() -> int:
@@ -257,9 +249,9 @@ def create_property(content_fields: Dict[str, Any]) -> PropertyRecord:
     the dialog itself (see property_controller.py's PropertyContentFields).
 
     Stored directly as review_status="accepted", needs_review=False — a
-    human deliberately adding a property already knows about it, so running
-    it back through duplicate detection would only risk second-guessing
-    their own input."""
+    human deliberately adding a property already knows what is in it, so
+    second-guessing how complete it is would be pointless. The review queue
+    is only ever populated by the LLM structuring stage."""
     fields = {key: value for key, value in content_fields.items() if key in EDITABLE_CONTENT_FIELDS}
     now = datetime.now(timezone.utc)
     structured = StructuredProperty(
@@ -306,9 +298,11 @@ def update_property(
 
     content_updates triggers a full embedding recompute, over the property's
     OTHER fields merged with the edit — never a partial/stale vector — so a
-    hand-edited property stays exactly as comparable for duplicate detection
-    as one the LLM structured, with no second, out-of-date vector left
-    behind from before the edit.
+    hand-edited property stays exactly as comparable for client-property
+    match scoring as one the LLM structured, with no second, out-of-date
+    vector left behind from before the edit. This is what makes completing a
+    Needs review property by hand actually put it in front of matching
+    clients.
 
     An edit that adds a photo or an Instagram reel link also bumps
     qualified_at — the Landing Page page's Ready to Add tab sorts newly
@@ -322,12 +316,11 @@ def update_property(
         existing = property_vector_store.get_property(record_id)
         if existing is None:
             return None
-        merged_data = existing.model_dump(exclude={"embedding", "field_embeddings", "embedding_model"})
+        merged_data = existing.model_dump(exclude={"embedding", "embedding_model"})
         merged_data.update(filtered_updates)
         merged_structured = StructuredProperty(**merged_data)
         embedding_kwargs = {
             "embedding": embedding_service.embed_property(merged_structured),
-            "field_embeddings": embedding_service.embed_property_fields(merged_structured),
             "embedding_model": embedding_service.EMBEDDING_MODEL_NAME,
         }
         if filtered_updates.get("image_urls") or filtered_updates.get("instagram_reel_url"):
@@ -364,12 +357,16 @@ def _to_record(prop: EmbeddedProperty, image_count: Optional[int] = None) -> Pro
     )
 
 
-def get_duplicate_count() -> int:
-    return _duplicate_count
+def get_duplicate_message_count() -> int:
+    """Messages skipped by _drop_duplicate_messages since this process
+    started — i.e. re-posts that cost no LLM call at all."""
+    return _duplicate_message_count
 
 
-def get_uncertain_count() -> int:
-    return _uncertain_count
+def get_needs_review_count() -> int:
+    """Properties this process has stored into the review queue for
+    carrying almost no usable information."""
+    return _needs_review_count
 
 
 def get_outsider_count() -> int:

@@ -1,27 +1,22 @@
-from typing import Dict, List
+from typing import List
 
 from Model.WhatsAppDataFetchingModel.structured_property import StructuredProperty
 
 
 class EmbeddedProperty(StructuredProperty):
-    """A StructuredProperty plus the vector embeddings computed from it.
+    """A StructuredProperty plus the vector embedding computed from it.
 
-    `embedding` is the whole-property vector, used only for candidate
-    RETRIEVAL (Service/WhatsAppDataFetchingService/property_vector_store.py) and the exact vector later
-    written to the database's `vector` column (database step) — never
-    recomputed at either point.
+    Read by exactly one thing: the client-property matching feature's
+    semantic score (Service/ClientPropertyMatchingService/scoring.py), which
+    compares this against a client's own requirement vector. It is computed
+    once, right after structuring (Service/WhatsAppDataFetchingService/
+    property_pipeline_service.py), recomputed only when a human edits the
+    property's content, and is the exact vector stored in the database's
+    `vector` column — never re-derived at read time.
 
-    `field_embeddings` holds one additional vector per semantic field
-    (society_name/address/area_name — see Service/WhatsAppDataFetchingService/embedding_service.py's
-    FIELD_EMBEDDING_NAMES), computed once at the same time, so the
-    field-level duplicate comparison (Service/WhatsAppDataFetchingService/duplicate_detection_service.py)
-    never re-embeds an existing property's fields when comparing a new one
-    against it.
-
-    Neither is exposed through the public API (see PropertyRecord) — both
-    are internal details with no use in a UI.
+    Not exposed through the public API (see PropertyRecord) — an internal
+    detail with no use in a UI.
     """
 
     embedding: List[float]
-    field_embeddings: Dict[str, List[float]] = {}
     embedding_model: str

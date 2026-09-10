@@ -4,7 +4,18 @@ import Scene from "./Scene";
 import CommandPalette, { useCommandPalette } from "./CommandPalette";
 import { ThemeToggle } from "./ui/Theme";
 import { Tip } from "./ui/Primitives";
-import { IconCommand, IconGrid, IconLink, IconSliders, IconUserCheck, IconUsers, IconWindow, IconZap } from "./ui/Icons";
+import {
+  IconCommand,
+  IconDatabase,
+  IconGrid,
+  IconInbox,
+  IconLink,
+  IconSliders,
+  IconUserCheck,
+  IconUsers,
+  IconWindow,
+  IconZap,
+} from "./ui/Icons";
 import { useAppStatus } from "../state/StatusProvider";
 import { describeWhatsAppStatus, statusTone } from "../lib/whatsappStatus";
 import { useOnline, useScrolled } from "../hooks/useUi";
@@ -12,10 +23,15 @@ import { useOnline, useScrolled } from "../hooks/useUi";
 const NAV = [
   { to: "/", end: true, label: "Connection", icon: IconLink },
   { to: "/dashboard", end: false, label: "Properties", icon: IconGrid },
+  // Sits next to Properties on purpose: the two are the supply and demand
+  // halves of the same intake, and reading one usually means reading the
+  // other.
+  { to: "/requirements", end: false, label: "Broker Requirements", icon: IconInbox },
   { to: "/landing-page", end: false, label: "Landing Page", icon: IconWindow },
   { to: "/inquiries", end: false, label: "Inquiries", icon: IconUsers },
   { to: "/agents", end: false, label: "Agents", icon: IconUserCheck },
   { to: "/settings", end: false, label: "Settings", icon: IconSliders },
+  { to: "/temporary", end: false, label: "Temporary", icon: IconDatabase },
 ];
 
 export default function Layout() {
@@ -66,7 +82,7 @@ export default function Layout() {
             {
               id: "stat-summary",
               label: `${status.structured_property_count} properties captured`,
-              hint: `${status.needs_review_property_count} need review · ${status.duplicate_property_count} flagged as likely duplicates`,
+              hint: `${status.needs_review_property_count} need review · ${status.duplicate_message_count} re-posts skipped`,
               group: "Status",
               icon: <IconZap size={16} />,
               run: () => {},

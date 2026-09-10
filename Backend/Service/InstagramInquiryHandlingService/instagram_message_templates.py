@@ -17,6 +17,23 @@ from Model.WhatsAppDataFetchingModel.structured_property import StructuredProper
 
 COMMENT_REPLY_TEXT = "Plzz check your DM! 📩"
 
+# Reply used when the commenter has ALREADY given a WhatsApp number (their
+# instagram_contacts row has linked_phone set). Nothing is DMed to them any
+# more — every further message goes to WhatsApp — so pointing them at their
+# Instagram inbox would be pointing at a message that is never coming.
+COMMENT_REPLY_ON_WHATSAPP_TEXT = (
+    "Thanks for reaching out! 🙌 Our team will get in touch with you on WhatsApp."
+)
+
+# Sent instead of repeating the whole three-message sequence when someone
+# comments AGAIN on a property they've already been DMed about. It exists so
+# that "Plzz check your DM!" is always backed by a real, new DM landing in
+# their inbox — a repeat commenter used to get the reply and nothing else.
+DM_REPEAT_NUDGE_TEXT = (
+    "Hi again! 👋 Saw your comment — the details for this property are right here in our chat above. "
+    "Let us know if you'd like to know anything more 🙂"
+)
+
 DM_FOLLOWUP_TEXT = "Does this match what you're looking for? 🙂"
 
 DM_MORE_OPTIONS_TEMPLATE = (

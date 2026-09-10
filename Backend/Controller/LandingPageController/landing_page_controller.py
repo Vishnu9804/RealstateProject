@@ -3,9 +3,10 @@ app on its own port).
 
 The only endpoints on this API that an anonymous visitor's browser calls, so
 they are deliberately the narrowest ones here: two reads that can only ever
-return published properties, and one write that can only ever append a lead.
-Nothing in this router can change a property, and nothing it returns can
-carry an address or a contact — that guarantee lives in the response models
+return published properties, one that returns nothing but locality names,
+and one write that can only ever append a lead. Nothing in this router can
+change a property, and nothing it returns can carry an address or a contact
+— that guarantee lives in the response models
 (Model/LandingPageModel/landing_property.py), not in the caller.
 
 Thin by design; everything real is in
@@ -21,6 +22,14 @@ from Model.LandingPageModel.landing_property import LandingPropertyDetail, Landi
 from Service.LandingPageService import landing_page_service
 
 router = APIRouter(prefix="/landing", tags=["landing-page"])
+
+
+@router.get("/areas", response_model=List[str])
+def get_tracked_areas() -> List[str]:
+    """Locality names only — the areas configured on the Settings page, so
+    the public form's area picker offers what the pipeline actually tracks
+    alongside its own built-in Surat list."""
+    return landing_page_service.get_tracked_areas()
 
 
 @router.get("/properties", response_model=List[LandingPropertySummary])

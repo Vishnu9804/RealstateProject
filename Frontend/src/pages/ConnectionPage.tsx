@@ -305,15 +305,19 @@ function WhatsAppTab() {
       />
 
       <div className="two-col">
+        {/* One role, two pipelines. A number added here has its groups
+            fetched once and then feeds whichever of Property / Requirement
+            the two pickers below point it at — which is why the block is
+            named for both rather than for Property alone. */}
         <RoleBlock
-          title="Number for Property"
+          title="Numbers for Property/Requirement"
           icon={<IconBuilding size={15} />}
           members={propertyConns}
           allConnections={confirmed}
           busyId={pendingRoleAction}
           onAdd={(c) => toggleRole(c, "property", true)}
           onRemove={(c) => toggleRole(c, "property", false)}
-          emptyHint="No number is feeding the property pipeline yet. Tap + and pick a connected number."
+          emptyHint="No number is feeding the property or requirement pipeline yet. Tap + and pick a connected number."
         />
         <RoleBlock
           title="Number for Client Inquiry"
@@ -327,14 +331,22 @@ function WhatsAppTab() {
         />
       </div>
 
-      <PropertyMonitoringPanel propertyConns={propertyConns} onSaved={load} />
+      {/* Two independent selections over the SAME numbers and the SAME
+          group list. They are rendered as two separate panels, each seeded
+          only from its own server-side selection, so a group ticked for
+          Property never shows up ticked for Requirement (and vice versa) —
+          picking the same group on both sides is allowed and is what routes
+          a chat's listings and its requirements to their own pipelines. */}
+      <MonitoringPanel kind="property" propertyConns={propertyConns} onSaved={load} />
+      <MonitoringPanel kind="requirement" propertyConns={propertyConns} onSaved={load} />
 
       {inquiryConns.length > 0 && (
         <Note tone="info" icon={<IconInfo size={16} />}>
           Only personal (1:1) chats on {inquiryConns.length === 1 ? "this number" : "these numbers"} are watched for
-          client inquiries — group messages are never used for inquiries, on any number, whether or not Property is
-          also watching them. If a number is used for Property too, whichever personal numbers Property has claimed
-          there are also left out of Inquiry so nothing is handled twice.
+          client inquiries — group messages are never used for inquiries, on any number, whether or not Property or
+          Requirement is also watching them. If a number is used for Property/Requirement too, every personal number
+          claimed by either of those selections is left out of Inquiry, so a broker feeding the pipelines never gets
+          an automated client reply and nothing is handled twice.
         </Note>
       )}
 
@@ -726,8 +738,21 @@ function NumberPickerMenu({
 }
 
 /* =========================================================================
-   Property monitoring — groups aggregated across every Property-role
+   Monitoring selection — groups aggregated across every Property-role
    connection, plus a shared personal-numbers list.
+
+   Rendered TWICE, once per kind: "property" (which chats feed the property
+   pipeline) and "requirement" (which chats feed the broker-requirement
+   pipeline). Both read the same numbers and the same joined-group list, and
+   both write through the same shape of endpoint — but each instance is
+   seeded ONLY from its own server-side selection and saves ONLY its own.
+
+   That independence is the whole point, and it is why this is one
+   parameterised component rather than two hand-copied ones: the two panels
+   must behave identically in every respect except which set they read and
+   write, so a group ticked under Property renders completely untouched
+   under Requirement, and selecting it there too is a normal, expected
+   thing to do rather than something the UI quietly prevents or pre-fills.
    ========================================================================= */
 
 interface TaggedGroup extends WhatsAppGroup {
@@ -741,7 +766,73 @@ function setsEqual(a: Set<string>, b: Set<string>): boolean {
   return true;
 }
 
-function PropertyMonitoringPanel({ propertyConns, onSaved }: { propertyConns: WhatsAppConnection[]; onSaved: () => void | Promise<void> }) {
+type MonitoringKind = "property" | "requirement";
+
+/** Everything that differs between the two panels, in one place — so the
+ *  behaviour below can be read once and trusted for both. */
+const MONITORING_CONFIG: Record<
+  MonitoringKind,
+  {
+    eyebrow: string;
+    heading: string;
+    blurb: string;
+    groupsHint: string;
+    personalHint: string;
+    emptyTitle: string;
+    emptyBody: string;
+    savedTitle: string;
+    stopWarning: string;
+    groupJidsOf: (connection: WhatsAppConnection) => string[];
+    personalNumbersOf: (connection: WhatsAppConnection) => string[];
+    save: (connectionId: string, groupJids: string[], personalNumbers: string[]) => Promise<WhatsAppConnection>;
+  }
+> = {
+  property: {
+    eyebrow: "Property monitoring",
+    heading: "Which chats feed the property pipeline?",
+    blurb:
+      "Groups from every number assigned above, in one list. Anything selected here is watched for property listings — messages that read as a requirement are never stored as properties, wherever they arrive.",
+    groupsHint: "Groups watched for property listings",
+    personalHint: "Applies across every number assigned to Property/Requirement.",
+    emptyTitle: "No number assigned yet",
+    emptyBody:
+      "Add a connected number to the Numbers for Property/Requirement block above to pick which groups feed the property pipeline.",
+    savedTitle: "Property monitoring updated",
+    stopWarning: "Nothing selected — saving this will stop property capture on these numbers.",
+    groupJidsOf: (connection) => connection.property_group_jids,
+    personalNumbersOf: (connection) => connection.property_personal_numbers,
+    save: (connectionId, groupJids, personalNumbers) =>
+      whatsappApi.updatePropertySelection(connectionId, groupJids, personalNumbers),
+  },
+  requirement: {
+    eyebrow: "Requirement monitoring",
+    heading: "Which chats feed the requirement pipeline?",
+    blurb:
+      "The same groups and numbers as above, selected independently. A chat can be watched for both — its listings go to Properties and its requirements go to Broker Requirements. Picking a group here does not select it above, and picking it above does not select it here.",
+    groupsHint: "Groups watched for broker requirements",
+    personalHint: "Applies across every number assigned to Property/Requirement.",
+    emptyTitle: "No number assigned yet",
+    emptyBody:
+      "Add a connected number to the Numbers for Property/Requirement block above to pick which groups feed the requirement pipeline.",
+    savedTitle: "Requirement monitoring updated",
+    stopWarning: "Nothing selected — saving this will stop requirement capture on these numbers.",
+    groupJidsOf: (connection) => connection.requirement_group_jids,
+    personalNumbersOf: (connection) => connection.requirement_personal_numbers,
+    save: (connectionId, groupJids, personalNumbers) =>
+      whatsappApi.updateRequirementSelection(connectionId, groupJids, personalNumbers),
+  },
+};
+
+function MonitoringPanel({
+  kind,
+  propertyConns,
+  onSaved,
+}: {
+  kind: MonitoringKind;
+  propertyConns: WhatsAppConnection[];
+  onSaved: () => void | Promise<void>;
+}) {
+  const config = MONITORING_CONFIG[kind];
   const toast = useToast();
   const [groupFilter, setGroupFilter] = useState("");
   const debouncedFilter = useDebounced(groupFilter, 140);
@@ -752,15 +843,17 @@ function PropertyMonitoringPanel({ propertyConns, onSaved }: { propertyConns: Wh
   const initializedConnIds = useRef<Set<string>>(new Set());
   const personalNumbersInitialized = useRef(false);
 
-  // Seed each property connection's draft selection from the server the
-  // first time it's seen — afterwards it's the user's in-progress edit and
-  // must not be silently overwritten by a background poll.
+  // Seed each connection's draft selection from the server the first time
+  // it's seen — afterwards it's the user's in-progress edit and must not be
+  // silently overwritten by a background poll. Seeded strictly from THIS
+  // panel's own selection (config.groupJidsOf), never from the other one:
+  // that is what keeps the two pickers visually independent.
   useEffect(() => {
     let changed = false;
     const next = { ...draftSelection };
     for (const conn of propertyConns) {
       if (!initializedConnIds.current.has(conn.connection_id)) {
-        next[conn.connection_id] = new Set(conn.property_group_jids);
+        next[conn.connection_id] = new Set(config.groupJidsOf(conn));
         initializedConnIds.current.add(conn.connection_id);
         changed = true;
       }
@@ -769,7 +862,7 @@ function PropertyMonitoringPanel({ propertyConns, onSaved }: { propertyConns: Wh
 
     if (!personalNumbersInitialized.current && propertyConns.length > 0) {
       const union = new Set<string>();
-      propertyConns.forEach((c) => c.property_personal_numbers.forEach((n) => union.add(n)));
+      propertyConns.forEach((c) => config.personalNumbersOf(c).forEach((n) => union.add(n)));
       if (union.size > 0) {
         setPersonalNumbersInput(Array.from(union).join(", "));
       }
@@ -815,11 +908,12 @@ function PropertyMonitoringPanel({ propertyConns, onSaved }: { propertyConns: Wh
   const dirty = useMemo(() => {
     for (const conn of propertyConns) {
       const draft = draftSelection[conn.connection_id] ?? new Set<string>();
-      if (!setsEqual(draft, new Set(conn.property_group_jids))) return true;
+      if (!setsEqual(draft, new Set(config.groupJidsOf(conn)))) return true;
     }
     const serverNumbers = new Set<string>();
-    propertyConns.forEach((c) => c.property_personal_numbers.forEach((n) => serverNumbers.add(n)));
+    propertyConns.forEach((c) => config.personalNumbersOf(c).forEach((n) => serverNumbers.add(n)));
     return !setsEqual(new Set(parsedNumbers), serverNumbers);
+    // eslint-disable-next-line react-hooks/exhaustive-deps
   }, [propertyConns, draftSelection, parsedNumbers]);
 
   useUnsavedGuard(dirty);
@@ -859,10 +953,10 @@ function PropertyMonitoringPanel({ propertyConns, onSaved }: { propertyConns: Wh
 
   function revert() {
     const seeded: Record<string, Set<string>> = {};
-    propertyConns.forEach((c) => (seeded[c.connection_id] = new Set(c.property_group_jids)));
+    propertyConns.forEach((c) => (seeded[c.connection_id] = new Set(config.groupJidsOf(c))));
     setDraftSelection(seeded);
     const union = new Set<string>();
-    propertyConns.forEach((c) => c.property_personal_numbers.forEach((n) => union.add(n)));
+    propertyConns.forEach((c) => config.personalNumbersOf(c).forEach((n) => union.add(n)));
     setPersonalNumbersInput(Array.from(union).join(", "));
     toast.push({ tone: "info", title: "Changes discarded", message: "Back to what the backend currently monitors." });
   }
@@ -872,12 +966,12 @@ function PropertyMonitoringPanel({ propertyConns, onSaved }: { propertyConns: Wh
     try {
       await Promise.all(
         propertyConns.map((conn) =>
-          whatsappApi.updatePropertySelection(conn.connection_id, Array.from(draftSelection[conn.connection_id] ?? []), parsedNumbers),
+          config.save(conn.connection_id, Array.from(draftSelection[conn.connection_id] ?? []), parsedNumbers),
         ),
       );
       toast.push({
         tone: "ok",
-        title: "Monitoring updated",
+        title: config.savedTitle,
         message: `Watching ${selectedCount} group(s) across ${propertyConns.length} number(s).`,
       });
       await onSaved();
@@ -896,13 +990,9 @@ function PropertyMonitoringPanel({ propertyConns, onSaved }: { propertyConns: Wh
     return (
       <Panel className="stack stack-3" delay={140}>
         <div className="section-head__eyebrow" style={{ marginBottom: 0 }}>
-          Property monitoring
+          {config.eyebrow}
         </div>
-        <EmptyState
-          icon={<IconBuilding size={32} />}
-          title="No number assigned to Property yet"
-          body="Add a connected number to the Number for Property block above to pick which groups feed the property pipeline."
-        />
+        <EmptyState icon={<IconBuilding size={32} />} title={config.emptyTitle} body={config.emptyBody} />
       </Panel>
     );
   }
@@ -912,11 +1002,11 @@ function PropertyMonitoringPanel({ propertyConns, onSaved }: { propertyConns: Wh
       <div className="row-between">
         <div>
           <div className="section-head__eyebrow" style={{ marginBottom: 6 }}>
-            Property monitoring
+            {config.eyebrow}
           </div>
-          <h2>Which groups feed the property pipeline?</h2>
+          <h2>{config.heading}</h2>
           <p className="section-head__sub" style={{ marginTop: 6 }}>
-            Groups from every number assigned to Property, in one list. Search by name and select what to watch.
+            {config.blurb}
           </p>
         </div>
         {dirty && (
@@ -936,7 +1026,16 @@ function PropertyMonitoringPanel({ propertyConns, onSaved }: { propertyConns: Wh
             <span className="badge badge--info">{selectedCount} selected</span>
           </div>
 
-          <SearchInput value={groupFilter} onChange={setGroupFilter} placeholder="Filter groups by name…" ariaLabel="Filter groups by name" />
+          <p className="faint small" style={{ marginTop: -2 }}>
+            {config.groupsHint}
+          </p>
+
+          <SearchInput
+            value={groupFilter}
+            onChange={setGroupFilter}
+            placeholder="Filter groups by name…"
+            ariaLabel={`Filter ${kind} groups by name`}
+          />
 
           <div className="row-flex">
             <Button size="sm" onClick={selectAllFiltered} disabled={filteredGroups.length === 0 || allFilteredSelected}>
@@ -975,15 +1074,15 @@ function PropertyMonitoringPanel({ propertyConns, onSaved }: { propertyConns: Wh
         <div className="stack stack-3">
           <h3>Personal chats</h3>
           <p className="faint small">
-            Phone numbers with country code, digits only, separated by commas or new lines — e.g. <code>919876543210</code>.
-            Applies across every number assigned to Property.
+            Phone numbers with country code, digits only, separated by commas or new lines — e.g. <code>919876543210</code>.{" "}
+            {config.personalHint}
           </p>
           <textarea
             className="textarea"
             value={personalNumbersInput}
             onChange={(e) => setPersonalNumbersInput(e.target.value)}
             rows={4}
-            aria-label="Personal phone numbers to monitor for property"
+            aria-label={`Personal phone numbers to monitor for ${kind}`}
             placeholder="919876543210, 919812345678"
           />
 
@@ -1008,6 +1107,17 @@ function PropertyMonitoringPanel({ propertyConns, onSaved }: { propertyConns: Wh
               digits only, including the country code and no <code>+</code> or spaces.
             </Note>
           )}
+
+          {/* Stated once, on the Requirement side, because this is the one
+              consequence of these two panels that is not obvious from the
+              checkboxes themselves. */}
+          {kind === "requirement" && (
+            <Note tone="info" icon={<IconInfo size={16} />}>
+              A personal number listed here (or under Property monitoring) never receives the automatic client-inquiry
+              reply, even if the same WhatsApp number also has the Client Inquiry role — it is treated as a broker
+              feeding the pipelines, not as a client to answer.
+            </Note>
+          )}
         </div>
       </div>
 
@@ -1022,7 +1132,7 @@ function PropertyMonitoringPanel({ propertyConns, onSaved }: { propertyConns: Wh
         )}
         {selectedCount === 0 && parsedNumbers.length === 0 && (
           <span className="small" style={{ color: "var(--warn)" }}>
-            Nothing selected — saving this will stop Property capture on these numbers.
+            {config.stopWarning}
           </span>
         )}
       </div>

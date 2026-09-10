@@ -10,7 +10,7 @@ function trimNumber(value: number): string {
 
 /**
  * Indian short-scale money, the way brokers actually say it: 8L, 8.5L, 6cr,
- * 8.5cr, 7k.
+ * 8.5cr, 7K.
  *
  * Full rupee amounts (8500000) are unreadable at a glance and impossible to
  * compare down a column — you end up counting digits. The compact form is
@@ -21,7 +21,7 @@ export function formatCompactInr(amount: number): string {
   const magnitude = Math.abs(amount);
   if (magnitude >= CRORE) return `${trimNumber(amount / CRORE)}cr`;
   if (magnitude >= LAKH) return `${trimNumber(amount / LAKH)}L`;
-  if (magnitude >= THOUSAND) return `${trimNumber(amount / THOUSAND)}k`;
+  if (magnitude >= THOUSAND) return `${trimNumber(amount / THOUSAND)}K`;
   return trimNumber(amount);
 }
 

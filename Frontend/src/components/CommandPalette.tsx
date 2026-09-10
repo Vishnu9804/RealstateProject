@@ -4,6 +4,7 @@ import { useTheme } from "./ui/Theme";
 import {
   IconArrowRight,
   IconGrid,
+  IconInbox,
   IconLink,
   IconMoon,
   IconRefresh,
@@ -84,6 +85,14 @@ export default function CommandPalette({
         group: "Navigate",
         icon: <IconGrid size={16} />,
         run: () => navigate("/dashboard"),
+      },
+      {
+        id: "nav-requirements",
+        label: "Go to Broker Requirements",
+        hint: "What brokers are looking for",
+        group: "Navigate",
+        icon: <IconInbox size={16} />,
+        run: () => navigate("/requirements"),
       },
       {
         id: "nav-settings",

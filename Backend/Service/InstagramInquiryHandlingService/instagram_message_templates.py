@@ -13,6 +13,7 @@ to find and contact the owner directly.
 
 from __future__ import annotations
 
+from Config.settings import get_settings
 from Model.WhatsAppDataFetchingModel.structured_property import StructuredProperty
 
 COMMENT_REPLY_TEXT = "Plzz check your DM! 📩"
@@ -34,11 +35,31 @@ DM_REPEAT_NUDGE_TEXT = (
     "Let us know if you'd like to know anything more 🙂"
 )
 
-DM_FOLLOWUP_TEXT = "Does this match what you're looking for? 🙂"
+# The SECOND message of the sequence -- what someone who likes this exact
+# property should do next. It used to be a bare "does this match what
+# you're looking for?", which asked a question nobody at this stage can
+# answer usefully and gave them nothing to act on. A site visit is the real
+# next step in this business, and a phone call is the fastest way to book
+# one, so the message now names both.
+#
+# The number comes from Config/settings.py's business_contact_phone and is
+# never invented: with nothing configured there the no-number variant goes
+# out instead, which still offers the visit but points them back at this
+# chat rather than at a number that does not exist.
+DM_SITE_VISIT_TEMPLATE = (
+    "If you're interested in this property, call us on {phone} and we'll book an offline site visit for "
+    "you right away \u2014 come and see it in person at a time that suits you."
+)
+
+DM_SITE_VISIT_NO_NUMBER_TEXT = (
+    "If you're interested in this property, just reply here and we'll book an offline site visit for you "
+    "right away \u2014 come and see it in person at a time that suits you."
+)
 
 DM_MORE_OPTIONS_TEMPLATE = (
-    "We also have plenty of other options available! Just click the link below and fill a quick form with your "
-    "requirements, and we'll help you find the perfect match:\n{link}"
+    "And if you'd like to see more options, just tell us what you're looking for \u2014 click the link "
+    "below, fill in your requirements in a minute, and we'll send you the properties that actually "
+    "match:\n{link}"
 )
 
 # Sent once the requirements form is submitted — mirrors Service/
@@ -48,6 +69,18 @@ DM_MORE_OPTIONS_TEMPLATE = (
 # only path (no phone given).
 INSTAGRAM_ONLY_CONFIRMATION_TEXT = (
     "Thank you! We've received your requirements — our team will reach out to you here on Instagram soon."
+)
+
+# The Instagram-only twin of inquiry_form_service._FINAL_UPDATE_TEXT, sent
+# alongside the confirmation on the LAST update the form will accept (see
+# that module's MAX_REQUIREMENT_SUBMISSIONS) so nobody discovers the limit
+# only by running into it.
+INSTAGRAM_ONLY_FINAL_UPDATE_TEXT = (
+    "Thank you! We've received your updated requirements — our team will reach out to you here on "
+    "Instagram soon.\n\n"
+    "Just to let you know, this was the third and final update we can take through the online form. If "
+    "anything changes again, please don't worry — simply message us here and one of our team will be "
+    "very happy to update it for you personally."
 )
 
 _CRORE = 10_000_000
@@ -106,6 +139,18 @@ def build_property_info_message(prop: StructuredProperty) -> str:
 
     details = "\n".join(lines) if lines else "(details coming up shortly from our team)"
     return f"Hi! Thanks for your interest 😊 Here are the details of this property:\n\n{details}"
+
+
+def build_site_visit_message() -> str:
+    """Second message of the DM sequence -- see DM_SITE_VISIT_TEMPLATE.
+
+    Reads the number at call time rather than caching it at import, and
+    degrades to the no-number wording when it is blank, so a missing
+    setting can never produce a message telling someone to ring nothing."""
+    phone = get_settings().business_contact_phone.strip()
+    if not phone:
+        return DM_SITE_VISIT_NO_NUMBER_TEXT
+    return DM_SITE_VISIT_TEMPLATE.format(phone=phone)
 
 
 def build_more_options_message(form_link: str) -> str:

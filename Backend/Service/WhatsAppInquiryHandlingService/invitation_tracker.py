@@ -14,15 +14,36 @@ unlike losing actual client data.
 from __future__ import annotations
 
 import threading
-from typing import Set
+from collections import OrderedDict
+
+# A ceiling, with the oldest mark dropped once it is reached.
+#
+# This was an unbounded set on a process designed to run for months, fed by
+# anyone who can send a WhatsApp message — so it grew with every number
+# that ever messaged in, and nothing ever removed an entry except an
+# explicit deletion on the Inquiries page. Being bounded costs almost
+# nothing here: the ONLY consequence of dropping a mark is that a number
+# which messaged months ago, never filled the form in, and messages again
+# receives the welcome and the form link a second time. That is a perfectly
+# reasonable thing to send someone in that situation, which is why this is
+# the safest of the in-memory tables to bound.
+#
+# Oldest-first, because recency is exactly what matters: the mark that
+# stops a duplicate welcome only has to survive as long as the
+# conversation it belongs to.
+_MAX_TRACKED = 50_000
 
 _lock = threading.Lock()
-_invited_phones: Set[str] = set()
+# An ordered mapping used as an ordered set — the value is never read.
+_invited_phones: "OrderedDict[str, None]" = OrderedDict()
 
 
 def mark_invited(phone: str) -> None:
     with _lock:
-        _invited_phones.add(phone)
+        _invited_phones[phone] = None
+        _invited_phones.move_to_end(phone)
+        while len(_invited_phones) > _MAX_TRACKED:
+            _invited_phones.popitem(last=False)
 
 
 def forget(phone: str) -> None:
@@ -34,7 +55,7 @@ def forget(phone: str) -> None:
     fresh form link, because this tracker still remembered a link it sent
     for a client that no longer exists."""
     with _lock:
-        _invited_phones.discard(phone)
+        _invited_phones.pop(phone, None)
 
 
 def was_invited(phone: str) -> bool:

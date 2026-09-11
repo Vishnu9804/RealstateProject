@@ -97,10 +97,64 @@ class OtpRequestResult(NamedTuple):
     retry_after_seconds: int = 0
 
 
+# Ceilings on the three tables below, with a sweep that runs on the way
+# into request_otp and verify_otp.
+#
+# All three used to grow and never shrink. An OTP entry was only removed
+# when that number's code was used or re-requested; a send-history entry
+# never at all; a verification only when its own token was presented after
+# expiry. So every distinct number this endpoint was ever asked about left
+# something behind permanently — and since the endpoint is public, "every
+# distinct number" is as large as somebody wants to make it. The per-IP
+# limiter (Middleware/public_rate_limit.py) caps the rate of that, but a
+# rate limit on an unbounded accumulation only decides how long the leak
+# takes.
+#
+# The sweep is cheap and self-limiting: it does nothing at all until a
+# table is over its ceiling, and what it removes first is entries that are
+# already dead — expired codes, expired verifications, send timestamps
+# older than the window they are measured in. Only a table still over its
+# ceiling after that loses live entries, oldest first.
+_MAX_TRACKED_NUMBERS = 20_000
+_MAX_LIVE_VERIFICATIONS = 50_000
+
 _lock = threading.Lock()
 _otps: Dict[str, _OtpEntry] = {}
 _send_history: Dict[str, List[float]] = {}
 _verifications: Dict[str, _VerificationEntry] = {}
+
+
+def _sweep_locked(now: float) -> None:
+    """Called with _lock held. Every branch is skipped entirely in the
+    normal case, so this costs one length comparison per request."""
+    if len(_otps) > _MAX_TRACKED_NUMBERS:
+        for phone in [p for p, entry in _otps.items() if entry.expires_at < now]:
+            del _otps[phone]
+        for phone in sorted(_otps, key=lambda p: _otps[p].expires_at)[: max(0, len(_otps) - _MAX_TRACKED_NUMBERS)]:
+            del _otps[phone]
+
+    if len(_send_history) > _MAX_TRACKED_NUMBERS:
+        for phone, stamps in list(_send_history.items()):
+            # A number whose sends have all aged out of the window is
+            # indistinguishable from one that never sent anything, so the
+            # row carries no information at all any more.
+            kept = [t for t in stamps if now - t < _SEND_WINDOW_SECONDS]
+            if kept:
+                _send_history[phone] = kept
+            else:
+                del _send_history[phone]
+        for phone in sorted(_send_history, key=lambda p: _send_history[p][-1])[
+            : max(0, len(_send_history) - _MAX_TRACKED_NUMBERS)
+        ]:
+            del _send_history[phone]
+
+    if len(_verifications) > _MAX_LIVE_VERIFICATIONS:
+        for token in [t for t, entry in _verifications.items() if entry.expires_at < now]:
+            del _verifications[token]
+        for token in sorted(_verifications, key=lambda t: _verifications[t].expires_at)[
+            : max(0, len(_verifications) - _MAX_LIVE_VERIFICATIONS)
+        ]:
+            del _verifications[token]
 
 
 def request_otp(raw_phone: str) -> OtpRequestResult:
@@ -120,6 +174,7 @@ def request_otp(raw_phone: str) -> OtpRequestResult:
 
     now = time.monotonic()
     with _lock:
+        _sweep_locked(now)
         existing = _otps.get(phone)
         alive = existing is not None and existing.expires_at > now
 
@@ -169,6 +224,7 @@ def verify_otp(raw_phone: str, code: str) -> Optional[str]:
 
     now = time.monotonic()
     with _lock:
+        _sweep_locked(now)
         entry = _otps.get(phone)
         if entry is None or entry.expires_at < now:
             _otps.pop(phone, None)

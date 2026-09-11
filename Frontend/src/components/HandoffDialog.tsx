@@ -17,7 +17,21 @@ import { IconSend, IconX, IconZap } from "./ui/Icons";
  * real-estate client can customize on the Settings page. "Send" actually
  * delivers all of them over the already-connected inquiry WhatsApp account
  * (no wa.me link to click through) and records the hand-off.
+ *
+ * EVERY MESSAGE HERE IS EDITABLE BEFORE IT GOES OUT, and an edit applies to
+ * this hand-off only — the Settings template is never rewritten by it. The
+ * template is the default wording, and a default cannot cover "tell Ramesh
+ * the client can only do evenings". Before this, changing one word meant
+ * changing it for everyone, forever; now the operator adjusts the message
+ * in front of them and the next hand-off still starts from the saved
+ * template. `edits` below is what keeps those two facts apart: the rendered
+ * template stays the baseline, and an entry exists only for a message a
+ * human actually touched.
  */
+
+/** The one message that isn't keyed by an agent id. A literal that can
+ *  never collide with one, since agent ids are uuids. */
+const CLIENT_KEY = "__client__";
 export default function HandoffDialog({
   client,
   assignments,
@@ -37,6 +51,12 @@ export default function HandoffDialog({
   const toast = useToast();
   const [sending, setSending] = useState(false);
   const [templates, setTemplates] = useState<HandoffTemplates | null>(null);
+  // Per-message overrides, keyed by agent_id (and CLIENT_KEY for the
+  // client's own message). Absent = "not touched", which is why this is a
+  // sparse map rather than a copy of every rendered message: the template
+  // render stays the source of truth for anything the operator has not
+  // deliberately changed, and Reset is simply deleting the key.
+  const [edits, setEdits] = useState<Record<string, string>>({});
 
   useEffect(() => {
     let cancelled = false;
@@ -52,17 +72,33 @@ export default function HandoffDialog({
   const agentMessages = useMemo(
     () =>
       templates
-        ? assignments.map((assignment) => ({
-            assignment,
-            message: renderTemplate(templates.agent_template, buildAgentTokens(client, assignment.properties)),
-          }))
+        ? assignments.map((assignment) => {
+            const rendered = renderTemplate(templates.agent_template, buildAgentTokens(client, assignment.properties));
+            // `message` is what will actually be sent: the operator's edit
+            // when there is one, the freshly rendered template otherwise.
+            return { assignment, rendered, message: edits[assignment.agent.agent_id] ?? rendered };
+          })
         : [],
-    [templates, assignments, client],
+    [templates, assignments, client, edits],
   );
-  const clientMessage = useMemo(
+  const renderedClientMessage = useMemo(
     () => (templates ? buildClientMessage(client, assignments, templates.client_template) : ""),
     [templates, client, assignments],
   );
+  const clientMessage = edits[CLIENT_KEY] ?? renderedClientMessage;
+
+  function setEdit(key: string, value: string) {
+    setEdits((previous) => ({ ...previous, [key]: value }));
+  }
+
+  function resetEdit(key: string) {
+    setEdits((previous) => {
+      if (!(key in previous)) return previous;
+      const next = { ...previous };
+      delete next[key];
+      return next;
+    });
+  }
 
   useEffect(() => {
     const onKeyDown = (event: KeyboardEvent) => {
@@ -79,6 +115,9 @@ export default function HandoffDialog({
     setSending(true);
     try {
       const result = await inquiryClientApi.sendHandoff(client.phone, {
+        // `message` is already the edited text wherever the operator
+        // changed it — see agentMessages above. Nothing is written back to
+        // the stored template.
         agent_messages: agentMessages.map(({ assignment, message }) => ({
           agent_id: assignment.agent.agent_id,
           agent_phone: assignment.agent.phone,
@@ -150,10 +189,27 @@ export default function HandoffDialog({
             <SkeletonRows rows={5} />
           ) : (
             <div style={{ display: "grid", gridTemplateColumns: "repeat(auto-fit, minmax(300px, 1fr))", gap: 16 }}>
-              {agentMessages.map(({ assignment, message }) => (
-                <MessagePreview key={assignment.agent.agent_id} label={`To ${assignment.agent.name}`} name={assignment.agent.name} message={message} />
+              {agentMessages.map(({ assignment, rendered, message }) => (
+                <MessagePreview
+                  key={assignment.agent.agent_id}
+                  label={`To ${assignment.agent.name}`}
+                  name={assignment.agent.name}
+                  message={message}
+                  edited={message !== rendered}
+                  disabled={sending}
+                  onChange={(value) => setEdit(assignment.agent.agent_id, value)}
+                  onReset={() => resetEdit(assignment.agent.agent_id)}
+                />
               ))}
-              <MessagePreview label="To your client" name={client.name || client.phone} message={clientMessage} />
+              <MessagePreview
+                label="To your client"
+                name={client.name || client.phone}
+                message={clientMessage}
+                edited={clientMessage !== renderedClientMessage}
+                disabled={sending}
+                onChange={(value) => setEdit(CLIENT_KEY, value)}
+                onReset={() => resetEdit(CLIENT_KEY)}
+              />
             </div>
           )}
 
@@ -161,7 +217,11 @@ export default function HandoffDialog({
             <span className="note__icon">
               <IconZap size={16} />
             </span>
-            <div>Every agent gets only their own property(ies) — nobody has to ring you to ask "which flats do I show". It is all in their chat.</div>
+            <div>
+              Every agent gets only their own property(ies) — nobody has to ring you to ask "which flats do I show". It
+              is all in their chat. Edit any message above for this hand-off only; your saved templates on the Settings
+              page stay exactly as they are.
+            </div>
           </div>
         </div>
 
@@ -181,25 +241,56 @@ export default function HandoffDialog({
   );
 }
 
-function MessagePreview({ label, name, message }: { label: string; name: string; message: string }) {
+/** One message, shown the way it will arrive and editable in place. The
+ *  "edited" line plus Reset exist so a changed message is obvious at a
+ *  glance and always recoverable — without them, an operator who typed into
+ *  the wrong box would have to abandon the whole flow and redo the
+ *  assignment to get the original wording back. */
+function MessagePreview({
+  label,
+  name,
+  message,
+  edited,
+  disabled,
+  onChange,
+  onReset,
+}: {
+  label: string;
+  name: string;
+  message: string;
+  edited: boolean;
+  disabled: boolean;
+  onChange: (value: string) => void;
+  onReset: () => void;
+}) {
   return (
     <div className="panel panel--pad stack stack-3" style={{ display: "flex", flexDirection: "column" }}>
-      <div className="section-head__eyebrow" style={{ marginBottom: 0 }}>
-        {label}
+      <div className="row-flex" style={{ justifyContent: "space-between", gap: 8 }}>
+        <div className="section-head__eyebrow" style={{ marginBottom: 0 }}>
+          {label}
+        </div>
+        {edited && (
+          <Button size="sm" variant="ghost" onClick={onReset} disabled={disabled}>
+            Reset
+          </Button>
+        )}
       </div>
       <div className="row-flex" style={{ gap: 10 }}>
         <Avatar name={name} size={32} />
-        <div>
-          <div className="cell-strong">{name}</div>
-          <div className="faint small">online</div>
+        <div style={{ minWidth: 0 }}>
+          <div className="cell-strong cell-truncate">{name}</div>
+          <div className="faint small">{edited ? "edited for this hand-off" : "online"}</div>
         </div>
       </div>
-      <div
-        className="detail__msg"
-        style={{ whiteSpace: "pre-wrap", maxHeight: 320, overflowY: "auto", background: "color-mix(in oklab, var(--ok) 10%, var(--plane-1))" }}
-      >
-        {message}
-      </div>
+      <textarea
+        className="textarea"
+        rows={12}
+        value={message}
+        disabled={disabled}
+        aria-label={`${label} — message text`}
+        onChange={(event) => onChange(event.target.value)}
+        style={{ fontSize: 12.5, lineHeight: 1.55 }}
+      />
     </div>
   );
 }

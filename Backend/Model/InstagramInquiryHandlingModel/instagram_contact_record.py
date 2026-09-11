@@ -29,5 +29,9 @@ class InstagramContactRecord(BaseModel):
     preferred_areas: Optional[str] = None
     additional_requirements: Optional[str] = None
 
+    # Mirrors ClientRecord.requirement_submission_count, for the
+    # Instagram-only submission path -- same quota, same guard.
+    requirement_submission_count: int = 0
+
     created_at: Optional[datetime] = None
     updated_at: Optional[datetime] = None

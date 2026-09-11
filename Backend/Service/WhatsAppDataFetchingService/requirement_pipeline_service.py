@@ -113,7 +113,21 @@ def update_requirement(record_id: str, content_updates: Dict[str, Any]) -> Optio
 
 
 def delete_requirement(record_id: str) -> bool:
-    return requirement_store.delete_requirement(record_id)
+    deleted = requirement_store.delete_requirement(record_id)
+    if deleted:
+        # Drop the memoised requirement embedding so a deleted record_id
+        # leaves nothing cached behind it. Lazy import + broad except for
+        # the same reason client_store.upsert_client uses one for matching:
+        # this is the only place the data-fetching feature touches the
+        # matching feature at all, and a cache-eviction failure must never
+        # turn a successful delete into an error.
+        try:
+            from Service.ClientPropertyMatchingService import requirement_matching_service
+
+            requirement_matching_service.forget_requirement(record_id)
+        except Exception as exc:  # noqa: BLE001
+            step_logger.error(f"[Matching] Could not clear the cached vector for {record_id}: {exc!r}")
+    return deleted
 
 
 def _to_record(requirement: StructuredRequirement) -> BrokerRequirementRecord:

@@ -9,6 +9,7 @@ import { formatCompactInr, relativeTime } from "../lib/formatters";
 import { useToast } from "../components/ui/Toast";
 import ConfirmDialog from "../components/ui/ConfirmDialog";
 import RequirementFormDialog from "../components/RequirementFormDialog";
+import RequirementMatchesDialog from "../components/RequirementMatchesDialog";
 import { Pager, compareNullable } from "./DashboardPage";
 import {
   Badge,
@@ -151,6 +152,11 @@ export default function BrokerRequirementsPage() {
   const [detailId, setDetailId] = useState<string | null>(null);
   const [editing, setEditing] = useState<BrokerRequirementRecord | null>(null);
   const [deleteTarget, setDeleteTarget] = useState<BrokerRequirementRecord | null>(null);
+  // Which requirement's matched-properties dialog is open. Held as the
+  // whole record, not an id: the dialog needs the requirement's own fields
+  // (budget, areas, sender) to render its header and its share message, and
+  // the row that opened it already has all of them in hand.
+  const [matchesFor, setMatchesFor] = useState<BrokerRequirementRecord | null>(null);
   const [deleteBusy, setDeleteBusy] = useState(false);
 
   const searchRef = useRef<HTMLInputElement>(null);
@@ -496,6 +502,7 @@ export default function BrokerRequirementsPage() {
               toggleSort={toggleSort}
               freshIds={freshIds}
               onOpenDetail={(requirement) => setDetailId(requirement.record_id)}
+              onMatch={setMatchesFor}
               onEdit={setEditing}
               onDelete={setDeleteTarget}
             />
@@ -505,6 +512,7 @@ export default function BrokerRequirementsPage() {
               query={query}
               freshIds={freshIds}
               onOpenDetail={(requirement) => setDetailId(requirement.record_id)}
+              onMatch={setMatchesFor}
               onEdit={setEditing}
               onDelete={setDeleteTarget}
             />
@@ -517,9 +525,17 @@ export default function BrokerRequirementsPage() {
         <RequirementDetailDialog
           requirement={detailRequirement}
           onClose={() => setDetailId(null)}
+          onMatch={(requirement) => setMatchesFor(requirement)}
           onEdit={(requirement) => setEditing(requirement)}
           onDelete={(requirement) => setDeleteTarget(requirement)}
         />
+      )}
+
+      {/* Deliberately independent of the detail dialog: matching is a
+          separate errand, and closing the shortlist should put the operator
+          back exactly where they were rather than unwinding a stack. */}
+      {matchesFor && (
+        <RequirementMatchesDialog requirement={matchesFor} onClose={() => setMatchesFor(null)} />
       )}
 
       {editing && (
@@ -561,25 +577,38 @@ interface ListProps {
   query: string;
   freshIds: Set<string>;
   onOpenDetail: (requirement: BrokerRequirementRecord) => void;
+  onMatch: (requirement: BrokerRequirementRecord) => void;
   onEdit: (requirement: BrokerRequirementRecord) => void;
   onDelete: (requirement: BrokerRequirementRecord) => void;
 }
 
-/** Edit and Delete, in that order, matching the Properties page's own row
- *  actions so the two tables' action columns line up visually and
- *  muscle-memory carries across. Shared between the table cell and the card
- *  footer so the two layouts can never drift apart. */
+/** Match, Edit and Delete, in that order — Edit and Delete keep the
+ *  Properties page's own arrangement so the two tables' action columns line
+ *  up and muscle-memory carries across, and Match leads because it is the
+ *  one thing an operator does with a requirement all day. Shared between the
+ *  table cell and the card footer so the two layouts can never drift apart. */
 function RowActions({
   requirement,
+  onMatch,
   onEdit,
   onDelete,
 }: {
   requirement: BrokerRequirementRecord;
+  onMatch: (requirement: BrokerRequirementRecord) => void;
   onEdit: (requirement: BrokerRequirementRecord) => void;
   onDelete: (requirement: BrokerRequirementRecord) => void;
 }) {
   return (
     <div className="row-actions">
+      <button
+        type="button"
+        className="row-actions__btn"
+        title="Match properties"
+        aria-label="Show properties matching this requirement"
+        onClick={() => onMatch(requirement)}
+      >
+        <IconBuilding size={15} />
+      </button>
       <button
         type="button"
         className="row-actions__btn"
@@ -612,6 +641,7 @@ function RequirementTable({
   toggleSort,
   freshIds,
   onOpenDetail,
+  onMatch,
   onEdit,
   onDelete,
 }: ListProps & {
@@ -712,7 +742,7 @@ function RequirementTable({
                   {requirement.formatted_timestamp}
                 </td>
                 <td onClick={(event) => event.stopPropagation()}>
-                  <RowActions requirement={requirement} onEdit={onEdit} onDelete={onDelete} />
+                  <RowActions requirement={requirement} onMatch={onMatch} onEdit={onEdit} onDelete={onDelete} />
                 </td>
               </tr>
             ))}
@@ -725,7 +755,7 @@ function RequirementTable({
 
 /* ----------------------------------------------------------------- cards */
 
-function RequirementCards({ requirements, query, freshIds, onOpenDetail, onEdit, onDelete }: ListProps) {
+function RequirementCards({ requirements, query, freshIds, onOpenDetail, onMatch, onEdit, onDelete }: ListProps) {
   return (
     <div className="card-grid">
       {requirements.map((requirement, index) => (
@@ -798,7 +828,7 @@ function RequirementCards({ requirements, query, freshIds, onOpenDetail, onEdit,
               <IconUsers size={11} /> {sourceLabel(requirement)} · {requirement.formatted_timestamp}
             </span>
             <div onClick={(event) => event.stopPropagation()}>
-              <RowActions requirement={requirement} onEdit={onEdit} onDelete={onDelete} />
+              <RowActions requirement={requirement} onMatch={onMatch} onEdit={onEdit} onDelete={onDelete} />
             </div>
           </div>
         </Panel>
@@ -821,11 +851,13 @@ function RequirementCards({ requirements, query, freshIds, onOpenDetail, onEdit,
 function RequirementDetailDialog({
   requirement,
   onClose,
+  onMatch,
   onEdit,
   onDelete,
 }: {
   requirement: BrokerRequirementRecord;
   onClose: () => void;
+  onMatch: (requirement: BrokerRequirementRecord) => void;
   onEdit: (requirement: BrokerRequirementRecord) => void;
   onDelete: (requirement: BrokerRequirementRecord) => void;
 }) {
@@ -959,6 +991,12 @@ function RequirementDetailDialog({
             Cancel
           </Button>
           <span className="row-flex" style={{ marginLeft: "auto", gap: 10 }}>
+            {/* The primary action on a requirement: what have we got that
+                fits it. Placed before Edit/Delete because it is what an
+                operator opens this dialog to do. */}
+            <Button variant="primary" icon={<IconBuilding size={14} />} onClick={() => onMatch(requirement)}>
+              Match properties
+            </Button>
             <Button variant="ghost" icon={<IconEdit size={14} />} onClick={() => onEdit(requirement)}>
               Edit
             </Button>

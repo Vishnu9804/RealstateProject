@@ -13,11 +13,12 @@ Thin by design; everything real is in
 Service/LandingPageService/landing_page_service.py.
 """
 
-from typing import List
+from typing import Any, List
 
-from fastapi import APIRouter, HTTPException
+from fastapi import APIRouter, HTTPException, Request, Response
 
-from Model.LandingPageModel.landing_lead import LandingLeadRecord, LandingLeadRequest
+from Middleware import http_cache
+from Model.LandingPageModel.landing_lead import LandingLeadRecord, LandingLeadRequest, LandingLeadResult
 from Model.LandingPageModel.landing_property import LandingPropertyDetail, LandingPropertySummary
 from Service.LandingPageService import landing_page_service
 
@@ -25,30 +26,62 @@ router = APIRouter(prefix="/landing", tags=["landing-page"])
 
 
 @router.get("/areas", response_model=List[str])
-def get_tracked_areas() -> List[str]:
+def get_tracked_areas(request: Request, response: Response) -> Any:
     """Locality names only — the areas configured on the Settings page, so
     the public form's area picker offers what the pipeline actually tracks
-    alongside its own built-in Surat list."""
-    return landing_page_service.get_tracked_areas()
+    alongside its own built-in Surat list.
+
+    The list itself is held in memory, so building the tag from its contents
+    costs nothing and is exact."""
+    areas = landing_page_service.get_tracked_areas()
+    etag = http_cache.build_etag("landing-areas", *areas)
+    unchanged = http_cache.conditional(request, response, etag, public=True)
+    return unchanged if unchanged is not None else areas
 
 
 @router.get("/properties", response_model=List[LandingPropertySummary])
-def get_published_properties() -> List[LandingPropertySummary]:
-    return landing_page_service.get_published_properties()
+def get_published_properties(request: Request, response: Response) -> Any:
+    """Conditional, and this is where it matters most on the public site.
+
+    Every visitor's browser asks for this list on arrival, and the response
+    carries each card's photos. Unconditionally, that is a full Postgres
+    read plus megabytes of base64 for every single visit, forever. With a
+    validator the server can answer "unchanged" from memory — no query, no
+    body — for every returning visitor and every repeat page load, while a
+    real change still reaches them on their very next request."""
+    etag = http_cache.build_etag("landing-properties", landing_page_service.get_published_version())
+    unchanged = http_cache.conditional(request, response, etag, public=True)
+    return unchanged if unchanged is not None else landing_page_service.get_published_properties()
 
 
 @router.get("/properties/{record_id}", response_model=LandingPropertyDetail)
-def get_published_property(record_id: str) -> LandingPropertyDetail:
+def get_published_property(record_id: str, request: Request, response: Response) -> Any:
+    """Tagged per property: one listing changing must not force every
+    visitor to re-download every OTHER listing they have open or cached.
+    A detail response carries that property's full photo set, so this is
+    the second-heaviest payload the public site serves."""
+    version = landing_page_service.get_published_property_version(record_id)
+    etag = None if version is None else http_cache.build_etag("landing-property", record_id, version)
+    unchanged = http_cache.conditional(request, response, etag, public=True)
+    if unchanged is not None:
+        return unchanged
     prop = landing_page_service.get_published_property(record_id)
     if prop is None:
         # Same 404 for "never existed" and "no longer published" — a public
         # endpoint shouldn't confirm the existence of an unpublished listing.
+        # The ETag set on `response` above never reaches the client here:
+        # raising builds its own response, so a 404 is never cacheable.
         raise HTTPException(status_code=404, detail="This property is no longer available.")
     return prop
 
 
-@router.post("/leads", response_model=LandingLeadRecord, status_code=201)
-def submit_lead(body: LandingLeadRequest) -> LandingLeadRecord:
+@router.post("/leads", response_model=LandingLeadResult, status_code=201)
+def submit_lead(body: LandingLeadRequest) -> LandingLeadResult:
+    """Answers with a STATUS, not a bare record — a repeat enquiry about a
+    property this number already enquired about is deliberately not stored,
+    and the page has to be able to tell that ending from a fresh one (see
+    LandingLeadResult). Still a 201: nothing failed, and the visitor's
+    enquiry is on file either way."""
     return landing_page_service.submit_lead(body)
 
 

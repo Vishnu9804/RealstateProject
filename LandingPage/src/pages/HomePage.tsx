@@ -1,4 +1,4 @@
-import { useEffect, useMemo, useRef, useState } from "react";
+import { useCallback, useEffect, useMemo, useRef, useState } from "react";
 import { useLocation, useParams } from "react-router-dom";
 import { landingApi } from "../api/landingApi";
 import type { LandingProperty } from "../api/types";
@@ -8,6 +8,7 @@ import { site } from "../lib/siteConfig";
 import PropertyCard from "../components/PropertyCard";
 import RequirementsForm from "../components/RequirementsForm";
 import Reveal from "../components/Reveal";
+import Toast from "../components/Toast";
 import { IconAlert, IconArrowRight, IconChat, IconCheck, IconKey, IconSearch, IconShield } from "../components/Icons";
 
 const STEP_ICONS = { chat: IconChat, search: IconSearch, shield: IconShield, key: IconKey };
@@ -20,6 +21,17 @@ type Filter = "all" | "Sale" | "Rent";
 // network latency — worth telling a visitor so the empty grid doesn't read
 // as broken.
 const SLOW_LOAD_HINT_MS = 4000;
+
+// What the visitor is told the moment their requirements are saved, and the
+// beat before the page carries them up to the properties.
+//
+// The pause is the whole point of it being a constant rather than a zero.
+// Scrolling instantly on click reads as the page having jumped, and leaves
+// a real doubt about whether the form was submitted at all — which is the
+// exact opposite of what moving them there is for. Long enough to register
+// the confirmation, short enough that nobody decides the button is stuck.
+const SUBMITTED_TOAST_TEXT = "Your requirements are submitted! We'll contact you shortly.";
+const SCROLL_AFTER_SUBMIT_MS = 900;
 
 /**
  * The whole public site, minus the property page: one vertically scrolling
@@ -106,13 +118,35 @@ export default function HomePage() {
   // would otherwise leave the first scroll short of the form. `settled`
   // makes sure that second pass happens exactly once — after it, the page
   // is the visitor's to scroll, not ours.
-  const tokenScrollSettled = useRef(false);
   useEffect(() => {
     if (!token || tokenScrollSettled.current) return;
     if (properties !== null) tokenScrollSettled.current = true;
     const frame = window.requestAnimationFrame(() => scrollToSection("contact"));
     return () => window.cancelAnimationFrame(frame);
   }, [token, properties]);
+
+  // Guards the /enquire/:token scroll further down — declared up here
+  // because onRequirementsSubmitted below has to be able to retire it.
+  const tokenScrollSettled = useRef(false);
+
+  // Set only by the requirements form at the bottom of THIS page, and only
+  // when a submission was actually saved. The property page's short enquiry
+  // form is a different component on a different route and never lands here
+  // — someone enquiring about one specific listing has said what they want
+  // by being on it, and sweeping them off to a grid of everything else
+  // would be taking them away from it, not helping.
+  const [toast, setToast] = useState<string | null>(null);
+  const dismissToast = useCallback(() => setToast(null), []);
+
+  const onRequirementsSubmitted = useCallback(() => {
+    setToast(SUBMITTED_TOAST_TEXT);
+    // Retires the /enquire/:token scroll below before ours starts. That
+    // effect fires a second time when the property grid finishes loading,
+    // and would otherwise be able to pull a visitor who submitted during
+    // that window straight back down to the form they just finished with.
+    tokenScrollSettled.current = true;
+    window.setTimeout(() => scrollToSection("properties"), SCROLL_AFTER_SUBMIT_MS);
+  }, []);
 
   const counts = useMemo(() => {
     const list = properties ?? [];
@@ -134,6 +168,12 @@ export default function HomePage() {
 
   return (
     <main>
+      {/* Lives at the top of the page rather than inside the form, because
+          it has to outlive the scroll that takes the visitor away from the
+          form — see components/Toast.tsx. Renders nothing when there is
+          nothing to say. */}
+      <Toast message={toast} onDismiss={dismissToast} />
+
       {/* ================================ hero ================================ */}
       <section id="home" className="section hero">
         <div className="hero__bg" aria-hidden>
@@ -394,7 +434,7 @@ export default function HomePage() {
                 </ul>
               </div>
 
-              <RequirementsForm token={token} idPrefix="home" />
+              <RequirementsForm token={token} idPrefix="home" onSubmitted={onRequirementsSubmitted} />
             </div>
           </Reveal>
         </div>

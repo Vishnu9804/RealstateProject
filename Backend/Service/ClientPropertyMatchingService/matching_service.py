@@ -22,7 +22,7 @@ here.
 from __future__ import annotations
 
 from datetime import datetime, timezone
-from typing import Dict, List, Optional
+from typing import Dict, List, Optional, Set
 
 from Database import client_repository, matching_repository
 from Database.client_session import is_client_database_configured
@@ -61,6 +61,14 @@ _computed_at_cache: Dict[str, datetime] = {}
 
 
 def recompute_for_client(phone: str) -> Optional[ClientMatchResult]:
+    """Full recompute: every matchable property re-scored, every cached
+    score for this client replaced. What a requirements change and the
+    dashboard's manual Refresh both run — in those cases the client's own
+    vector has (or may have) moved, so every previous score is suspect and
+    an incremental pass would be wrong.
+
+    The property list this reads comes from the in-memory snapshot, so a
+    full rescore no longer costs a single row of database traffic."""
     client = client_store.get_client_by_phone(phone)
     if client is None:
         return None
@@ -79,12 +87,56 @@ def recompute_for_client(phone: str) -> Optional[ClientMatchResult]:
 
     computed_at = _now()
     _persist_scores(phone, scores, computed_at)
+    # The watermark the daily rescore reads: everything up to now has been
+    # taken into account for this client, so tomorrow starts from here.
+    client_store.set_matches_computed_at({phone: computed_at})
     result = _build_result(client, scores, computed_at)
     step_logger.info(
         f"[Matching] {phone}: recomputed — {len(result.high)} high, {len(result.medium)} medium, "
         f"{len(result.low)} low (out of {len(scores)} scored)."
     )
     return result
+
+
+def rescore_changed_properties(
+    client: ClientRecord,
+    changed: List[EmbeddedProperty],
+    computed_at: datetime,
+    stored_vector: Optional[List[float]] = None,
+) -> int:
+    """Incremental rescore: only `changed` is looked at, and only those
+    properties' cached rows can be affected. Returns how many of them ended
+    up as matches.
+
+    This is what the nightly run uses. A client registered on Monday
+    afternoon and rescored again that evening does not need Tuesday's run to
+    re-compare them against the entire property table — only against what
+    arrived or was edited since that evening. Everything else about the
+    scoring is identical to a full recompute: same vector, same
+    score_property, same cutoffs.
+
+    `stored_vector` is the client's already-saved requirement vector. It is
+    reused when present because the requirements have NOT changed (a change
+    would have triggered a full recompute at the moment it happened), so
+    re-deriving the same vector — and re-saving it — every night would be
+    pure waste.
+    """
+    if not has_requirements(client):
+        return 0
+    vector = stored_vector if stored_vector else _embed_requirements(client)
+    scores = [
+        score
+        for prop in changed
+        if _is_matchable(prop) and (score := scoring.score_property(client, prop, vector)) is not None
+    ]
+    # Everything looked at, matchable or not — see
+    # matching_repository.merge_matches_for_client for why the merge needs
+    # this and not just the winners. A property that has since been pushed
+    # into the review queue is "considered but not scored", and its stale
+    # cached match has to go.
+    considered_ids = {prop.record_id for prop in changed}
+    _merge_scores(client.phone, scores, considered_ids, computed_at)
+    return len(scores)
 
 
 def _is_matchable(prop: EmbeddedProperty) -> bool:
@@ -102,6 +154,22 @@ def _is_matchable(prop: EmbeddedProperty) -> bool:
     becomes matchable like any other property and is picked up by that
     client's next recompute."""
     return not prop.needs_review
+
+
+def is_matchable(prop: EmbeddedProperty) -> bool:
+    """Public alias for _is_matchable — the ONE definition of "can this
+    property be matched at all", so the broker-requirement side
+    (Service/ClientPropertyMatchingService/requirement_matching_service.py)
+    applies exactly the same rule rather than a second copy of it that
+    could drift. Pure delegation: no behaviour of its own."""
+    return _is_matchable(prop)
+
+
+def display_fields(prop: EmbeddedProperty) -> dict:
+    """Public alias for _display_fields, for the same reason as
+    is_matchable above: what a MatchedProperty carries about its property
+    is decided in one place and read from there by both match surfaces."""
+    return _display_fields(prop)
 
 
 def get_cached_result(phone: str) -> Optional[ClientMatchResult]:
@@ -188,6 +256,23 @@ def _persist_scores(phone: str, scores: List[MatchScore], computed_at: datetime)
     else:
         _score_cache[phone] = scores
         _computed_at_cache[phone] = computed_at
+
+
+def _merge_scores(
+    phone: str,
+    scores: List[MatchScore],
+    considered_ids: Set[str],
+    computed_at: datetime,
+) -> None:
+    """Applies an incremental pass: the considered properties' rows are
+    replaced by whatever they scored this time (or removed if they no
+    longer score at all), and every other cached match survives untouched."""
+    if is_client_database_configured():
+        matching_repository.merge_matches_for_client(phone, scores, considered_ids, computed_at)
+        return
+    kept = [score for score in _score_cache.get(phone, []) if score.record_id not in considered_ids]
+    _score_cache[phone] = kept + scores
+    _computed_at_cache[phone] = computed_at
 
 
 def _read_scores(phone: str) -> tuple[List[MatchScore], Optional[datetime]]:

@@ -8,7 +8,7 @@ get_client_count. Callers never call this module directly.
 from __future__ import annotations
 
 from datetime import datetime
-from typing import List, Optional, Tuple
+from typing import Dict, List, Optional, Tuple
 
 from sqlalchemy import delete, func, select
 
@@ -29,6 +29,7 @@ _COLUMNS = (
     "budget_max_inr",
     "preferred_areas",
     "additional_requirements",
+    "requirement_submission_count",
     "assigned_agent_id",
     "handoff_sent_at",
 )
@@ -52,6 +53,19 @@ def upsert_client(record: ClientRecord) -> ClientRecord:
             session.add(row)
         for name in _COLUMNS:
             if name == "phone":
+                continue
+            if name == "requirement_submission_count":
+                # The one column that may never travel backwards. Every
+                # other field here is overwritten from the record, which is
+                # correct for data the caller owns -- but this is a quota,
+                # and a caller that builds a fresh record without carrying
+                # the old count (as several deliberately do: a website
+                # enquiry, a pipeline write) would silently hand the visitor
+                # a whole new allowance. Taking the larger of the two makes
+                # that impossible by construction rather than by everyone
+                # remembering, so the guard cannot be reopened by accident
+                # from some future call site.
+                setattr(row, name, max(getattr(row, name) or 0, getattr(record, name) or 0))
                 continue
             setattr(row, name, getattr(record, name))
         session.flush()
@@ -106,6 +120,49 @@ def save_requirement_embedding(phone: str, embedding: List[float]) -> None:
         row = session.get(ClientRow, phone)
         if row is not None:
             row.requirement_embedding = embedding
+
+
+def get_requirement_embeddings(phones: List[str]) -> Dict[str, List[float]]:
+    """The stored requirement vectors for these clients, in one query.
+
+    Read back so the daily rescore doesn't have to recompute (and re-save)
+    a vector that has not changed — a client whose requirements were last
+    edited weeks ago has exactly the same vector today, and re-deriving it
+    every night meant one pointless write per client per day. A client
+    missing from the result simply has none stored yet and gets one
+    computed.
+    """
+    if not phones:
+        return {}
+    stmt = select(ClientRow.phone, ClientRow.requirement_embedding).where(ClientRow.phone.in_(phones))
+    with get_client_session() as session:
+        return {
+            phone: list(embedding)
+            for phone, embedding in session.execute(stmt).all()
+            if embedding is not None
+        }
+
+
+def get_matches_computed_at(phones: List[str]) -> Dict[str, Optional[datetime]]:
+    """Each client's last-scored watermark, in one query — see
+    ClientRow.matches_computed_at."""
+    if not phones:
+        return {}
+    stmt = select(ClientRow.phone, ClientRow.matches_computed_at).where(ClientRow.phone.in_(phones))
+    with get_client_session() as session:
+        return {phone: when for phone, when in session.execute(stmt).all()}
+
+
+def set_matches_computed_at(watermarks: Dict[str, datetime]) -> None:
+    """Stamps the watermark for several clients at once — one session for
+    the whole daily run rather than one per client."""
+    if not watermarks:
+        return
+    with get_client_session() as session:
+        for phone, when in watermarks.items():
+            row = session.get(ClientRow, phone)
+            if row is not None:
+                row.matches_computed_at = when
 
 
 def _to_pydantic(row: ClientRow) -> ClientRecord:

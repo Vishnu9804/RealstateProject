@@ -46,6 +46,7 @@ EDITABLE_CONTENT_FIELDS = (
 
 _COLUMNS = (
     "source_message_id",
+    "source_connection_id",
     "requirement_type",
     "bhk",
     "area_name",

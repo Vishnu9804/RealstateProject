@@ -352,6 +352,62 @@ export interface ClientMatchResult {
   low: MatchedProperty[];
 }
 
+/**
+ * Mirrors Backend/Model/ClientPropertyMatchingModel/requirement_match_result.py
+ * — the demand side's mirror of ClientMatchResult.
+ *
+ * Carries the SAME MatchedProperty shape as a client match, because it is
+ * produced by the same scoring engine (see Backend/Service/
+ * ClientPropertyMatchingService/requirement_matching_service.py). That is
+ * what lets the two dialogs share their cards, badges and bucket labels
+ * rather than each inventing its own.
+ */
+export interface RequirementMatchResult {
+  record_id: string;
+  /** One-line "3 BHK Flat · to buy · Vesu, Althan", composed server-side so
+   *  the subtitle and the fields actually scored can never disagree. */
+  requirement_summary: string;
+  /** False when the requirement carries nothing scoring can compare — the
+   *  dialog says so rather than showing an empty result that reads as
+   *  "nothing fits". */
+  has_requirements: boolean;
+  computed_at: string | null;
+  high: MatchedProperty[];
+  medium: MatchedProperty[];
+  low: MatchedProperty[];
+}
+
+/* ----------------------------------------------------- property sharing */
+
+/**
+ * Mirrors Backend/Model/PropertySharingModel/property_share_templates.py —
+ * the two "here are the properties" message templates the Settings page
+ * lets a real-estate client customize. Deliberately separate from
+ * HandoffTemplates: those name an agent and a site visit, these send a
+ * shortlist to the person who asked for it and involve no agent at all.
+ */
+export interface PropertyShareTemplates {
+  requirement_template: string;
+  client_template: string;
+}
+
+/** Who a shortlist is about to go to, and from which of the operator's own
+ *  numbers (see Backend/Model/PropertySharingModel/share_result.py).
+ *  `from_number` is the one fact the frontend cannot derive for itself. */
+export interface ShareTarget {
+  to_phone: string;
+  to_name: string | null;
+  from_number: string | null;
+}
+
+/** What a send actually did. `sent: false` is a reported outcome (nothing
+ *  was connected to send from), not an error. */
+export interface ShareResult {
+  sent: boolean;
+  to_phone: string;
+  from_number: string | null;
+}
+
 export interface PropertyRecord {
   record_id: string;
   source_message_id: string;
@@ -449,6 +505,13 @@ export interface LandingLeadRecord {
 export interface BrokerRequirementRecord {
   record_id: string;
   source_message_id: string;
+  /** Which of the operator's own linked WhatsApp numbers this requirement
+   *  was captured on. Never displayed and never edited — it exists so that
+   *  "Send details on WhatsApp" replies FROM the number the requirement
+   *  came in on. null for a requirement captured before this was recorded,
+   *  in which case the backend falls back to the first number selected for
+   *  client inquiries. */
+  source_connection_id: string | null;
   requirement_type: string | null;
   bhk: string | null;
   /** The primary locality — simply the first of preferred_areas. */

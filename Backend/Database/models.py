@@ -121,6 +121,23 @@ class PropertyRow(Base):
     # Add/Edit dialog; read/written directly via property_repository's own
     # get/set_instagram_media_pk.
     instagram_media_pk: Mapped[Optional[str]] = mapped_column(String, nullable=True)
+    # When instagram_reel_url was last SET or CHANGED to a new non-empty
+    # value — deliberately not "when this row last changed" (updated_at,
+    # which any edit bumps) and not "when it gained a photo or a reel"
+    # (qualified_at, which photos bump too). It exists so the Instagram
+    # poller can track the N most recently linked reels: a property captured
+    # months ago whose reel link is added today is the newest reel there is,
+    # which neither of the other two timestamps expresses on its own.
+    #
+    # Same "derived metadata, not content" status as instagram_media_pk
+    # above: absent from StructuredProperty/EmbeddedProperty/PropertyRecord
+    # and from property_repository._COLUMNS, written only by this module's
+    # own add_property/update_property, and read into the in-memory
+    # property snapshot (Service/WhatsAppDataFetchingService/property_snapshot.py),
+    # which is what orders the Instagram poller's watched reels.
+    instagram_reel_url_updated_at: Mapped[Optional[datetime]] = mapped_column(
+        DateTime(timezone=True), nullable=True
+    )
 
     # --- known for certain from WhatsApp itself, not from the LLM: see
     # WhatsAppMessageRow above (this table used to carry its own copy of

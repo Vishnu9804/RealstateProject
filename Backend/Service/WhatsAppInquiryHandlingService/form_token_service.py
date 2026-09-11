@@ -39,8 +39,40 @@ class _TokenEntry(NamedTuple):
     expires_at: float
 
 
+# A ceiling on how many live tokens are held at once, and a sweep to keep
+# the table near it.
+#
+# Every token has a 24-hour life, but until now the only thing that ever
+# removed one was somebody opening that exact link and finding it expired —
+# so a token nobody ever clicked stayed in memory for the life of the
+# process. One per welcome message, one per update link, one per Instagram
+# DM sequence, forever. That is a slow leak in a process meant to run for
+# months, and a leak reachable from outside is a way to bring a server
+# down without ever attacking it directly.
+#
+# The sweep below runs only when the table is over the ceiling, and drops
+# genuinely expired entries first — in the normal case that is all of the
+# excess, and nothing live is touched. Only if the table is STILL over the
+# ceiling after that (which would mean tens of thousands of unexpired
+# tokens, i.e. an attack rather than a Tuesday) are the oldest live ones
+# dropped, oldest first, because the newest link is the one somebody is
+# most likely about to open.
+_MAX_LIVE_TOKENS = 50_000
+
 _lock = threading.Lock()
 _tokens: Dict[str, _TokenEntry] = {}
+
+
+def _sweep_locked() -> None:
+    if len(_tokens) <= _MAX_LIVE_TOKENS:
+        return
+    now = time.monotonic()
+    for token in [t for t, entry in _tokens.items() if entry.expires_at < now]:
+        del _tokens[token]
+    if len(_tokens) <= _MAX_LIVE_TOKENS:
+        return
+    for token in sorted(_tokens, key=lambda t: _tokens[t].expires_at)[: len(_tokens) - _MAX_LIVE_TOKENS]:
+        del _tokens[token]
 
 
 def issue_token(channel: Channel, identity: str) -> str:
@@ -50,6 +82,7 @@ def issue_token(channel: Channel, identity: str) -> str:
     token = secrets.token_urlsafe(24)
     with _lock:
         _tokens[token] = _TokenEntry(channel=channel, identity=identity, expires_at=time.monotonic() + _TOKEN_TTL_SECONDS)
+        _sweep_locked()
     return token
 
 

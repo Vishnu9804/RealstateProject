@@ -111,6 +111,34 @@ class Settings(BaseSettings):
     # without any manual per-machine .env edits. Set explicitly only to
     # override that detection (e.g. a real deployed frontend origin).
     frontend_lan_origin: str = ""
+    # The number a prospective buyer is told to CALL to book an offline site
+    # visit — currently used by the Instagram DM sequence (see
+    # Service/InstagramInquiryHandlingService/instagram_message_templates.py).
+    # Write it exactly as it should be read out on a phone screen, e.g.
+    # "+91 98765 43210". Left blank by default and NEVER auto-filled: a
+    # placeholder or a guessed number in a message telling someone to ring it
+    # is worse than no number at all, so the message falls back to a wording
+    # with no number in it whenever this is unset.
+    business_contact_phone: str = ""
+
+    # --- per-identity daily allowances (see Middleware/daily_quota.py) ---
+    #
+    # How much ONE personal WhatsApp number, or ONE Instagram account, may
+    # cost this backend in a single day (the day turning over at 6 AM IST).
+    # They are settings rather than constants for one reason: the right
+    # number is a business judgement about this business's customers, not a
+    # property of the code, and finding it must never require a code change.
+    #
+    # Set generously on purpose. Every one of these is several times what a
+    # genuine enquiry has ever needed, because the cost of being wrong in
+    # the two directions is not remotely symmetric: too high merely lets a
+    # flood run a little longer before it is stopped, while too low turns a
+    # real customer away mid-conversation. Set any of them to 0 to turn
+    # that particular limit off entirely.
+    whatsapp_daily_message_limit: int = Field(default=20, ge=0)
+    whatsapp_daily_word_limit: int = Field(default=200, ge=0)
+    instagram_daily_comment_limit: int = Field(default=10, ge=0)
+    instagram_daily_dm_limit: int = Field(default=10, ge=0)
 
     @model_validator(mode="after")
     def _fill_lan_defaults(self) -> "Settings":

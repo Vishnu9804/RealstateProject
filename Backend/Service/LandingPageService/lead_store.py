@@ -32,11 +32,16 @@ def _with_phone(record: LandingLeadRecord) -> LandingLeadRecord:
 
 
 def add_lead(record: LandingLeadRecord) -> LandingLeadRecord:
+    # Normalized once, here, and then PERSISTED (see LandingLeadRow.phone_e164)
+    # rather than only computed on the way out — the lookups below are
+    # indexed on it, and an index is no use against a value that only exists
+    # after the rows have already been fetched.
+    stamped = record.model_copy(update={"phone_e164": normalize_phone(record.whatsapp_number)})
     if is_database_configured():
-        return _with_phone(landing_lead_repository.add_lead(record))
+        return _with_phone(landing_lead_repository.add_lead(stamped))
     # created_at is a server_default column in the database; the in-memory
     # path has to stamp it itself or every fallback lead reads as undated.
-    stored = record.model_copy(update={"created_at": record.created_at or datetime.now(timezone.utc)})
+    stored = stamped.model_copy(update={"created_at": record.created_at or datetime.now(timezone.utc)})
     _leads.append(stored)
     if len(_leads) > _MAX_IN_MEMORY_LEADS:
         del _leads[: len(_leads) - _MAX_IN_MEMORY_LEADS]
@@ -50,30 +55,87 @@ def get_all_leads(limit: int = 100) -> List[LandingLeadRecord]:
     return [_with_phone(record) for record in list(reversed(_leads))[:limit]]
 
 
-# How far back the two lookups below read. Leads are a low-volume table (one
-# row per website enquiry), and both callers run on a deliberate operator
-# action rather than in any loop, so scanning is the right trade here — a
-# SQL filter can't do this job anyway, since the stored numbers are raw
-# strings and only their normalized forms are comparable.
+# How far back the property-id lookup reads. Leads are a low-volume table
+# (one row per website enquiry) and this is the only one of the lookups
+# below that can legitimately return many rows, so it stays bounded rather
+# than unbounded. The in-memory fallback below uses it as its scan limit
+# too, for the same reason it always did.
 _PHONE_LOOKUP_LIMIT = 1000
 
 
-def find_leads_for_phone(phone: str) -> List[LandingLeadRecord]:
-    """Every lead left by one person, matched on the canonical E.164 form
-    so the two ways they may have typed their number still resolve to the
-    same human. Empty when `phone` isn't a lead's number at all."""
-    target = normalize_phone(phone) or phone.strip()
+def _normalized(phone: str) -> str:
+    """The one form every lookup here compares on — see
+    LandingLeadRecord.phone_e164. Falls back to the trimmed raw string so a
+    number that cannot be parsed still matches a stored row written from the
+    same unparseable text."""
+    return normalize_phone(phone) or phone.strip()
+
+
+def has_lead_for_property(phone: str, property_record_id: str) -> bool:
+    """Has this person already enquired about this exact property?
+
+    The guard behind the property page's form: a repeat enquiry used to be
+    recorded as another lead (deliberately — see LandingLeadRow's docstring
+    at the time), which also meant an anonymous visitor could tap the same
+    button forever and make the backend write a row, re-derive requirements
+    and re-run a full match recompute every single time. The enquiry is
+    already recorded, the team already has it, and the second one adds
+    nothing but cost — so it is now answered, warmly, without a write.
+
+    One indexed probe on the database path; a bounded in-memory scan on the
+    fallback, which is a list in this process and costs nothing either way.
+    """
+    target = _normalized(phone)
+    if not target or not property_record_id:
+        return False
+    if is_database_configured():
+        return landing_lead_repository.lead_exists_for_property(target, property_record_id)
+    return any(
+        (lead.phone_e164 or lead.whatsapp_number) == target and lead.property_record_id == property_record_id
+        for lead in _leads
+    )
+
+
+def has_lead_for_phone(phone: str) -> bool:
+    """Whether this number has left any enquiry at all — the existence
+    question, asked without dragging the answer's contents back with it."""
+    target = _normalized(phone)
+    if not target:
+        return False
+    if is_database_configured():
+        return landing_lead_repository.has_any_lead(target)
+    return any((lead.phone_e164 or lead.whatsapp_number) == target for lead in _leads)
+
+
+def get_property_ids_for_phone(phone: str) -> List[str]:
+    """Distinct property ids one person enquired about, newest first."""
+    target = _normalized(phone)
     if not target:
         return []
-    return [lead for lead in get_all_leads(_PHONE_LOOKUP_LIMIT) if (lead.phone_e164 or lead.whatsapp_number) == target]
+    if is_database_configured():
+        return landing_lead_repository.get_property_ids_for_phone(target, _PHONE_LOOKUP_LIMIT)
+    seen: set = set()
+    ids: List[str] = []
+    for lead in reversed(_leads[-_PHONE_LOOKUP_LIMIT:]):
+        if (lead.phone_e164 or lead.whatsapp_number) != target:
+            continue
+        if lead.property_record_id and lead.property_record_id not in seen:
+            seen.add(lead.property_record_id)
+            ids.append(lead.property_record_id)
+    return ids
 
 
 def get_lead_name(phone: str) -> Optional[str]:
     """The name this person left on the website, newest lead first — the
     only display name we have for someone who enquired through a property
     page and never registered over WhatsApp."""
-    for lead in find_leads_for_phone(phone):
-        if lead.name.strip():
+    target = _normalized(phone)
+    if not target:
+        return None
+    if is_database_configured():
+        return landing_lead_repository.get_lead_name(target)
+    for lead in reversed(_leads[-_PHONE_LOOKUP_LIMIT:]):
+        if (lead.phone_e164 or lead.whatsapp_number) == target and lead.name.strip():
             return lead.name.strip()
     return None
 

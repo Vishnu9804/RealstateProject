@@ -543,6 +543,14 @@ def _handle_message(connection_id: str, message: WhatsAppChatMessage) -> None:
             and not requirement_claimed
         )
 
+    # Stamped here and nowhere else: this is the one place that knows which
+    # connection a message came in on, and every pipeline downstream needs
+    # it only so a later reply can go back out through the same number (see
+    # WhatsAppChatMessage.connection_id). A copy rather than a mutation —
+    # the capture layer's own list of messages is not this function's to
+    # rewrite.
+    message = message.model_copy(update={"connection_id": connection_id})
+
     if (property_claimed or requirement_claimed) and _on_intake_message is not None:
         _on_intake_message(message, property_claimed, requirement_claimed)
     if inquiry_eligible and _on_inquiry_message is not None:
@@ -551,6 +559,7 @@ def _handle_message(connection_id: str, message: WhatsAppChatMessage) -> None:
 
 def _to_inquiry_message(message: WhatsAppChatMessage) -> InquiryChatMessage:
     return InquiryChatMessage(
+        connection_id=message.connection_id,
         message_id=message.message_id,
         sender_jid=message.sender_jid,
         sender_phone=message.sender_phone,
@@ -784,13 +793,59 @@ def _summarize_status(statuses: List[WhatsAppStatus]) -> str:
     return statuses[0]
 
 
-def get_sender_client(prefer_role: str) -> Optional[WhatsAppConnectionClient]:
-    """Picks a currently-listening client to send an outbound message
-    through — preferring one with `prefer_role`, falling back to any
-    listening connection at all so hand-off/welcome messages still go out
-    even if nothing happens to be flagged for that role."""
+def _pick_sender(prefer_role: str, connection_id: Optional[str]) -> Optional[_Connection]:
+    """Which connection an outbound message should go out through.
+
+    Three tiers, in order:
+
+      1. `connection_id`, when given AND that exact connection is currently
+         listening — "reply from the number they messaged". This is what
+         makes an answer land in the same chat thread the inbound arrived
+         in, rather than arriving out of the blue from a different number.
+         A stale/unlinked/offline id falls through rather than failing: a
+         message that CAN go out must still go out.
+      2. Any listening connection holding `prefer_role`.
+      3. Any listening connection at all, so hand-off/welcome messages keep
+         going out even if nothing happens to be flagged for that role.
+
+    Tiers 2 and 3 are ordered by phone number — the SAME order
+    list_connections returns and therefore the same order the Connection
+    page lists them in — so "the first number selected for client
+    inquiries" means the same thing to the operator reading that page as it
+    does here. (It used to be dict insertion order, which is restore order
+    at boot and therefore not something the operator can see or predict.)
+    """
     with _lock:
-        candidates = [c for c in _connections.values() if not c.is_pending and c.status == WhatsAppStatus.LISTENING]
+        if connection_id is not None:
+            conn = _connections.get(connection_id)
+            if conn is not None and not conn.is_pending and conn.status == WhatsAppStatus.LISTENING:
+                return conn
+        candidates = sorted(
+            (c for c in _connections.values() if not c.is_pending and c.status == WhatsAppStatus.LISTENING),
+            key=lambda c: (c.phone_number or c.connection_id),
+        )
         preferred = [c for c in candidates if prefer_role in c.roles]
-        chosen = preferred[0] if preferred else (candidates[0] if candidates else None)
-        return chosen.client if chosen else None
+        return preferred[0] if preferred else (candidates[0] if candidates else None)
+
+
+def get_sender_client(
+    prefer_role: str, connection_id: Optional[str] = None
+) -> Optional[WhatsAppConnectionClient]:
+    """The client an outbound message should be sent through — see
+    _pick_sender for how one is chosen. `connection_id` is optional and
+    defaults to None, so every existing caller keeps exactly the behaviour
+    it had."""
+    chosen = _pick_sender(prefer_role, connection_id)
+    return chosen.client if chosen else None
+
+
+def get_sender_number(prefer_role: str, connection_id: Optional[str] = None) -> Optional[str]:
+    """The PHONE NUMBER a message sent right now would go out from, for the
+    same inputs get_sender_client resolves. Display-only: the send dialogs
+    state which of the operator's own numbers a message will appear to come
+    from, which is otherwise invisible to them. None when nothing is
+    connected (or when the chosen connection has not reported its own
+    number yet), which the UI shows as "not connected" rather than
+    guessing."""
+    chosen = _pick_sender(prefer_role, connection_id)
+    return chosen.phone_number if chosen else None

@@ -224,12 +224,27 @@ def get_properties(limit: int = 100) -> List[PropertyRecord]:
 
 
 def get_property(record_id: str) -> Optional[PropertyRecord]:
-    """The single-record counterpart to get_properties — full content,
-    photos included. Backs GET /properties/{record_id}."""
-    prop = property_vector_store.get_property(record_id)
-    if prop is None:
+    """The single-record counterpart to get_properties — one property's
+    full CONTENT, served from the in-memory snapshot, with an accurate
+    photo count but no photo data. Backs GET /properties/{record_id}.
+
+    Photos are deliberately not here any more. Opening a property used to
+    transfer its entire photo payload — base64, frequently megabytes —
+    whether or not anyone ever looked at the photos, on every open, for
+    every dialog. They now come from get_property_images below, only when
+    someone actually presses Show photos."""
+    found = property_vector_store.get_property_info(record_id)
+    if found is None:
         return None
-    return _to_record(prop)
+    prop, image_count = found
+    return _to_record(prop, image_count=image_count)
+
+
+def get_property_images(record_id: str) -> Optional[List[str]]:
+    """One property's photos, on demand — backs
+    GET /properties/{record_id}/images. None when the property doesn't
+    exist, which the caller must not confuse with [] (no photos)."""
+    return property_vector_store.get_property_images(record_id)
 
 
 def get_property_count() -> int:
@@ -238,6 +253,12 @@ def get_property_count() -> int:
 
 def get_properties_version() -> str:
     return property_vector_store.get_properties_version()
+
+
+def get_property_version(record_id: str) -> Optional[str]:
+    """Per-property change marker for HTTP caching — see
+    property_vector_store.get_property_version."""
+    return property_vector_store.get_property_version(record_id)
 
 
 def create_property(content_fields: Dict[str, Any]) -> PropertyRecord:
@@ -313,9 +334,17 @@ def update_property(
     qualified_at: Optional[datetime] = None
     if content_updates:
         filtered_updates = {key: value for key, value in content_updates.items() if key in EDITABLE_CONTENT_FIELDS}
-        existing = property_vector_store.get_property(record_id)
-        if existing is None:
+        # The photo-less snapshot copy, not the full row: this merge exists
+        # only to recompute the embedding, and embedding text is built from
+        # the property's words (see embedding_service.build_embedding_text)
+        # — image_urls has never been part of it. Reading the full row here
+        # meant every single edit, including one that only changed a price,
+        # pulled that property's entire photo payload out of the database to
+        # throw it away moments later.
+        found = property_vector_store.get_property_info(record_id)
+        if found is None:
             return None
+        existing = found[0]
         merged_data = existing.model_dump(exclude={"embedding", "embedding_model"})
         merged_data.update(filtered_updates)
         merged_structured = StructuredProperty(**merged_data)

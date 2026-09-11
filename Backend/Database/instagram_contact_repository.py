@@ -30,6 +30,7 @@ _COLUMNS = (
     "budget_max_inr",
     "preferred_areas",
     "additional_requirements",
+    "requirement_submission_count",
 )
 
 
@@ -49,6 +50,19 @@ def upsert_contact(record: InstagramContactRecord) -> InstagramContactRecord:
             session.add(row)
         for name in _COLUMNS:
             if name == "ig_user_id":
+                continue
+            if name == "requirement_submission_count":
+                # The one column that may never travel backwards. Every
+                # other field here is overwritten from the record, which is
+                # correct for data the caller owns -- but this is a quota,
+                # and a caller that builds a fresh record without carrying
+                # the old count (as several deliberately do: a website
+                # enquiry, a pipeline write) would silently hand the visitor
+                # a whole new allowance. Taking the larger of the two makes
+                # that impossible by construction rather than by everyone
+                # remembering, so the guard cannot be reopened by accident
+                # from some future call site.
+                setattr(row, name, max(getattr(row, name) or 0, getattr(record, name) or 0))
                 continue
             setattr(row, name, getattr(record, name))
         session.flush()
@@ -87,3 +101,26 @@ def mark_event_processed(event_key: str) -> None:
     with get_client_session() as session:
         if session.get(InstagramProcessedEventRow, event_key) is None:
             session.add(InstagramProcessedEventRow(event_key=event_key))
+
+
+def get_recent_processed_event_keys(limit: int) -> List[str]:
+    """The `limit` most recently recorded event keys, newest first — the one
+    query that fills the in-memory guard in Service/
+    InstagramInquiryHandlingService/instagram_contact_store.py.
+
+    The poller asks "have I already handled this?" about every comment and
+    every DM message Instagram hands back, on every cycle — and Instagram
+    keeps handing back the same recent ones long after they were answered.
+    Asked one key at a time that was hundreds of round trips per cycle,
+    forever, essentially all of them re-confirming an answer that cannot
+    change (nothing in this application ever deletes a processed-event row).
+    Fetching the recent keys once, as a single column of short strings, turns
+    the entire steady state into a memory lookup.
+    """
+    stmt = (
+        select(InstagramProcessedEventRow.event_key)
+        .order_by(InstagramProcessedEventRow.created_at.desc())
+        .limit(limit)
+    )
+    with get_client_session() as session:
+        return list(session.execute(stmt).scalars().all())

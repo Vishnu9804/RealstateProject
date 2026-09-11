@@ -1443,7 +1443,44 @@ export function PropertyDetailDialog({
   // sibling — Escape backs out of it first (one Escape, one step back) and
   // only closes the whole detail dialog once no photo is open.
   const [lightboxIndex, setLightboxIndex] = useState<number | null>(null);
-  const photoCount = property.image_urls.length;
+
+  // Photos are NOT part of opening a property any more. The record arrives
+  // with image_urls: [] and the real number in image_count (see
+  // propertyApi.getProperty), so this dialog opens instantly out of the
+  // backend's in-memory snapshot and only fetches the actual image data —
+  // base64, often megabytes — if someone asks to see it.
+  //
+  // `property.image_urls` is still honoured when it IS populated: the
+  // record handed back by a save carries the photos already, and there is
+  // no reason to re-fetch what we were just given.
+  const [fetchedPhotos, setFetchedPhotos] = useState<string[] | null>(null);
+  const [loadingPhotos, setLoadingPhotos] = useState(false);
+  const [photoError, setPhotoError] = useState<string | null>(null);
+  const photos = fetchedPhotos ?? (property.image_urls.length > 0 ? property.image_urls : null);
+  const photoCount = photos?.length ?? 0;
+  const hasUnloadedPhotos = photos === null && property.image_count > 0;
+
+  // A different property in the same mounted dialog must not show the
+  // previous one's photos.
+  useEffect(() => {
+    setFetchedPhotos(null);
+    setLoadingPhotos(false);
+    setPhotoError(null);
+    setLightboxIndex(null);
+  }, [property.record_id]);
+
+  async function loadPhotos() {
+    setLoadingPhotos(true);
+    setPhotoError(null);
+    try {
+      const { image_urls } = await propertyApi.getPropertyImages(property.record_id);
+      setFetchedPhotos(image_urls);
+    } catch (err) {
+      setPhotoError(friendlyError(err));
+    } finally {
+      setLoadingPhotos(false);
+    }
+  }
 
   useEffect(() => {
     const onKeyDown = (event: KeyboardEvent) => {
@@ -1502,9 +1539,24 @@ export function PropertyDetailDialog({
         </div>
 
         <div className="detail-modal__body">
-          {photoCount > 0 && (
+          {hasUnloadedPhotos && (
+            <div style={{ marginBottom: 14 }}>
+              <Button variant="ghost" icon={<IconImage size={14} />} busy={loadingPhotos} onClick={loadPhotos}>
+                {`Show ${property.image_count} photo${property.image_count === 1 ? "" : "s"}`}
+              </Button>
+              {photoError && (
+                <div style={{ marginTop: 8 }}>
+                  <Note tone="bad" icon={<IconAlert size={16} />}>
+                    {photoError}
+                  </Note>
+                </div>
+              )}
+            </div>
+          )}
+
+          {photos && photoCount > 0 && (
             <div className="detail__gallery">
-              {property.image_urls.map((src, index) => (
+              {photos.map((src, index) => (
                 <button
                   key={index}
                   type="button"
@@ -1692,7 +1744,7 @@ export function PropertyDetailDialog({
               <IconChevron size={18} />
             </button>
           )}
-          <img src={property.image_urls[lightboxIndex]} alt={`Property photo ${lightboxIndex + 1}`} />
+          <img src={(photos ?? [])[lightboxIndex]} alt={`Property photo ${lightboxIndex + 1}`} />
           {photoCount > 1 && (
             <button
               type="button"

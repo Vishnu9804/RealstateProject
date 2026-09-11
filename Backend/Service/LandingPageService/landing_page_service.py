@@ -18,9 +18,11 @@ published — only the client's own screen can.
 from __future__ import annotations
 
 import re
+import threading
 from typing import List, Optional
 
-from Model.LandingPageModel.landing_lead import LandingLeadRecord, LandingLeadRequest
+from Model.LandingPageModel.landing_lead import LandingLeadRecord, LandingLeadRequest, LandingLeadResult
+from Middleware import step_logger
 from Model.LandingPageModel.landing_property import LandingPropertyDetail, LandingPropertySummary
 from Model.WhatsAppDataFetchingModel.embedded_property import EmbeddedProperty
 from Model.WhatsAppInquiryHandlingModel.client_record import ClientRecord
@@ -74,6 +76,37 @@ def get_published_properties() -> List[LandingPropertySummary]:
     return [_to_summary(prop) for prop in published]
 
 
+def get_published_version() -> str:
+    """A marker that changes whenever the published list could have changed
+    — what the public endpoints turn into an ETag (see
+    Middleware/http_cache.py).
+
+    This is the property store's store-wide version, which is broader than
+    "the published set": editing a property that is NOT on the landing page
+    moves it too, and a visitor's browser will re-download a list that is
+    in fact identical. That is the deliberate direction to err in. The
+    alternative — deriving a marker from only the published rows — would
+    have to be kept exactly in step with every path that can publish,
+    unpublish or edit one, and the failure mode of getting that wrong is a
+    sold property pinned in visitors' browsers. An occasional wasted
+    re-fetch is a much better failure than that, and it is free of database
+    cost either way: the version itself is read from memory.
+    """
+    return property_vector_store.get_properties_version()
+
+
+def get_published_property_version(record_id: str) -> Optional[str]:
+    """Per-property marker for one listing's detail page. None when no
+    trustworthy version exists, which the caller must treat as "do not
+    cache" — see property_vector_store.get_property_version.
+
+    Un-publishing a property bumps this (it is a write to the row), so a
+    visitor holding a cached copy revalidates, gets the 404 this endpoint
+    returns for unpublished listings, and the page correctly disappears.
+    """
+    return property_vector_store.get_property_version(record_id)
+
+
 def get_published_property(record_id: str) -> Optional[LandingPropertyDetail]:
     """One published property, or None.
 
@@ -92,36 +125,107 @@ def get_published_property(record_id: str) -> Optional[LandingPropertyDetail]:
     return _to_detail(prop)
 
 
-def submit_lead(request: LandingLeadRequest) -> LandingLeadRecord:
+# What someone is told when they enquire a second time about a property
+# they have already enquired about. It reads as a reassurance because that
+# is what it is: their enquiry IS with us, and there is nothing for them to
+# do again.
+DUPLICATE_ENQUIRY_NOTICE = (
+    "You've already sent us an enquiry for this property — it's with our team and someone will be in "
+    "touch on WhatsApp shortly. There's no need to send it again."
+)
+
+
+def submit_lead(request: LandingLeadRequest) -> LandingLeadResult:
     """Stores one enquiry, and folds it into the SAME Inquiries table a
     WhatsApp registration produces -- see _sync_to_inquiries below for
     exactly what that does and doesn't touch. The property label is
     resolved here rather than trusted from the browser -- the request only
     carries an id, and a public caller has no say in how that property is
-    described."""
+    described.
+
+    Two things changed here, and both are about what this endpoint costs
+    when it is called by someone who is not a customer:
+
+    ONE ENQUIRY PER NUMBER PER PROPERTY. A repeat enquiry used to be stored
+    as another lead. That was a defensible reading of the data, but it also
+    meant an anonymous visitor could press one button over and over and make
+    this backend write a row, re-derive requirements and re-run a full match
+    recompute every single time -- unbounded, on a metered database, from a
+    public page. The team already has the enquiry, the second one carries no
+    new information, and the visitor is told so warmly rather than refused.
+    The check happens BEFORE the property is even looked up, so the repeated
+    request is answered at the cheapest possible point.
+
+    THE FOLD-IN RUNS IN THE BACKGROUND. _sync_to_inquiries can trigger a
+    full match recompute, which is by far the slowest thing in this call and
+    produces nothing the browser is waiting for -- the visitor's answer is
+    "we've got it", and that is already true the moment the lead is stored.
+    It used to run inline, which is why this button sat spinning.
+    """
+    # Identity first, because the duplicate check below is about the PERSON,
+    # and a verified number outranks a typed one exactly as it does further
+    # down (see the comment on verified_phone there).
+    verified_phone = otp_service.resolve_verification(request.verification_token)
+    identity_phone = verified_phone or request.whatsapp_number.strip()
+
+    if request.property_record_id and lead_store.has_lead_for_property(
+        identity_phone, request.property_record_id
+    ):
+        step_logger.info(
+            f"[Landing] Repeat enquiry from {identity_phone} about property "
+            f"{request.property_record_id!r} — already recorded, nothing written."
+        )
+        return LandingLeadResult(status="duplicate", message=DUPLICATE_ENQUIRY_NOTICE)
+
     prop: Optional[EmbeddedProperty] = None
     label: Optional[str] = None
     if request.property_record_id:
-        prop = property_vector_store.get_property(request.property_record_id)
+        # The photo-less copy: everything below reads only this property's
+        # words — _title needs bhk/type/society/area, _derive_requirements
+        # needs type/bhk/listing_type/area/price. Loading the full row here
+        # meant every website enquiry pulled that listing's entire photo
+        # payload out of the database to build a one-line label from it.
+        found = property_vector_store.get_property_info(request.property_record_id)
+        prop = found[0] if found is not None else None
         label = _title(prop) if prop is not None else None
 
-    # A verified number outranks the typed one for exactly the reason the
-    # form token does on the requirements form: it is an identity WE
-    # established, not one the browser asserted. Falls through to the typed
-    # number when there is no token to resolve, which is the only behaviour
-    # this endpoint had before (see LandingLeadRequest.verification_token).
-    verified_phone = otp_service.resolve_verification(request.verification_token)
-
+    # `identity_phone` above already resolved this: a verified number
+    # outranks the typed one for exactly the reason the form token does on
+    # the requirements form -- it is an identity WE established, not one the
+    # browser asserted -- and falls through to the typed number when there
+    # is no token, which is the only behaviour this endpoint had before (see
+    # LandingLeadRequest.verification_token).
     record = lead_store.add_lead(
         LandingLeadRecord(
             name=request.name.strip(),
-            whatsapp_number=verified_phone or request.whatsapp_number.strip(),
+            whatsapp_number=identity_phone,
             property_record_id=request.property_record_id,
             property_label=label,
         )
     )
-    _sync_to_inquiries(record, prop)
-    return record
+    _sync_in_background(record, prop)
+    return LandingLeadResult(status="ok", lead=record)
+
+
+def _sync_in_background(record: LandingLeadRecord, prop: Optional[EmbeddedProperty]) -> None:
+    """Runs _sync_to_inquiries off the request thread — see submit_lead.
+
+    Daemon, and broadly guarded: the lead itself is already durably stored
+    by the time this starts, so nothing this thread can do (or fail to do)
+    may be allowed to surface as a failed submission to the visitor. A
+    failure is logged and the enquiry still stands in the leads table, which
+    is where the team reads it from."""
+
+    def run() -> None:
+        try:
+            _sync_to_inquiries(record, prop)
+        except Exception as exc:  # noqa: BLE001
+            step_logger.error(
+                f"[Landing] Lead {record.lead_id} was stored but could not be folded into the "
+                f"Inquiries table: {exc!r}"
+            )
+
+    threading.Thread(target=run, name="landing-lead-sync", daemon=True).start()
 
 
 def get_leads(limit: int = 100) -> List[LandingLeadRecord]:
@@ -136,14 +240,11 @@ def get_property_ids_for_phone(phone: str) -> List[str]:
     about here, so it can show them a second time under its "Web Site
     Property Inquiry" section (components/ClientMatchesDialog.tsx) even
     when they're already sitting in a scored bucket for an unrelated
-    reason. Order matches the raw enquiries themselves (newest first)."""
-    seen: set = set()
-    ids: List[str] = []
-    for lead in lead_store.find_leads_for_phone(phone):
-        if lead.property_record_id and lead.property_record_id not in seen:
-            seen.add(lead.property_record_id)
-            ids.append(lead.property_record_id)
-    return ids
+    reason. Order matches the raw enquiries themselves (newest first).
+
+    One indexed query — it used to pull up to a thousand whole lead rows
+    across the wire and keep a handful of ids out of them."""
+    return lead_store.get_property_ids_for_phone(phone)
 
 
 def _sync_to_inquiries(lead: LandingLeadRecord, prop: Optional[EmbeddedProperty]) -> None:
@@ -210,6 +311,13 @@ def _sync_to_inquiries(lead: LandingLeadRecord, prop: Optional[EmbeddedProperty]
         # moves one way.
         status="registered" if existing is not None and existing.status == "registered" else "website_lead",
         pending_action=existing.pending_action if existing is not None else None,
+        # Carried across explicitly, not left to default to 0: a website
+        # enquiry is NOT a requirements-form submission, so it must neither
+        # spend one of this client's updates nor hand them a fresh
+        # allowance. (client_store/client_repository refuse to lower a
+        # stored count anyway — this line is what makes the intent readable
+        # rather than accidental.)
+        requirement_submission_count=existing.requirement_submission_count if existing is not None else 0,
         # The lead's own name is always present (LandingLeadRequest
         # requires it) and reflects the most recent thing they told us.
         name=lead.name.strip() or (existing.name if existing is not None else None),
@@ -220,7 +328,7 @@ def _sync_to_inquiries(lead: LandingLeadRecord, prop: Optional[EmbeddedProperty]
         updated_at=existing.updated_at if existing is not None else None,
         **_derive_requirements(prop),
     )
-    client_store.upsert_client(record)
+    client_store.upsert_client(record, previous=existing)
 
 
 def _derive_requirements(prop: Optional[EmbeddedProperty]) -> dict:

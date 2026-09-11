@@ -58,12 +58,21 @@ class FormPrefillResponse(BaseModel):
     page say up front that requirements can't be changed online right now
     (see Service/WhatsAppInquiryHandlingService/assignment_lock_service.py)
     instead of letting someone retype everything and only then be refused.
-    The refusal itself is enforced on submit, server-side, never here."""
+    The refusal itself is enforced on submit, server-side, never here.
+
+    `updates_remaining` is the same kind of thing: how many more times
+    this identity may submit before the form starts refusing (see
+    inquiry_form_service.MAX_REQUIREMENT_SUBMISSIONS). It lets the page warn
+    someone on their last update BEFORE they retype everything, rather than
+    after. Like has_active_assignment it is advisory only — the count is
+    kept and enforced server-side, and a browser saying otherwise changes
+    nothing."""
 
     is_new_client: bool
     channel: Channel
     phone: Optional[str] = None
     has_active_assignment: bool = False
+    updates_remaining: Optional[int] = None
     name: Optional[str] = None
     email: Optional[str] = None
     purpose: Optional[str] = None
@@ -76,14 +85,21 @@ class FormPrefillResponse(BaseModel):
 
 
 class FormSubmissionResult(BaseModel):
-    """The answer to a submit. Two outcomes, and the page shows a genuinely
-    different thing for each:
+    """The answer to a submit. Three outcomes, and the page shows a
+    genuinely different thing for each:
 
-      - "ok"     -> saved, confirmation message sent.
-      - "locked" -> deliberately NOT saved: this client has a site visit
-                    assigned to an agent, so their requirements are frozen
-                    until a human changes them (see
-                    assignment_lock_service.py). `message` is what to show.
+      - "ok"            -> saved; the confirmation message goes out on a
+                           background thread straight afterwards.
+      - "locked"        -> deliberately NOT saved: this client has a site
+                           visit assigned to an agent, so their requirements
+                           are frozen until a human changes them (see
+                           assignment_lock_service.py). `message` is what to
+                           show.
+      - "limit_reached" -> deliberately NOT saved: this identity has used up
+                           its allowance of online updates (see
+                           inquiry_form_service.MAX_REQUIREMENT_SUBMISSIONS).
+                           `message` is what to show, and no WhatsApp
+                           message is sent for it — see that module for why.
 
     A refusal is a 200 with a status, not an HTTP error — nothing went
     wrong, the answer is just "no, and here's why", and the page needs the

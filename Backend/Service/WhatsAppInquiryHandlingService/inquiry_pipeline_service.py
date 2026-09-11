@@ -60,6 +60,7 @@ from Service.WhatsAppInquiryHandlingService import (
     assignment_lock_service,
     client_store,
     form_token_service,
+    inquiry_connection_store,
     invitation_tracker,
     outbound_messenger,
 )
@@ -90,6 +91,19 @@ _EXISTING_CLIENT_TEXT_TEMPLATE = (
 
 _UPDATE_LINK_TEXT_TEMPLATE = "Sure! Update your requirements here:\n{link}"
 
+# Sent instead of a form link when this client has used up the online
+# updates the form will accept (see inquiry_form_service.
+# MAX_REQUIREMENT_SUBMISSIONS). Checked BEFORE a link is minted for exactly
+# the same reason the assignment lock is: handing someone a link that is
+# certain to be refused at the end wastes their time and teaches them the
+# system is broken.
+_UPDATE_LIMIT_TEXT = (
+    "Of course! One small thing — you've already updated your requirements three times through "
+    "the online form, which is as many as it can take.\n\n"
+    "Please don't worry though: just tell us here what you'd like changed, or give us a call, and one "
+    "of our team will update it for you personally right away."
+)
+
 _KEEP_EXISTING_TEXT = "No problem — we'll keep your existing requirements as they are. Feel free to reach out anytime!"
 
 _CLARIFY_YES_NO_TEXT = "Sorry, I didn't quite get that — please reply YES to update your requirements, or NO to keep them as they are."
@@ -109,6 +123,13 @@ def handle_batch_ready(phone: str, messages: List[InquiryChatMessage]) -> None:
     # Falls back to the raw WhatsApp-supplied phone only if it somehow isn't
     # a parseable number at all, rather than dropping the inquiry outright.
     client_phone = normalize_phone(phone) or phone
+    # Recorded before any routing decision below, and regardless of how this
+    # batch is classified: the fact worth keeping is "this person reached us
+    # on THAT number of ours", which is true even for a batch that turns out
+    # not to be property-related at all. Every later outbound message to
+    # them then goes out from the same number (see
+    # inquiry_connection_store.py).
+    inquiry_connection_store.remember(client_phone, messages[-1].connection_id if messages else None)
     existing_client = client_store.get_client_by_phone(client_phone)
     # A "website_lead" record (Service/LandingPageService/
     # landing_page_service.py's _sync_to_inquiries) means this phone
@@ -217,6 +238,21 @@ def _handle_update_confirmation_reply(phone: str, record: ClientRecord, messages
         # end in a refusal. They get the explanation straight away instead.
         if assignment_lock_service.has_active_assignment(phone):
             assignment_lock_service.send_locked_notice(phone, record)
+            return
+
+        # Same "check before minting, not after submitting" rule, for the
+        # other reason a submission can be refused. Lazy import to keep this
+        # module's import graph free of the form service, which imports the
+        # Instagram feature.
+        from Service.WhatsAppInquiryHandlingService import inquiry_form_service
+
+        if record.requirement_submission_count >= inquiry_form_service.MAX_REQUIREMENT_SUBMISSIONS:
+            sent = outbound_messenger.send_text(phone, _UPDATE_LIMIT_TEXT)
+            step_logger.info(
+                f"[Inquiry] {phone}: confirmed YES to update but has used all "
+                f"{inquiry_form_service.MAX_REQUIREMENT_SUBMISSIONS} online submissions — no link minted "
+                f"({'explanation sent' if sent else 'FAILED TO SEND explanation'})."
+            )
             return
 
         link = _build_form_link(phone)

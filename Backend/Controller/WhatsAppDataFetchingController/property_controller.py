@@ -3,11 +3,12 @@ structuring stage, and eventually the "Excel-like" dashboard data. Thin by
 design; state lives in Service/WhatsAppDataFetchingService/property_pipeline_service.py.
 """
 
-from typing import List, Literal, Optional
+from typing import Any, List, Literal, Optional
 
-from fastapi import APIRouter, HTTPException
+from fastapi import APIRouter, HTTPException, Request, Response
 from pydantic import BaseModel, Field
 
+from Middleware import http_cache
 from Model.WhatsAppDataFetchingModel.property_record import PropertyRecord
 from Service.WhatsAppDataFetchingService import property_pipeline_service
 
@@ -66,19 +67,69 @@ class PropertyUpdateRequest(PropertyContentFields):
 
 
 @router.get("", response_model=list[PropertyRecord])
-def get_properties(limit: int = 100) -> list[PropertyRecord]:
-    return property_pipeline_service.get_properties(limit=limit)
+def get_properties(request: Request, response: Response, limit: int = 100) -> Any:
+    """Conditional (see Middleware/http_cache.py): a browser that already
+    holds the current list — a reload, a second tab, a page revisit — gets a
+    bodyless 304 instead of the whole list again. The version it is checked
+    against comes from memory, so proving nothing changed costs no database
+    work either."""
+    etag = http_cache.build_etag("properties", limit, property_pipeline_service.get_properties_version())
+    unchanged = http_cache.conditional(request, response, etag)
+    return unchanged if unchanged is not None else property_pipeline_service.get_properties(limit=limit)
+
+
+class PropertyImages(BaseModel):
+    image_urls: List[str]
 
 
 @router.get("/{record_id}", response_model=PropertyRecord)
-def get_property(record_id: str) -> PropertyRecord:
-    """The list above is deliberately photo-less (see get_properties'
-    docstring) — this is what the frontend calls to get one property's
-    actual photos, right before showing its detail or Edit dialog."""
+def get_property(record_id: str, request: Request, response: Response) -> Any:
+    """One property's full content — served from the in-memory snapshot, so
+    this costs no database query. `image_urls` is always empty here and
+    `image_count` carries the real number; the photos themselves come from
+    the endpoint below.
+
+    Tagged per property, not with the list-wide version: editing some other
+    property must not invalidate this one in every open browser."""
+    etag = _property_etag("property", record_id)
+    unchanged = http_cache.conditional(request, response, etag)
+    if unchanged is not None:
+        return unchanged
     record = property_pipeline_service.get_property(record_id)
     if record is None:
         raise HTTPException(status_code=404, detail="Property not found")
     return record
+
+
+@router.get("/{record_id}/images", response_model=PropertyImages)
+def get_property_images(record_id: str, request: Request, response: Response) -> Any:
+    """This property's photos — the only endpoint in the application that
+    moves image data out of the database, and it runs only when someone
+    presses Show photos on this specific property.
+
+    The most valuable conditional request in the application: photos are
+    base64 and routinely run to megabytes per property, they are looked at
+    repeatedly, and they change only when someone actually edits that
+    property. Every view after the first costs about a hundred bytes and no
+    database read — instead of the entire payload, again."""
+    etag = _property_etag("images", record_id)
+    unchanged = http_cache.conditional(request, response, etag)
+    if unchanged is not None:
+        return unchanged
+    images = property_pipeline_service.get_property_images(record_id)
+    if images is None:
+        raise HTTPException(status_code=404, detail="Property not found")
+    return PropertyImages(image_urls=images)
+
+
+def _property_etag(scope: str, record_id: str) -> Optional[str]:
+    """None for a property with no known version — see
+    property_vector_store.get_property_version for why that must mean "do
+    not cache" rather than "make something up". `scope` keeps the two
+    endpoints' tags distinct, so a cached photo list can never be matched
+    against the property-detail request for the same id."""
+    version = property_pipeline_service.get_property_version(record_id)
+    return None if version is None else http_cache.build_etag(scope, record_id, version)
 
 
 @router.post("", response_model=PropertyRecord, status_code=201)

@@ -89,14 +89,17 @@ from Controller.WhatsAppInquiryHandlingController.phone_verification_controller 
 from Controller.WhatsAppInquiryHandlingController.whatsapp_inquiry_controller import router as whatsapp_inquiry_router
 from Controller.InstagramInquiryHandlingController.instagram_controller import router as instagram_router
 from Controller.LandingPageController.landing_page_controller import router as landing_page_router
+from Controller.PropertySharingController.property_share_controller import router as property_share_router
 from Config.settings import get_settings
 from Database.session import init_db, is_database_configured
 from Middleware.logging_config import configure_logging
+from Middleware.public_rate_limit import PublicRateLimitMiddleware
 from Middleware import step_logger
 from Service.AgentManagementService import handoff_template_service
+from Service.PropertySharingService import property_share_template_service
 from Service.ClientPropertyMatchingService import scheduled_recompute_service
 from Service.WhatsAppDataFetchingService import area_filter_service, area_knowledge_service, display_settings_service, whatsapp_service
-from Service.WhatsAppInquiryHandlingService import whatsapp_inquiry_service
+from Service.WhatsAppInquiryHandlingService import inquiry_connection_store, whatsapp_inquiry_service
 from Service.InstagramInquiryHandlingService import instagram_connection_service, instagram_polling_service
 
 configure_logging()
@@ -121,6 +124,11 @@ async def _init_database() -> None:
         await asyncio.to_thread(display_settings_service.load_from_database)
         await asyncio.to_thread(instagram_connection_service.load_from_database)
         await asyncio.to_thread(handoff_template_service.load_from_database)
+        await asyncio.to_thread(property_share_template_service.load_from_database)
+        # Which of our linked numbers each client's inquiry arrived on, so
+        # the first outbound message after a restart still goes out from the
+        # same number they originally messaged rather than the default one.
+        await asyncio.to_thread(inquiry_connection_store.load_from_database)
         step_logger.success(
             "Database ready — properties, client records, and settings will persist across restarts."
         )
@@ -235,12 +243,36 @@ if get_settings().frontend_lan_origin:
     _cors_origins.append(get_settings().frontend_lan_origin)
     _cors_origins.append(get_settings().frontend_lan_origin.replace(":5173", ":5174"))
 
+# A ceiling on the handful of endpoints an anonymous stranger can call — see
+# Middleware/public_rate_limit.py for exactly which, and why the budgets are
+# deliberately far above anything a real visitor could reach.
+#
+# Added BEFORE the CORS middleware below, which in Starlette means it sits
+# INSIDE it (the last middleware added is the outermost one). That ordering
+# is load-bearing: a 429 produced here has to travel back out through CORS
+# to pick up the Access-Control-Allow-Origin header, or the browser discards
+# the response unread and the visitor sees an unexplained failure instead of
+# the "try again in a minute" message the body carries.
+app.add_middleware(PublicRateLimitMiddleware)
+
 app.add_middleware(
     CORSMiddleware,
     allow_origins=_cors_origins,
     allow_credentials=False,
     allow_methods=["*"],
     allow_headers=["*"],
+    # The browser's own HTTP cache reads ETag without this — cache
+    # revalidation happens below the layer CORS hides headers at. Exposing
+    # it anyway costs nothing and means page code CAN read the tag if it
+    # ever needs to do its own conditional request, instead of that being a
+    # confusing dead end.
+    expose_headers=["ETag"],
+    # How long a browser may reuse one preflight result. GET requests no
+    # longer trigger a preflight at all (see the API clients: they stopped
+    # sending Content-Type on bodyless requests, which is what made a plain
+    # GET "non-simple"), so this now covers the writes — where one OPTIONS
+    # per 10 minutes is far better than one per save.
+    max_age=600,
 )
 
 # Property photos are stored as base64 data URLs (Database/models.py's
@@ -259,6 +291,7 @@ app.include_router(display_settings_router, prefix="/api")
 app.include_router(property_router, prefix="/api")
 app.include_router(broker_requirement_router, prefix="/api")
 app.include_router(whatsapp_inquiry_router, prefix="/api")
+app.include_router(property_share_router, prefix="/api")
 app.include_router(inquiry_form_router, prefix="/api")
 app.include_router(phone_verification_router, prefix="/api")
 app.include_router(matching_router, prefix="/api")

@@ -27,9 +27,11 @@ import { formatCarpetArea, formatPrice, formatPricePerUnit, relativeTime } from 
 import type { AgentAssignment } from "../lib/handoffTemplate";
 import { sourceDetail, sourceLabel } from "../lib/propertyFilters";
 import { getCachedPropertyList, patchCachedProperty, setCachedPropertyList } from "../lib/propertyListCache";
+import type { SharePropertyLike } from "../lib/propertyShareTemplate";
 import HandoffDialog from "./HandoffDialog";
 import MultiAssignDialog, { type SelectableProperty } from "./MultiAssignDialog";
 import PropertyReadOnlyDialog from "./PropertyReadOnlyDialog";
+import ShareClientPropertiesDialog from "./ShareClientPropertiesDialog";
 import ConfirmDialog from "./ui/ConfirmDialog";
 import { useToast } from "./ui/Toast";
 import { Badge, Button, Copyable, EmptyState, Note, Segmented, SkeletonRows } from "./ui/Primitives";
@@ -45,6 +47,7 @@ import {
   IconPlus,
   IconRefresh,
   IconRuler,
+  IconSend,
   IconTrash,
   IconUserCheck,
   IconX,
@@ -255,6 +258,11 @@ export default function ClientMatchesDialog({
   const [openItemId, setOpenItemId] = useState<string | null>(null);
   const [viewingCompletedId, setViewingCompletedId] = useState<string | null>(null);
   const [assignFlow, setAssignFlow] = useState<AssignFlow>(null);
+  // The "send the shortlist straight to the client" flow, deliberately
+  // separate from assignFlow above: it involves no agent and no visit
+  // record, so it is not a step of the assignment wizard and must not share
+  // its state machine.
+  const [shareOpen, setShareOpen] = useState(false);
   const [clearOpen, setClearOpen] = useState(false);
   const [clearing, setClearing] = useState(false);
 
@@ -339,7 +347,8 @@ export default function ClientMatchesDialog({
     load();
   }, [load]);
 
-  const nestedOpen = openItemId !== null || viewingCompletedId !== null || assignFlow !== null || clearOpen;
+  const nestedOpen =
+    openItemId !== null || viewingCompletedId !== null || assignFlow !== null || clearOpen || shareOpen;
 
   useEffect(() => {
     const onKeyDown = (event: KeyboardEvent) => {
@@ -499,6 +508,16 @@ export default function ClientMatchesDialog({
           property: item.handoff,
           source: item.section === "manual" ? "manual" : item.section === "website" ? "enquired" : "matched",
         })),
+    [items, selectedIds],
+  );
+
+  /** The same ticked cards the assignment flow uses, in the shape a
+   *  WhatsApp share message needs. Built from `items` (not from
+   *  selectedIds directly) so a property that has dropped off the list can
+   *  never end up in a message — exactly the guarantee selectedProperties
+   *  above gives the hand-off. */
+  const selectedShareProperties = useMemo<SharePropertyLike[]>(
+    () => items.filter((item) => selectedIds.has(item.recordId)).map((item) => item.handoff),
     [items, selectedIds],
   );
 
@@ -899,7 +918,19 @@ export default function ClientMatchesDialog({
             <Button variant="ghost" onClick={onClose}>
               Close
             </Button>
-            <span style={{ marginLeft: "auto" }}>
+            <span className="row-flex" style={{ marginLeft: "auto", gap: 10 }}>
+              {/* Two different errands, side by side rather than one behind
+                  the other: "send this client the shortlist themselves" is
+                  not a lesser version of "put an agent on it", and forcing
+                  it through the agent picker would record visits nobody
+                  arranged. */}
+              <Button
+                icon={<IconSend size={15} />}
+                onClick={() => setShareOpen(true)}
+                disabled={!client || selectedIds.size === 0}
+              >
+                Send details on WhatsApp ({selectedIds.size})
+              </Button>
               <Button
                 variant="primary"
                 icon={<IconUserCheck size={15} />}
@@ -953,6 +984,21 @@ export default function ClientMatchesDialog({
               </p>
             </div>
           }
+        />
+      )}
+
+      {shareOpen && client && (
+        <ShareClientPropertiesDialog
+          client={client}
+          properties={selectedShareProperties}
+          onClose={() => setShareOpen(false)}
+          onBack={() => setShareOpen(false)}
+          // Only the selection is cleared. Nothing about the client's
+          // matches, assignments or counts changed by sending them a
+          // message, so there is deliberately no onChanged() or reload
+          // here — see handleClearAssignments for what a state-changing
+          // action does instead.
+          onSent={() => setSelectedIds(new Set())}
         />
       )}
 

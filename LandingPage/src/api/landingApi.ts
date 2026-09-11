@@ -1,5 +1,5 @@
 import { apiClient } from "./client";
-import type { LandingProperty, LandingPropertyDetail, LeadSubmission } from "./types";
+import type { LandingProperty, LandingPropertyDetail, LeadResult, LeadSubmission } from "./types";
 
 /**
  * Every call the public site makes — see Backend/Controller/LandingPageController.
@@ -14,5 +14,9 @@ export const landingApi = {
   getProperty: (recordId: string): Promise<LandingPropertyDetail> =>
     apiClient.get<LandingPropertyDetail>(`/landing/properties/${encodeURIComponent(recordId)}`),
 
-  submitLead: (body: LeadSubmission): Promise<unknown> => apiClient.post("/landing/leads", body),
+  /** Answers with a STATUS, not just a stored record: a repeat enquiry
+   *  about a property this number already asked about is deliberately not
+   *  recorded a second time, and the form has to say something different
+   *  for that than for a fresh one. See types.ts's LeadResult. */
+  submitLead: (body: LeadSubmission): Promise<LeadResult> => apiClient.post("/landing/leads", body),
 };

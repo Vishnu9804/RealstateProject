@@ -385,6 +385,7 @@ def _to_structured_requirement(
     areas = [area.strip() for area in item.preferred_areas if area and area.strip()]
     requirement = StructuredRequirement(
         source_message_id=message.message_id,
+        source_connection_id=message.connection_id,
         requirement_type=item.requirement_type,
         bhk=item.bhk,
         # The Area column shows one value; the full list lives alongside it

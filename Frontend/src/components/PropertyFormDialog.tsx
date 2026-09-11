@@ -5,7 +5,7 @@ import type { PropertyRecord } from "../api/types";
 import { friendlyError } from "../lib/apiError";
 import { useToast } from "./ui/Toast";
 import { Button, Segmented } from "./ui/Primitives";
-import { IconInstagram, IconX } from "./ui/Icons";
+import { IconImage, IconInstagram, IconX } from "./ui/Icons";
 import PropertyImagesField from "./PropertyImagesField";
 
 /**
@@ -82,11 +82,21 @@ function toFormState(property: PropertyRecord): FormState {
 }
 
 /** Blank strings become null, not "" — an empty field must actually clear
- *  the value server-side, not overwrite it with an empty string. */
-function toPayload(form: FormState): PropertyContentFields {
+ *  the value server-side, not overwrite it with an empty string.
+ *
+ *  `includeImages` is a data-safety switch, not a preference. A property's
+ *  photos are no longer loaded just because its Edit dialog was opened (see
+ *  propertyApi.getProperty), so when they have NOT been loaded, form
+ *  .image_urls is empty simply because nobody asked for them — and sending
+ *  that empty list would tell the backend to delete every photo the
+ *  property has. Leaving the key out entirely is what makes the PATCH
+ *  ignore the field (the endpoint applies only the keys actually present —
+ *  see PropertyUpdateRequest's exclude_unset), so an edit to a price can
+ *  never cost a property its photos. */
+function toPayload(form: FormState, includeImages: boolean): PropertyContentFields {
   const text = (value: string) => (value.trim() ? value.trim() : null);
   const num = (value: string) => (value.trim() ? Number(value) : null);
-  return {
+  const payload: PropertyContentFields = {
     property_type: text(form.property_type),
     bhk: text(form.bhk),
     society_name: text(form.society_name),
@@ -105,6 +115,8 @@ function toPayload(form: FormState): PropertyContentFields {
     instagram_reel_url: text(form.instagram_reel_url),
     image_urls: form.image_urls,
   };
+  if (!includeImages) delete payload.image_urls;
+  return payload;
 }
 
 const GRID_STYLE: React.CSSProperties = {
@@ -150,6 +162,35 @@ export default function PropertyFormDialog({
   const [form, setForm] = useState<FormState>(property ? toFormState(property) : BLANK_FORM);
   const [saving, setSaving] = useState(false);
 
+  // Whether this dialog is actually holding the property's photos.
+  //
+  // Opening a property no longer downloads them (see
+  // propertyApi.getProperty), so an Edit dialog starts photo-less unless
+  // there are none to begin with, or the record it was handed already
+  // carries them (the one a save just returned). Until they are loaded the
+  // photos field is replaced by a Show photos button, and image_urls is
+  // left out of the save entirely — see toPayload. Replacing the field
+  // rather than showing an empty one is deliberate: a half-loaded photo
+  // list that accepted additions could be saved back over the real one.
+  const [imagesLoaded, setImagesLoaded] = useState(
+    mode === "add" || !property || property.image_urls.length > 0 || property.image_count === 0,
+  );
+  const [loadingImages, setLoadingImages] = useState(false);
+
+  async function loadImages() {
+    if (!property) return;
+    setLoadingImages(true);
+    try {
+      const { image_urls } = await propertyApi.getPropertyImages(property.record_id);
+      setForm((prev) => ({ ...prev, image_urls }));
+      setImagesLoaded(true);
+    } catch (err) {
+      toast.push({ tone: "bad", title: "Couldn't load this property's photos", message: friendlyError(err) });
+    } finally {
+      setLoadingImages(false);
+    }
+  }
+
   useEffect(() => {
     const onKeyDown = (event: KeyboardEvent) => {
       if (event.key === "Escape" && !saving) {
@@ -186,7 +227,7 @@ export default function PropertyFormDialog({
   async function handleSave() {
     setSaving(true);
     try {
-      const payload = toPayload(form);
+      const payload = toPayload(form, imagesLoaded);
       const saved =
         mode === "add" ? await propertyApi.createProperty(payload) : await propertyApi.updateProperty(property!.record_id, payload);
       toast.push({
@@ -220,13 +261,26 @@ export default function PropertyFormDialog({
 
         <div className="detail-modal__body">
           <div className="stack stack-4">
-            <Field label="Property photos" hint="Optional — add photos of this property.">
-              <PropertyImagesField
-                images={form.image_urls}
-                onAdd={addImages}
-                onRemove={removeImage}
-                onReorder={reorderImages}
-              />
+            <Field
+              label="Property photos"
+              hint={
+                imagesLoaded
+                  ? "Optional — add photos of this property."
+                  : "Photos aren't loaded yet. Load them to view, reorder or remove them — your other edits save fine either way."
+              }
+            >
+              {imagesLoaded ? (
+                <PropertyImagesField
+                  images={form.image_urls}
+                  onAdd={addImages}
+                  onRemove={removeImage}
+                  onReorder={reorderImages}
+                />
+              ) : (
+                <Button variant="ghost" icon={<IconImage size={14} />} busy={loadingImages} onClick={loadImages}>
+                  {`Show ${property?.image_count ?? 0} photo${(property?.image_count ?? 0) === 1 ? "" : "s"}`}
+                </Button>
+              )}
             </Field>
 
             <div style={GRID_STYLE}>

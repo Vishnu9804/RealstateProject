@@ -42,6 +42,11 @@ class BrokerRequirementRow(Base):
     # is what the API and the frontend key rows on.
     record_id: Mapped[str] = mapped_column(String, nullable=False, index=True)
     source_message_id: Mapped[str] = mapped_column(String, nullable=False)
+    # Which linked WhatsApp number captured this requirement — see
+    # StructuredRequirement.source_connection_id. Nullable: rows written
+    # before this column existed genuinely have no answer, and "unknown"
+    # correctly means "fall back to any listening connection when sending".
+    source_connection_id: Mapped[Optional[str]] = mapped_column(String, nullable=True)
 
     # --- extracted by the LLM from the message text ---
     requirement_type: Mapped[Optional[str]] = mapped_column(String, nullable=True)

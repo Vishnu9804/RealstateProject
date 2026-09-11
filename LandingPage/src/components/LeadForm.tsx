@@ -44,6 +44,13 @@ export default function LeadForm({
   const [busy, setBusy] = useState(false);
   const [failure, setFailure] = useState<string | null>(null);
   const [done, setDone] = useState(false);
+  // Set when the backend recognised this as a repeat enquiry about the same
+  // property from the same number and deliberately did not record it again
+  // (see Backend/Service/LandingPageService/lead_store.py's
+  // has_lead_for_property). A different ending from `done`, and emphatically
+  // not a failure — their enquiry is already with the team, which is what
+  // this says.
+  const [alreadySentMessage, setAlreadySentMessage] = useState<string | null>(null);
   const [confirmHint, setConfirmHint] = useState(false);
   // Separate from confirmHint (which stays up as the inline message until
   // they confirm): this only drives the button's pulse animation, and
@@ -101,7 +108,7 @@ export default function LeadForm({
     setBusy(true);
     setFailure(null);
     try {
-      await landingApi.submitLead({
+      const result = await landingApi.submitLead({
         name: name.trim(),
         whatsapp_number: normalizeWhatsApp(phone),
         property_record_id: propertyRecordId ?? null,
@@ -110,6 +117,7 @@ export default function LeadForm({
         // proved it owns.
         verification_token: phoneLocked ? verification.verified?.token ?? null : null,
       });
+      if (result?.status === "duplicate") setAlreadySentMessage(result.message ?? null);
       setDone(true);
     } catch {
       // Deliberately not the raw error: a visitor can do nothing with a
@@ -127,8 +135,11 @@ export default function LeadForm({
         <span className="lead-done__icon">
           <IconCheck size={22} />
         </span>
-        <h3>{successTitle}</h3>
-        <p>{successBody}</p>
+        {/* The repeat-enquiry ending still gets the tick, not a warning
+            mark: from where the visitor is standing nothing went wrong and
+            nothing is missing — we simply already have this. */}
+        <h3>{alreadySentMessage ? "We already have this one." : successTitle}</h3>
+        <p>{alreadySentMessage ?? successBody}</p>
       </div>
     );
   }

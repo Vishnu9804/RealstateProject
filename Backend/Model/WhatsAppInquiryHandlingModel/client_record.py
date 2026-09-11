@@ -27,6 +27,15 @@ class ClientRecord(BaseModel):
     preferred_areas: Optional[str] = None
     additional_requirements: Optional[str] = None
 
+    # How many times the public requirements form has been completed for
+    # this number -- 1 is the original registration, every later one an
+    # update. See Database/client_models.py's column of the same name for
+    # what it guards and why nothing but the form service increments it.
+    # Defaults to 0 so a record built from scratch is never mistaken for one
+    # that has used up its updates; the store refuses to lower a stored
+    # count, so that default can never spend or refund anything either.
+    requirement_submission_count: int = 0
+
     # --- AgentManagement feature --- mirrors Database/client_models.py's
     # ClientRow field-for-field, same as every other field on this model.
     assigned_agent_id: Optional[str] = None

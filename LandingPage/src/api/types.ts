@@ -33,6 +33,19 @@ export interface LandingPropertyDetail extends LandingProperty {
   instagram_reel_embed_url: string | null;
 }
 
+/**
+ * The answer to a lead submission — mirrors Backend/Model/LandingPageModel/
+ * landing_lead.py's LandingLeadResult.
+ *
+ * "duplicate" is not a failure: this number has already enquired about this
+ * exact property, so nothing was written and there is nothing for the
+ * visitor to do again. `message` is what to show them.
+ */
+export interface LeadResult {
+  status: string;
+  message: string | null;
+}
+
 export interface LeadSubmission {
   name: string;
   whatsapp_number: string;
@@ -86,6 +99,11 @@ export interface InquiryFormPrefill {
    *  requirements are frozen until a person changes them. A warning shown
    *  up front — the refusal itself happens server-side on submit. */
   has_active_assignment: boolean;
+  /** How many more times this form may be submitted before it starts
+   *  refusing (Backend's MAX_REQUIREMENT_SUBMISSIONS). Advisory only, like
+   *  has_active_assignment: it lets the page warn someone on their last
+   *  update before they retype everything. null from an older backend. */
+  updates_remaining: number | null;
   name: string | null;
   email: string | null;
   purpose: string | null;
@@ -116,11 +134,18 @@ export interface InquiryFormSubmission {
 }
 
 /**
- * The answer to a requirements submission. "locked" is not an error: it
- * means we deliberately did NOT save, because this client has a site visit
- * out with an agent who was briefed on the current requirements — see
- * Backend/Service/WhatsAppInquiryHandlingService/assignment_lock_service.py.
- * `message` is what to show them.
+ * The answer to a requirements submission. Neither refusal is an error, and
+ * both come back as a normal 200 with a status:
+ *
+ *  - "locked"        — we deliberately did NOT save, because this client
+ *                      has a site visit out with an agent who was briefed
+ *                      on the current requirements (see Backend/Service/
+ *                      WhatsAppInquiryHandlingService/assignment_lock_service.py).
+ *  - "limit_reached" — this number has used up its allowance of online
+ *                      updates, so the requirements were left exactly as
+ *                      they are.
+ *
+ * `message` is what to show them in either case.
  */
 export interface InquiryFormResult {
   status: string;

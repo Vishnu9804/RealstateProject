@@ -27,6 +27,15 @@ class StructuredRequirement(BaseModel):
 
     record_id: str = Field(default_factory=lambda: uuid.uuid4().hex)
     source_message_id: str
+    # Which of our linked WhatsApp numbers this requirement came in on (see
+    # WhatsAppChatMessage.connection_id). Not content and not part of the
+    # editable set — it exists so that when the operator sends matched
+    # property details back to the broker who asked, the message goes out
+    # FROM the same number the requirement arrived on (see
+    # Service/PropertySharingService/property_share_service.py). None for a
+    # requirement captured before this was recorded, in which case sending
+    # falls back to any listening connection exactly as it did before.
+    source_connection_id: Optional[str] = None
 
     # --- extracted by the LLM from the message text ---
     # The KIND of property being asked for ("Flat", "Shop", "Office",

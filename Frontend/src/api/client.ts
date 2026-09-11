@@ -27,10 +27,32 @@ export class ApiError extends Error {
   }
 }
 
+/**
+ * Content-Type is attached only when there is actually a body to describe.
+ *
+ * It reads as harmless boilerplate on a GET, but it is not: the backend is
+ * a different origin (a different port is a different origin), and
+ * "application/json" is not one of the values CORS lets through without
+ * asking first. So every bodyless request carrying it became TWO round
+ * trips — an OPTIONS preflight, then the real request. Dropping it makes a
+ * GET a "simple" request, which the browser sends straight out.
+ *
+ * It also unblocks HTTP caching in practice: fewer moving parts between the
+ * request and the browser's cache, and the conditional-request exchange
+ * (see Backend/Middleware/http_cache.py) is only worth having if asking
+ * "has this changed?" is genuinely cheaper than re-fetching.
+ */
 async function request<T>(path: string, options?: RequestInit): Promise<T> {
+  const hasBody = options?.body !== undefined;
   const response = await fetch(`${API_BASE_URL}${path}`, {
-    headers: { "Content-Type": "application/json", ...options?.headers },
+    // `...options` first, headers last: spreading options AFTER the headers
+    // would let an options object that carries its own `headers` replace the
+    // computed ones wholesale rather than merge with them.
     ...options,
+    headers: {
+      ...(hasBody ? { "Content-Type": "application/json" } : {}),
+      ...options?.headers,
+    },
   });
 
   if (!response.ok) {

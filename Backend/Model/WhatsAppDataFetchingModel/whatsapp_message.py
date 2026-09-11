@@ -1,5 +1,5 @@
 from datetime import datetime
-from typing import Literal
+from typing import Literal, Optional
 
 from pydantic import BaseModel
 
@@ -7,6 +7,19 @@ from pydantic import BaseModel
 class WhatsAppChatMessage(BaseModel):
     """A single text message captured from a monitored WhatsApp chat —
     either a group or a personal (1:1) conversation."""
+
+    # WHICH of our linked numbers received this message (see
+    # Service/WhatsAppDataFetchingService/whatsapp_connection_manager.py's
+    # `_Connection.connection_id`), stamped by the dispatcher right before
+    # the message is handed to a pipeline. Optional because the capture
+    # layer itself does not know or care — it is a routing fact, not
+    # message content — and because a message captured before this field
+    # existed has no answer for it.
+    #
+    # Carried this far purely so an outbound reply can go out FROM the same
+    # number the inbound arrived on, rather than from whichever connection
+    # happens to be listening (see outbound_messenger.send_text).
+    connection_id: Optional[str] = None
 
     message_id: str
     chat_jid: str

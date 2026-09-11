@@ -15,18 +15,49 @@ record; nothing here is meant to be the durable store.
 
 from __future__ import annotations
 
+import threading
 from typing import List, Optional, Tuple
 
 from Config.settings import get_settings
 from Database.client_session import is_client_database_configured
+from Middleware import daily_quota, step_logger
 from Model.WhatsAppInquiryHandlingModel.inquiry_message import InquiryChatMessage
 from Service.LandingPageService import lead_store
 from Service.WhatsAppDataFetchingService import whatsapp_connection_manager
-from Service.WhatsAppInquiryHandlingService import client_store, form_token_service, inquiry_pipeline_service
+from Service.WhatsAppInquiryHandlingService import (
+    client_store,
+    form_token_service,
+    inquiry_pipeline_service,
+    outbound_messenger,
+)
 from Service.WhatsAppInquiryHandlingService.inquiry_buffer_service import InquiryBufferService
 from Service.WhatsAppInquiryHandlingService.phone_utils import normalize_phone
 
 _MAX_STORED_MESSAGES = 500
+
+# The bucket name this channel's allowance is tracked under — see
+# Middleware/daily_quota.py.
+_QUOTA_BUCKET = "whatsapp_inquiry"
+
+# Sent ONCE, to a number that has just gone past its allowance for the day,
+# and then never again until the window turns over at 6 AM (daily_quota's
+# Decision.first_refusal is what guarantees the "once").
+#
+# It exists because silence is the wrong answer to a real person. Somebody
+# who has genuinely sent us twenty messages is engaged, not attacking, and
+# the twenty-first vanishing without trace reads as us ignoring them. This
+# tells them their messages arrived and how to carry on — and says nothing
+# about limits, counts or rules, because that framing would make a customer
+# feel policed for being keen.
+#
+# Exactly one message per number per day is also what stops this being a
+# way to make the server send unlimited messages: a flood of ten thousand
+# produces precisely one reply, and the rest cost nothing at all.
+_DAILY_LIMIT_NOTICE = (
+    "Thanks for all your messages — we've got them, and our team will get back to you personally very "
+    "soon.\n\n"
+    "If it's urgent, do give us a call and we'll help you straight away."
+)
 
 _captured_messages: List[InquiryChatMessage] = []
 _buffer: Optional[InquiryBufferService] = None
@@ -65,6 +96,9 @@ def get_status() -> dict:
         # properties_version.
         "clients_version": client_store.get_clients_version(),
         "leads_version": lead_store.get_leads_version(),
+        # How many identities currently hold a daily-allowance counter —
+        # an in-memory number, so this costs the status poll nothing.
+        "quota_tracked_identities": daily_quota.snapshot()["tracked_identities"],
     }
 
 
@@ -95,6 +129,14 @@ def create_manual_form_link(raw_phone: str) -> Optional[Tuple[str, str]]:
     return phone, f"{base}/{token}"
 
 
+def _quota_limits() -> daily_quota.Limits:
+    settings = get_settings()
+    return daily_quota.Limits(
+        max_messages=settings.whatsapp_daily_message_limit,
+        max_words=settings.whatsapp_daily_word_limit,
+    )
+
+
 def handle_incoming_message(message: InquiryChatMessage) -> None:
     """Called by whatsapp_connection_manager for every message an
     inquiry-role connection claims (see its dispatch rule). Deliberately no
@@ -102,9 +144,56 @@ def handle_incoming_message(message: InquiryChatMessage) -> None:
     (inquiry_buffer_service.py) plus the classification/action log that
     follows it (inquiry_pipeline_service.py), every batch is still fully
     traceable — logging each raw message too just doubles the noise for
-    multi-message batches."""
+    multi-message batches.
+
+    THE DAILY ALLOWANCE IS CHECKED HERE, and here is the only place it can
+    usefully be checked: this is the first line of our own code a message
+    reaches. Everything a message costs — the capture list, the per-number
+    buffer and its timer, the Gemini classification call, the client-record
+    lookups, the outbound reply — happens downstream of this function, so a
+    message refused on this line costs a dictionary lookup and nothing else.
+    Checking any later would mean paying for the very thing the limit
+    exists to avoid paying for.
+
+    Refused messages are DROPPED, not queued. Nothing holds them, so when
+    the window turns over at 6 AM the new day starts from whatever arrives
+    after it — a night of flooding leaves no backlog to work through in the
+    morning.
+    """
+    quota = daily_quota.consume(
+        _QUOTA_BUCKET,
+        message.sender_phone,
+        _quota_limits(),
+        words=daily_quota.count_words(message.text),
+    )
+    if not quota.allowed:
+        if quota.first_refusal:
+            # Logged as a warning, once, so the client can actually SEE in
+            # the terminal that a number went quiet and why — a silently
+            # dropped customer would otherwise be invisible.
+            step_logger.warn(
+                f"[Inquiry] {message.sender_phone}: reached today's {quota.reason} allowance — further "
+                "messages from this number are being ignored until 6 AM. Sending one courtesy note."
+            )
+            # On a thread, like every other send on a hot path: a WhatsApp
+            # round trip must never hold up the next inbound message.
+            threading.Thread(
+                target=_send_limit_notice, args=(message.sender_phone,), name="inquiry-limit-notice", daemon=True
+            ).start()
+        return
+
     _captured_messages.append(message)
     if len(_captured_messages) > _MAX_STORED_MESSAGES:
         del _captured_messages[: len(_captured_messages) - _MAX_STORED_MESSAGES]
     if _buffer is not None:
         _buffer.add_message(message)
+
+
+def _send_limit_notice(phone: str) -> None:
+    try:
+        outbound_messenger.send_text(phone, _DAILY_LIMIT_NOTICE)
+    except Exception as exc:  # noqa: BLE001
+        # Never re-raised: failing to send the courtesy note must not turn
+        # into an error on the message-intake path, which by this point has
+        # already correctly decided to ignore the message.
+        step_logger.error(f"[Inquiry] Could not send the daily-allowance note to {phone}: {exc!r}")

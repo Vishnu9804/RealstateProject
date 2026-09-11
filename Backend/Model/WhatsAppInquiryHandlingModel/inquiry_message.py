@@ -1,4 +1,5 @@
 from datetime import datetime
+from typing import Optional
 
 from pydantic import BaseModel
 
@@ -15,6 +16,13 @@ class InquiryChatMessage(BaseModel):
     no reliable single owner would break the one-mobile-number-equals-one-
     client isolation this feature depends on.
     """
+
+    # Which of our linked numbers this inquiry arrived on — see
+    # WhatsAppChatMessage.connection_id, which this is copied from. Kept so
+    # every later reply to this client can go out from the same number they
+    # originally messaged (see Service/WhatsAppInquiryHandlingService/
+    # inquiry_connection_store.py).
+    connection_id: Optional[str] = None
 
     message_id: str
     sender_jid: str

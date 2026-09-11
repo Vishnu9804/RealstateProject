@@ -339,6 +339,76 @@ def init_db() -> None:
         # nullable-for-old-rows treatment as the two columns just above.
         connection.execute(text("ALTER TABLE agent_visits ADD COLUMN IF NOT EXISTS budget_min_inr FLOAT"))
         connection.execute(text("ALTER TABLE agent_visits ADD COLUMN IF NOT EXISTS budget_max_inr FLOAT"))
+    with engine.begin() as connection:
+        # When a property's Instagram reel link was last set/changed — what
+        # the poller's "most recently linked reels" list orders by (see
+        # PropertyRow.instagram_reel_url_updated_at and
+        # property_vector_store.get_recent_instagram_reel_properties).
+        connection.execute(
+            text("ALTER TABLE properties ADD COLUMN IF NOT EXISTS instagram_reel_url_updated_at TIMESTAMPTZ")
+        )
+        # Which linked WhatsApp number a broker requirement came in on —
+        # see BrokerRequirementRow.source_connection_id. Added after the
+        # table already existed, so this ALTER (not create_all) is what
+        # upgrades an existing database; nullable, so existing rows keep
+        # meaning "unknown", which is exactly the fall-back-to-any-listening
+        # -connection case the sender already handles.
+        connection.execute(
+            text("ALTER TABLE broker_requirements ADD COLUMN IF NOT EXISTS source_connection_id VARCHAR")
+        )
+        # Per-client watermark for the daily incremental rescore — see
+        # ClientRow.matches_computed_at. Left NULL for existing clients,
+        # which correctly means "never scored incrementally yet", so each
+        # one gets exactly one full pass before incremental runs take over.
+        connection.execute(
+            text("ALTER TABLE clients ADD COLUMN IF NOT EXISTS matches_computed_at TIMESTAMPTZ")
+        )
+        # Public-form abuse guards -- see ClientRow.requirement_submission_count
+        # and InstagramContactRow's copy of it. NOT NULL DEFAULT 0 rather
+        # than nullable: every existing row must read as "no submissions
+        # counted yet" and keep its full allowance, and a default of 0 says
+        # exactly that without a backfill pass.
+        connection.execute(
+            text(
+                "ALTER TABLE clients ADD COLUMN IF NOT EXISTS "
+                "requirement_submission_count INTEGER NOT NULL DEFAULT 0"
+            )
+        )
+        connection.execute(
+            text(
+                "ALTER TABLE instagram_contacts ADD COLUMN IF NOT EXISTS "
+                "requirement_submission_count INTEGER NOT NULL DEFAULT 0"
+            )
+        )
+        # The stored, indexed E.164 number on landing-page leads -- see
+        # LandingLeadRow.phone_e164. The index is what turns the repeat-
+        # enquiry check into one indexed probe instead of a table scan; both
+        # statements are idempotent and no-ops on a fresh database, where
+        # create_all already built them from the model.
+        connection.execute(text("ALTER TABLE landing_page_leads ADD COLUMN IF NOT EXISTS phone_e164 VARCHAR"))
+        connection.execute(
+            text(
+                "CREATE INDEX IF NOT EXISTS ix_landing_page_leads_phone_property "
+                "ON landing_page_leads (phone_e164, property_record_id)"
+            )
+        )
+        # One-time backfill for rows that already had a reel link before this
+        # column existed. qualified_at is the closest thing already recorded
+        # ("when this property most recently gained a photo or a reel"), with
+        # updated_at as the fallback for rows predating that too. Idempotent:
+        # the IS NULL clause matches nothing on any later run, so a value the
+        # app has since written for a real edit is never overwritten.
+        connection.execute(
+            text(
+                """
+                UPDATE properties
+                SET instagram_reel_url_updated_at = COALESCE(qualified_at, updated_at)
+                WHERE instagram_reel_url IS NOT NULL
+                  AND instagram_reel_url <> ''
+                  AND instagram_reel_url_updated_at IS NULL
+                """
+            )
+        )
 
     # Fills text_fingerprint for message rows that predate that column —
     # deliberately in Python rather than as SQL above, so the stored value is
@@ -355,4 +425,19 @@ def init_db() -> None:
         step_logger.info(
             f"Backfilled content fingerprints for {filled} stored WhatsApp message(s) — they can now be "
             "recognised by the pre-LLM exact-duplicate check."
+        )
+
+    # Same reasoning again for landing-page leads: phone_e164 is produced by
+    # Service/WhatsAppInquiryHandlingService/phone_utils.normalize_phone, and
+    # only that function's output is comparable with the value the repeat-
+    # enquiry check looks up. One bounded pass over the rows that have no
+    # value yet; after the first run it matches nothing, so later startups
+    # cost a single indexless-but-tiny "WHERE phone_e164 IS NULL" probe.
+    from Database import landing_lead_repository
+
+    stamped = landing_lead_repository.backfill_phone_e164()
+    if stamped:
+        step_logger.info(
+            f"Backfilled the canonical phone number on {stamped} landing-page lead(s) — repeat-enquiry "
+            "checks for them are now a single indexed lookup."
         )

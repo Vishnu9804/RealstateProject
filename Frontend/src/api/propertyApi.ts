@@ -38,10 +38,17 @@ export const propertyApi = {
    *  Landing Page/Inquiries pages stays fast regardless of how many photos
    *  are stored. Use getProperty below to get one property's actual photos. */
   getProperties: (limit = 500): Promise<PropertyRecord[]> => apiClient.get(`/properties?limit=${limit}`),
-  /** One property, in full — the only call that returns real image_urls.
-   *  Fetch this right before showing a property's detail or Edit dialog. */
+  /** One property's full content — served from the backend's in-memory
+   *  snapshot, so it costs no database query. Like the list above it
+   *  carries image_urls: [] with the real number in image_count; photos
+   *  come from getPropertyImages below. */
   getProperty: (recordId: string): Promise<PropertyRecord> =>
     apiClient.get(`/properties/${encodeURIComponent(recordId)}`),
+  /** This property's photos — the only call in the app that moves image
+   *  data out of the database. Triggered by the Show photos button, never
+   *  as part of simply opening a property. */
+  getPropertyImages: (recordId: string): Promise<{ image_urls: string[] }> =>
+    apiClient.get(`/properties/${encodeURIComponent(recordId)}/images`),
   createProperty: (body: PropertyContentFields): Promise<PropertyRecord> => apiClient.post(`/properties`, body),
   updateProperty: (recordId: string, body: PropertyUpdateBody): Promise<PropertyRecord> =>
     apiClient.patch(`/properties/${encodeURIComponent(recordId)}`, body),

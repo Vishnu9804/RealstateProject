@@ -20,7 +20,7 @@ from datetime import datetime
 from typing import List, Optional
 
 from pgvector.sqlalchemy import Vector
-from sqlalchemy import DateTime, Float, String, Text, func
+from sqlalchemy import DateTime, Float, Integer, String, Text, func
 from sqlalchemy.orm import DeclarativeBase, Mapped, mapped_column
 
 from Service.WhatsAppDataFetchingService.embedding_service import EMBEDDING_DIMENSIONS
@@ -73,6 +73,23 @@ class ClientRow(ClientBase):
     preferred_areas: Mapped[Optional[str]] = mapped_column(String, nullable=True)
     additional_requirements: Mapped[Optional[str]] = mapped_column(Text, nullable=True)
 
+    # --- public-form abuse guard ---
+    # How many times the PUBLIC requirements form has been completed for
+    # this phone number: 1 is the original registration, and each later
+    # submission is one update. Backend/Service/WhatsAppInquiryHandlingService/
+    # inquiry_form_service.py refuses anything past
+    # MAX_REQUIREMENT_SUBMISSIONS, so an anonymous visitor cannot sit on the
+    # form re-saving it forever -- every save costs a full match recompute
+    # (embedding + a rewrite of this client's cached match rows), which is
+    # the single most expensive thing a stranger can make this backend do.
+    #
+    # Only the form service ever increments it, so nothing a member of staff
+    # does on the dashboard, and no website property enquiry, spends one of
+    # a real client's updates. NOT NULL with a default of 0, so every row
+    # written before this column existed starts from "no submissions
+    # counted yet" and gets the full allowance rather than being locked out.
+    requirement_submission_count: Mapped[int] = mapped_column(Integer, nullable=False, default=0, server_default="0")
+
     # --- AgentManagement feature ---
     # Not a real FK to `agents` — set only after Service/AgentManagementService/
     # agent_store.py's create_agent has already run, but kept as a loose
@@ -100,8 +117,37 @@ class ClientRow(ClientBase):
     # read back into the scoring pass itself, only stored here as the
     # durable per-client vector the feature spec calls for. Nullable: a
     # client with no requirements yet has nothing to embed.
+    #
+    # deferred=True is a pure COST decision, invisible to every caller: this
+    # is 384 floats, which Postgres sends as roughly 6 KB of text per row,
+    # and it was being pulled over the wire by EVERY client read -- including
+    # the Inquiries page loading a hundred clients at once, where it is the
+    # largest thing in the response and not one byte of it is ever looked at
+    # (Database/client_repository.py's _COLUMNS excludes it). Nothing reads
+    # this attribute off a loaded row: the one reader selects the column
+    # explicitly (get_requirement_embeddings) and the one writer only
+    # assigns to it (save_requirement_embedding), and assigning to a
+    # deferred attribute does not load it. So it is now fetched only by that
+    # one query that actually wants it.
     requirement_embedding: Mapped[Optional[List[float]]] = mapped_column(
-        Vector(EMBEDDING_DIMENSIONS), nullable=True
+        Vector(EMBEDDING_DIMENSIONS), nullable=True, deferred=True
+    )
+    # When this client was last scored against the property list — the
+    # watermark the daily rescore reads to decide what is actually new for
+    # THIS client, so it re-scores only the properties added or edited since
+    # (see Service/ClientPropertyMatchingService/scheduled_recompute_service.py).
+    #
+    # Kept here rather than derived from max(client_property_matches.computed_at)
+    # because a client with zero matches has no such rows to derive it from,
+    # and "no matches yet" must not read as "never scored" — that would make
+    # the one case with nothing to show re-score the entire table every
+    # night, forever. Nullable for exactly one meaning: never scored at all,
+    # which correctly asks for a full pass the first time.
+    #
+    # Not part of ClientRecord (like requirement_embedding above): internal
+    # bookkeeping, with no place in the API or any dialog.
+    matches_computed_at: Mapped[Optional[datetime]] = mapped_column(
+        DateTime(timezone=True), nullable=True
     )
 
     created_at: Mapped[datetime] = mapped_column(DateTime(timezone=True), server_default=func.now())
@@ -143,6 +189,12 @@ class InstagramContactRow(ClientBase):
     # --- client info ---
     name: Mapped[Optional[str]] = mapped_column(String, nullable=True)
     email: Mapped[Optional[str]] = mapped_column(String, nullable=True)
+
+    # Same public-form abuse guard as ClientRow's, for the Instagram-only
+    # path (a visitor who submits the form from a DM link without ever
+    # giving a WhatsApp number) -- that path writes to this table instead,
+    # and would otherwise be an unbounded write loop of its own.
+    requirement_submission_count: Mapped[int] = mapped_column(Integer, nullable=False, default=0, server_default="0")
 
     # --- property requirements — same shape as ClientRow ---
     purpose: Mapped[Optional[str]] = mapped_column(String, nullable=True)

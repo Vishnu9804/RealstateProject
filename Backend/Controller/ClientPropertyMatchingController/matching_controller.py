@@ -11,11 +11,34 @@ from fastapi import APIRouter, HTTPException
 from Model.AgentManagementModel.visit_record import VisitRecord
 from Model.ClientPropertyMatchingModel.client_match_result import ClientMatchResult
 from Model.ClientPropertyMatchingModel.match_counts import MatchCounts
+from Model.ClientPropertyMatchingModel.requirement_match_result import RequirementMatchResult
 from Service.AgentManagementService import agent_store, manual_property_store
-from Service.ClientPropertyMatchingService import matching_service
+from Service.ClientPropertyMatchingService import matching_service, requirement_matching_service
 from Service.LandingPageService import landing_page_service
 
 router = APIRouter(prefix="/matching", tags=["matching"])
+
+
+@router.get("/requirements/{record_id}", response_model=RequirementMatchResult)
+def get_requirement_matches(record_id: str) -> RequirementMatchResult:
+    """The demand side's "Match properties" dialog — every stored property
+    scored against ONE broker requirement, through the very same scoring
+    engine the client side uses (see
+    Service/ClientPropertyMatchingService/requirement_matching_service.py).
+
+    Unlike the client route below this is computed on demand rather than
+    read from a cache, which is why there is no separate /recompute for it:
+    every open IS a fresh score. It costs no database traffic — properties
+    are served from the in-memory snapshot — and the requirement's own
+    embedding is memoised per requirement text.
+
+    Declared BEFORE /clients/{phone} only for readability; the two paths
+    have distinct literal prefixes, so no route-order ambiguity exists
+    between them."""
+    result = requirement_matching_service.get_matches_for_requirement(record_id)
+    if result is None:
+        raise HTTPException(status_code=404, detail="Requirement not found")
+    return result
 
 
 @router.get("/clients/{phone}", response_model=ClientMatchResult)

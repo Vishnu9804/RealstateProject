@@ -18,7 +18,7 @@ from __future__ import annotations
 from datetime import datetime
 from typing import Optional
 
-from sqlalchemy import DateTime, String, func
+from sqlalchemy import DateTime, Index, String, func
 from sqlalchemy.orm import Mapped, mapped_column
 
 from Database.models import Base
@@ -51,4 +51,24 @@ class LandingLeadRow(Base):
     # sensibly after the property is edited, unpublished, or deleted.
     property_label: Mapped[Optional[str]] = mapped_column(String, nullable=True)
 
+    # The canonical E.164 form of whatsapp_number, STORED (unlike
+    # LandingLeadRecord.phone_e164, which is computed on the way out of the
+    # store). It exists so the two lookups that ask "what has this number
+    # already sent us?" can be a single indexed query instead of dragging a
+    # thousand rows out of the database and filtering them in Python -- the
+    # shape they had before, which is both slow and, on a metered database,
+    # a real bill. Nullable for rows whose number never parsed, and for any
+    # row written before this column existed until the startup backfill
+    # (Database/session.py's init_db) fills it in.
+    phone_e164: Mapped[Optional[str]] = mapped_column(String, nullable=True)
+
     created_at: Mapped[datetime] = mapped_column(DateTime(timezone=True), server_default=func.now())
+
+    # One composite index serving both lookups: the duplicate check for a
+    # property enquiry (phone + property) uses both columns, and the
+    # Inquiries dialog's "every property this number asked about" uses the
+    # leading column on its own, which a composite index answers just as
+    # well as a single-column one would.
+    __table_args__ = (
+        Index("ix_landing_page_leads_phone_property", "phone_e164", "property_record_id"),
+    )

@@ -15,8 +15,9 @@ client records are held — nothing else keeps a second copy to keep in sync.
 
 from __future__ import annotations
 
+import threading
 from datetime import datetime, timezone
-from typing import Dict, List, Optional
+from typing import Dict, List, Optional, Set
 
 from Database import client_repository
 from Database.client_session import is_client_database_configured
@@ -35,14 +36,43 @@ def get_client_by_phone(phone: str) -> Optional[ClientRecord]:
     return _clients.get(phone)
 
 
-def upsert_client(record: ClientRecord) -> ClientRecord:
-    previous = get_client_by_phone(record.phone)
+def upsert_client(
+    record: ClientRecord,
+    previous: Optional[ClientRecord] = None,
+    defer_recompute: bool = False,
+) -> ClientRecord:
+    """`previous` is this client's state BEFORE this write, and is only ever
+    an optimisation: callers that have already read the record (the
+    registration form, which needs it to count updates) pass it so this
+    function does not go and read exactly the same row a second time. Leave
+    it out and it is read here, exactly as it always was.
+
+    `defer_recompute=True` runs the match recompute on a background thread
+    instead of inside this call. It exists for ONE kind of caller: a public
+    web form with a person watching a spinner. A recompute embeds the
+    requirements and rewrites every cached match row for this client, which
+    is far and away the slowest part of a submission and produces nothing
+    the browser is waiting for — the page's answer is "saved", and the
+    matches are for the dashboard to show later. Every internal caller
+    leaves it False and keeps the old, strictly-ordered behaviour, so
+    nothing on the dashboard can read a half-computed result.
+    """
+    if previous is None:
+        previous = get_client_by_phone(record.phone)
 
     if is_client_database_configured():
         saved = client_repository.upsert_client(record)
     else:
         global _version_counter
         _version_counter += 1
+        # Same "a quota may never travel backwards" rule the database path
+        # enforces in client_repository.upsert_client — see the comment
+        # there. Without it the two backends would disagree about the one
+        # field whose whole purpose is to be hard to reset.
+        if previous is not None and previous.requirement_submission_count > record.requirement_submission_count:
+            record = record.model_copy(
+                update={"requirement_submission_count": previous.requirement_submission_count}
+            )
         _clients[record.phone] = record
         saved = record
 
@@ -58,13 +88,65 @@ def upsert_client(record: ClientRecord) -> ClientRecord:
         from Service.ClientPropertyMatchingService import matching_service
 
         if matching_service.requirement_fields_changed(previous, saved):
-            matching_service.recompute_for_client(saved.phone)
+            if defer_recompute:
+                _schedule_recompute(saved.phone)
+            else:
+                matching_service.recompute_for_client(saved.phone)
     except Exception as exc:  # noqa: BLE001
         from Middleware import step_logger
 
         step_logger.error(f"[Matching] Failed to auto-recompute matches for {saved.phone}: {exc!r}")
 
     return saved
+
+
+# --- deferred recompute (see upsert_client's defer_recompute) -------------
+#
+# One worker per client at a time, never one per save. Two saves for the
+# same person arriving close together — which is exactly what a form being
+# re-submitted looks like — would otherwise run two full recomputes
+# concurrently against the same rows: twice the embedding work, twice the
+# match-table rewrite, and a race over which one's result lands last. This
+# collapses them: the second save sets a "run again when you're done" flag,
+# and the worker loops once more afterwards, reading the client fresh, so
+# the final cached matches always reflect the final saved requirements.
+_recompute_lock = threading.Lock()
+_recompute_running: Set[str] = set()
+_recompute_again: Set[str] = set()
+
+
+def _schedule_recompute(phone: str) -> None:
+    with _recompute_lock:
+        if phone in _recompute_running:
+            _recompute_again.add(phone)
+            return
+        _recompute_running.add(phone)
+    threading.Thread(
+        target=_recompute_worker, args=(phone,), name="client-match-recompute", daemon=True
+    ).start()
+
+
+def _recompute_worker(phone: str) -> None:
+    from Middleware import step_logger
+
+    while True:
+        try:
+            from Service.ClientPropertyMatchingService import matching_service
+
+            matching_service.recompute_for_client(phone)
+        except Exception as exc:  # noqa: BLE001
+            # Never re-raised, and never left to strand the flag below: a
+            # failed recompute must not make this client's future saves stop
+            # scheduling one. The data itself is already safely stored — the
+            # nightly pass (scheduled_recompute_service.py) picks this client
+            # up regardless.
+            step_logger.error(f"[Matching] Background recompute failed for {phone}: {exc!r}")
+        with _recompute_lock:
+            if phone in _recompute_again:
+                _recompute_again.discard(phone)
+                continue
+            _recompute_running.discard(phone)
+            return
 
 
 def delete_client(phone: str) -> bool:
@@ -109,6 +191,40 @@ def get_clients_version() -> str:
         count, latest = client_repository.get_clients_version()
         return f"{count}:{latest.isoformat() if latest else '0'}"
     return f"{len(_clients)}:{_version_counter}"
+
+
+# In-memory fallback only — the stand-in for ClientRow.matches_computed_at.
+_matches_computed_at: Dict[str, datetime] = {}
+
+
+def set_matches_computed_at(watermarks: Dict[str, datetime]) -> None:
+    """Records when each of these clients was last scored against the
+    property list — see ClientRow.matches_computed_at. Takes a map so the
+    nightly run stamps every client it processed in one write."""
+    if is_client_database_configured():
+        client_repository.set_matches_computed_at(watermarks)
+        return
+    _matches_computed_at.update(watermarks)
+
+
+def get_matches_computed_at(phones: List[str]) -> Dict[str, Optional[datetime]]:
+    """Each client's last-scored watermark. A phone missing from the result
+    (or mapped to None) has never been scored, and needs a full pass."""
+    if is_client_database_configured():
+        return client_repository.get_matches_computed_at(phones)
+    return {phone: _matches_computed_at.get(phone) for phone in phones}
+
+
+def get_requirement_embeddings(phones: List[str]) -> Dict[str, List[float]]:
+    """The requirement vectors already stored for these clients, so an
+    incremental rescore can reuse one instead of deriving it again.
+
+    Empty in the in-memory fallback: that backend never persisted these
+    vectors in the first place, so there is nothing to reuse and the caller
+    correctly falls back to computing one."""
+    if is_client_database_configured():
+        return client_repository.get_requirement_embeddings(phones)
+    return {}
 
 
 def assign_agent(phone: str, agent_id: Optional[str]) -> Optional[ClientRecord]:

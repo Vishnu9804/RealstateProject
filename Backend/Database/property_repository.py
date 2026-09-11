@@ -7,6 +7,7 @@ update_property, delete_property. Callers never call this module directly.
 
 from __future__ import annotations
 
+from dataclasses import dataclass
 from datetime import datetime, timezone
 from typing import Any, Dict, List, Optional, Tuple
 
@@ -165,6 +166,147 @@ def get_all_properties(limit: int) -> List[EmbeddedProperty]:
     return [_to_pydantic(row) for row in rows]
 
 
+@dataclass
+class PropertySnapshotRow:
+    """One row of the in-memory property snapshot: the property itself
+    (photos excluded), plus the per-row metadata that lives on PropertyRow
+    but deliberately not on EmbeddedProperty.
+
+    `row_id` is the table's own primary key, carried so the snapshot can
+    order and place properties exactly the way every existing query does
+    (ORDER BY properties.id) rather than approximating that with a
+    timestamp — two properties extracted from the same WhatsApp message
+    share a created_at to the microsecond, and only the id separates them.
+    """
+
+    row_id: int
+    prop: EmbeddedProperty
+    image_count: int
+    created_at: datetime
+    updated_at: datetime
+    media_pk: Optional[str]
+    reel_linked_at: Optional[datetime]
+
+
+def _to_pydantic_snapshot(row: PropertyRow) -> EmbeddedProperty:
+    """Like _to_pydantic_summary, but KEEPS the embedding vector.
+
+    The distinction is load-bearing, not stylistic. _to_pydantic_summary
+    blanks both image_urls and embedding because its rows feed list views,
+    which display neither. The snapshot's rows feed list views AND match
+    scoring — and scoring compares this vector against the client's
+    requirement vector (see ClientPropertyMatchingService/scoring.py's
+    _semantic_score). Handing it an empty list there would not raise: the
+    semantic field would simply score None, be dropped from the weighted
+    average, and every match in the application would quietly come out at a
+    different number than before. So image_urls is dropped here and the
+    embedding is not."""
+    data = {name: getattr(row, name) for name in _SUMMARY_COLUMNS}
+    data.update({name: getattr(row.message, name) for name in _MESSAGE_FIELDS})
+    return EmbeddedProperty(
+        **data,
+        record_id=row.record_id or f"legacy-{row.id}",
+        image_urls=[],
+        embedding=list(row.embedding),
+        embedding_model=row.embedding_model,
+    )
+
+
+def _to_snapshot_row(row: PropertyRow, image_count: int) -> PropertySnapshotRow:
+    return PropertySnapshotRow(
+        row_id=row.id,
+        prop=_to_pydantic_snapshot(row),
+        image_count=image_count,
+        created_at=row.created_at,
+        updated_at=row.updated_at,
+        media_pk=row.instagram_media_pk,
+        reel_linked_at=row.instagram_reel_url_updated_at,
+    )
+
+
+def get_snapshot_rows(limit: int) -> List[PropertySnapshotRow]:
+    """The newest `limit` properties, oldest-first, WITHOUT their photos —
+    the single query that fills Service/WhatsAppDataFetchingService/
+    property_snapshot.py, and after which nothing in the application reads
+    the property list from Postgres again until a property changes.
+
+    `image_urls` is deferred and counted server-side (the same trick
+    get_all_properties_summary uses) because it is both the largest column
+    by far — base64 photo data, megabytes per row — and the one thing no
+    list view, no scoring pass and no detail dialog actually needs: photos
+    are fetched one property at a time, on demand, by get_property_images.
+
+    `embedding` is NOT deferred, unlike get_all_properties_summary: match
+    scoring compares it against a client's requirement vector, and holding
+    it in the snapshot is what lets a full rescore run without touching the
+    database at all. At 384 dimensions it is ~1.5 KB per property, which is
+    what makes keeping thousands of them in memory reasonable in the first
+    place.
+
+    Ordered newest-first in SQL and reversed here for the same reason
+    get_all_properties does it: callers expect the oldest of the returned
+    window first.
+    """
+    stmt = (
+        select(PropertyRow, func.json_array_length(PropertyRow.image_urls).label("image_count"))
+        .options(defer(PropertyRow.image_urls))
+        .order_by(PropertyRow.id.desc())
+        .limit(limit)
+    )
+    with get_session() as session:
+        rows = [(row[0], row[1]) for row in session.execute(stmt).all()]
+    rows.reverse()
+    return [_to_snapshot_row(row, count) for row, count in rows]
+
+
+def get_snapshot_row(record_id: str) -> Optional[PropertySnapshotRow]:
+    """One property in the same shape get_snapshot_rows returns — used to
+    fold a single freshly written property into the snapshot without
+    reloading the whole thing.
+
+    Read back from the database rather than reconstructed in Python from
+    what was just written: created_at/updated_at are assigned by Postgres
+    (server_default/onupdate), and a snapshot whose timestamps were guessed
+    client-side would drift from the values every other query sees — which
+    matters, because the daily incremental rescore decides what to re-score
+    by comparing exactly these timestamps.
+    """
+    stmt = select(PropertyRow, func.json_array_length(PropertyRow.image_urls).label("image_count")).options(
+        defer(PropertyRow.image_urls)
+    )
+    if record_id.startswith("legacy-"):
+        try:
+            stmt = stmt.where(PropertyRow.id == int(record_id[len("legacy-") :]))
+        except ValueError:
+            return None
+    else:
+        stmt = stmt.where(PropertyRow.record_id == record_id)
+    with get_session() as session:
+        found = session.execute(stmt).first()
+        return _to_snapshot_row(found[0], found[1]) if found is not None else None
+
+
+def get_property_images(record_id: str) -> Optional[List[str]]:
+    """Just one property's photos — the ONLY query in the application that
+    moves base64 image data, and it runs only when someone explicitly asks
+    to see the photos of one specific property (see the Show photos button
+    in the Properties page's dialogs).
+
+    None when the property doesn't exist, which the caller must tell apart
+    from [] (exists, has no photos)."""
+    stmt = select(PropertyRow.image_urls)
+    if record_id.startswith("legacy-"):
+        try:
+            stmt = stmt.where(PropertyRow.id == int(record_id[len("legacy-") :]))
+        except ValueError:
+            return None
+    else:
+        stmt = stmt.where(PropertyRow.record_id == record_id)
+    with get_session() as session:
+        found = session.execute(stmt).first()
+        return list(found[0] or []) if found is not None else None
+
+
 def get_all_properties_summary(limit: int) -> List[Tuple[EmbeddedProperty, int]]:
     """Same rows as get_all_properties, minus the two columns a list view
     never needs the CONTENTS of: `image_urls` (each entry is a data URL —
@@ -248,6 +390,67 @@ def get_property(record_id: str) -> Optional[EmbeddedProperty]:
         return _to_pydantic(row) if row is not None else None
 
 
+# --- the Instagram poller's reads -----------------------------------------
+#
+# Three deliberately narrow queries, all of them serving one goal: the
+# comment/DM poller (Service/InstagramInquiryHandlingService/) runs every few
+# seconds forever, so anything it reads per cycle is read ~10,000 times a day.
+# It used to call get_all_properties(limit=1000) once per cycle — every column
+# of every property, including `image_urls` (megabytes of base64 photo data
+# per row) and `embedding` — plus one get_instagram_media_pk query per tracked
+# property per cycle, none of which it needed and none of which changed
+# between cycles. These three exist so that data is fetched by shape and by
+# occasion instead: the tracked set once per actual property change, and the
+# lookup queries only when an incoming share matches nothing the poller
+# already holds in memory.
+#
+# Both defer image_urls for the same reason get_all_properties_summary does
+# — see its docstring.
+
+
+def get_reel_link_index() -> List[Tuple[str, Optional[str], Optional[str]]]:
+    """(record_id, instagram_reel_url, instagram_media_pk) for every
+    reel-linked property — three short strings per row, no property content
+    at all.
+
+    This is the "is it one of the OLDER reels?" lookup, run only when a
+    shared reel matches nothing in the poller's in-memory set, never on a
+    routine cycle. Returning the index rather than filtering in SQL is
+    deliberate: which URL matches a shared reel is decided by
+    instagram_reel_matcher.extract_reel_code, and re-expressing that regex as
+    a SQL LIKE pattern would be a second, subtly different implementation of
+    the one rule that decides whether a real person gets a reply.
+    """
+    stmt = select(
+        PropertyRow.id,
+        PropertyRow.record_id,
+        PropertyRow.instagram_reel_url,
+        PropertyRow.instagram_media_pk,
+    ).where(PropertyRow.instagram_reel_url.is_not(None), PropertyRow.instagram_reel_url != "")
+    with get_session() as session:
+        rows = session.execute(stmt).all()
+    # Same legacy identity _to_pydantic hands out, so a record_id from this
+    # index is always one get_instagram_reel_property can look up again.
+    return [(record_id or f"legacy-{row_id}", reel_url, media_pk) for row_id, record_id, reel_url, media_pk in rows]
+
+
+def get_instagram_reel_property(record_id: str) -> Optional[Tuple[EmbeddedProperty, Optional[str]]]:
+    """One property plus its media pk, without its photos or embedding —
+    what the poller loads after get_reel_link_index tells it which older
+    property a shared reel belongs to."""
+    stmt = select(PropertyRow).options(defer(PropertyRow.image_urls), defer(PropertyRow.embedding))
+    if record_id.startswith("legacy-"):
+        try:
+            stmt = stmt.where(PropertyRow.id == int(record_id[len("legacy-") :]))
+        except ValueError:
+            return None
+    else:
+        stmt = stmt.where(PropertyRow.record_id == record_id)
+    with get_session() as session:
+        row = session.execute(stmt).scalars().first()
+        return (_to_pydantic_summary(row), row.instagram_media_pk) if row is not None else None
+
+
 def update_property(
     record_id: str,
     review_status: Optional[str] = None,
@@ -279,9 +482,17 @@ def update_property(
         if needs_review is not None:
             row.needs_review = needs_review
         if content_updates:
+            # Read BEFORE the loop below overwrites it: the reel-link
+            # timestamp must reflect a real change of link, so a save that
+            # re-submits the same URL (the Edit dialog posts every field,
+            # changed or not) must NOT bubble this property back to the top
+            # of the poller's most-recently-linked list.
+            previous_reel_url = row.instagram_reel_url
             for key, value in content_updates.items():
                 if key in EDITABLE_CONTENT_FIELDS:
                     setattr(row, key, value)
+            if row.instagram_reel_url and row.instagram_reel_url != previous_reel_url:
+                row.instagram_reel_url_updated_at = datetime.now(timezone.utc)
         if embedding is not None:
             row.embedding = embedding
         if embedding_model is not None:
@@ -326,6 +537,14 @@ def _to_row(prop: EmbeddedProperty) -> PropertyRow:
         record_id=prop.record_id,
         embedding=prop.embedding,
         embedding_model=prop.embedding_model,
+        # A property created with a reel link already on it (the Properties
+        # page's Add dialog) is linked as of now — see
+        # PropertyRow.instagram_reel_url_updated_at. Left NULL for the
+        # overwhelmingly common case of a WhatsApp-captured property, which
+        # never carries a reel link at creation.
+        instagram_reel_url_updated_at=(
+            datetime.now(timezone.utc) if prop.instagram_reel_url else None
+        ),
     )
 
 

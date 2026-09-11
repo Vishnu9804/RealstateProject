@@ -13,7 +13,13 @@ from Model.WhatsAppInquiryHandlingModel.client_record import ClientRecord
 from Model.WhatsAppInquiryHandlingModel.inquiry_message import InquiryChatMessage
 from Service.AgentManagementService import agent_store, manual_property_store
 from Service.LandingPageService import lead_store
-from Service.WhatsAppInquiryHandlingService import client_store, invitation_tracker, outbound_messenger, whatsapp_inquiry_service
+from Service.WhatsAppInquiryHandlingService import (
+    client_store,
+    inquiry_connection_store,
+    invitation_tracker,
+    outbound_messenger,
+    whatsapp_inquiry_service,
+)
 from Service.WhatsAppInquiryHandlingService.phone_utils import normalize_phone
 
 router = APIRouter(prefix="/whatsapp-inquiry", tags=["whatsapp-inquiry"])
@@ -263,6 +269,10 @@ def delete_client(phone: str) -> CancelResult:
     # see no client record AND a tracker that still remembers the welcome
     # link it sent for the record we just deleted.
     invitation_tracker.forget(phone)
+    # Same clean slate for the "reply from the number they messaged" hint —
+    # this number's next inquiry re-records it from the connection it
+    # actually arrives on, which may not be the one it used last time.
+    inquiry_connection_store.forget(phone)
     return result
 
 
@@ -286,7 +296,7 @@ def add_manual_property(phone: str, body: ManualPropertyRequest) -> List[str]:
     public site is only a landing lead, and the Property Interest tab adds
     properties for them through this same endpoint. It still refuses a
     number belonging to nobody, which is what the check is actually for."""
-    if client_store.get_client_by_phone(phone) is None and not lead_store.find_leads_for_phone(phone):
+    if client_store.get_client_by_phone(phone) is None and not lead_store.has_lead_for_phone(phone):
         raise HTTPException(status_code=404, detail="No client or website enquiry found for that phone number.")
     manual_property_store.add_manual_property(phone, body.property_record_id)
     return manual_property_store.get_manual_properties(phone)

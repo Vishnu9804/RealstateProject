@@ -18,7 +18,10 @@ rather than executed one item after another:
 
   1. FETCH — one comments call per tracked reel, plus the three inbox
      calls. These are independent reads, so they run at once instead of
-     N+3 round-trips stacked end to end.
+     N+3 round-trips stacked end to end. "Tracked" is a bounded, in-memory
+     set of the most recently linked reels, refreshed only when a property
+     actually changes — see instagram_reel_matcher, which explains why a
+     cycle that finds nothing new must not read the database at all.
   2. HANDLE — one job per new comment / new shared reel. Two people acting
      at the same moment are served at the same moment, instead of the
      second waiting out the first's entire three-message sequence.
@@ -40,11 +43,13 @@ from __future__ import annotations
 
 import threading
 import time
+from collections import OrderedDict
 from concurrent.futures import Future, ThreadPoolExecutor
 from typing import Optional
 
 from Config.settings import get_settings
-from Middleware import step_logger
+from Config.settings import get_settings
+from Middleware import daily_quota, step_logger
 from Model.InstagramInquiryHandlingModel.instagram_contact_record import InstagramContactRecord
 from Model.WhatsAppDataFetchingModel.embedded_property import EmbeddedProperty
 from Service.InstagramInquiryHandlingService import (
@@ -97,12 +102,21 @@ _MAX_WORKERS = 4
 _was_connected_last_cycle: Optional[bool] = None
 
 # One lock per Instagram user id — see the module docstring's second
-# invariant. Created on demand and never removed: an entry is a bare lock
-# object keyed by a user id, so even a busy account's worth of them is
-# negligible, and dropping them would reintroduce the race they exist to
-# prevent.
+# invariant. Created on demand, and now bounded: an entry is a bare lock
+# object keyed by a user id, so a busy account's worth of them is
+# negligible, but "one per Instagram account that ever commented" on a
+# process that runs for months is not a bound at all.
+#
+# Eviction is safe ONLY because of the rule enforced in _lock_for_user
+# below: a lock that is currently HELD is never removed. Dropping a held
+# lock would hand the next caller a brand new one and let two sequences run
+# for the same person at the same time — precisely the race this table
+# exists to prevent — so that check is the load-bearing line, not the
+# ceiling. An idle lock, by definition, is protecting nothing at that
+# instant, and re-creating it later is free.
+_MAX_USER_LOCKS = 10_000
 _user_locks_guard = threading.Lock()
-_user_locks: dict[str, threading.Lock] = {}
+_user_locks: "OrderedDict[str, threading.Lock]" = OrderedDict()
 
 # Shortest gap between two DMs to the same person about the same property.
 #
@@ -115,18 +129,93 @@ _user_locks: dict[str, threading.Lock] = {}
 # quietly recreate the original bug.
 _NUDGE_COOLDOWN_SECONDS = 60
 
+# Ceiling on the table below, evicted oldest-first. Losing an entry costs
+# at most one extra nudge DM (the value is only ever compared against a
+# 60-second cooldown), so this is the least consequential of the bounded
+# tables — it simply must not be unbounded.
+_MAX_LAST_DM_ENTRIES = 10_000
+
 # dedupe_key -> monotonic time of the last DM sent for it. In memory only:
 # it exists to smooth out a burst arriving within seconds, so surviving a
 # restart buys nothing (the cost of losing it is at most one extra nudge).
 # Only ever written while holding that person's lock in
 # _maybe_send_property_sequence, and dedupe_key always embeds the user id,
 # so the entries for one key are never touched by two threads at once.
-_last_dm_at: dict[str, float] = {}
+_last_dm_at: "OrderedDict[str, float]" = OrderedDict()
+
+
+def _remember_dm_time(dedupe_key: str, when: float) -> None:
+    """Records when a DM went out for this key, keeping the table bounded.
+    Called only while holding that person's own lock, exactly as the direct
+    assignments it replaces were."""
+    _last_dm_at[dedupe_key] = when
+    _last_dm_at.move_to_end(dedupe_key)
+    while len(_last_dm_at) > _MAX_LAST_DM_ENTRIES:
+        _last_dm_at.popitem(last=False)
+
+
+# Daily allowance buckets for this channel — see Middleware/daily_quota.py.
+# Comments and DMs are counted SEPARATELY, on purpose: they are two
+# different actions costing two different things, and someone who has been
+# commenting on reels all morning should still be able to share one into
+# our inbox.
+_COMMENT_BUCKET = "instagram_comment"
+_DM_BUCKET = "instagram_dm"
+
+
+def _comment_limits() -> daily_quota.Limits:
+    return daily_quota.Limits(max_messages=get_settings().instagram_daily_comment_limit)
+
+
+def _dm_limits() -> daily_quota.Limits:
+    return daily_quota.Limits(max_messages=get_settings().instagram_daily_dm_limit)
+
+
+def _drop_over_quota(event_key: str, ig_user_id: str, what: str, first_refusal: bool) -> None:
+    """The one way an over-allowance Instagram event leaves this module.
+
+    Marking it ignored (memory-only, no write — see
+    instagram_contact_store.mark_event_ignored) is what makes the drop
+    actually free. Instagram hands back the same recent comments and
+    messages on every 8-second cycle for as long as they are recent; an
+    unmarked drop would be re-examined 450 times an hour, each time asking
+    the database whether it had been handled. Marked, it is answered from
+    memory from then on, and stays answered after the 6 AM reset — so a
+    flood is refused once and costs nothing for the rest of its life.
+
+    No DM is ever sent about this, unlike the WhatsApp side's one courtesy
+    note. There is nobody to reassure here: an account at this volume on a
+    public comment thread is not a customer mid-conversation, and a reply
+    would hand a flood a way to make this account send messages.
+    """
+    instagram_contact_store.mark_event_ignored(event_key)
+    if first_refusal:
+        step_logger.warn(
+            f"Instagram user {ig_user_id!r} has reached today's {what} allowance — further {what}s from "
+            "this account are being ignored until 6 AM."
+        )
 
 
 def _lock_for_user(ig_user_id: str) -> threading.Lock:
     with _user_locks_guard:
-        return _user_locks.setdefault(ig_user_id, threading.Lock())
+        lock = _user_locks.get(ig_user_id)
+        if lock is None:
+            lock = threading.Lock()
+            _user_locks[ig_user_id] = lock
+        _user_locks.move_to_end(ig_user_id)
+        if len(_user_locks) > _MAX_USER_LOCKS:
+            # Oldest first, and HELD LOCKS ARE SKIPPED — see the comment on
+            # _user_locks for why that skip is the part that matters. The
+            # scan stops as soon as the table is back under its ceiling, and
+            # the lock just handed out is never a candidate: it was moved to
+            # the end a line ago, and the caller is about to acquire it.
+            for key in list(_user_locks.keys()):
+                if len(_user_locks) <= _MAX_USER_LOCKS:
+                    break
+                candidate = _user_locks[key]
+                if candidate is not lock and not candidate.locked():
+                    del _user_locks[key]
+        return lock
 
 
 def start_background_polling() -> None:
@@ -179,22 +268,26 @@ def _poll_once(pool: ThreadPoolExecutor) -> None:
     if client is None:
         return
 
-    # Snapshot the tracked-property list once for this whole cycle; every
-    # matcher lookup below then reads that snapshot instead of re-querying
-    # the store per comment and per message.
-    tracked_properties = instagram_reel_matcher.refresh_tracked_properties()
+    # The reels being watched, served from memory — see
+    # instagram_reel_matcher's module docstring. This is a database read only
+    # on the first cycle and after a property is actually added, edited or
+    # deleted; an idle cycle reads nothing, which is what allows a serverless
+    # database to stay suspended between real Instagram events.
+    tracked_reels = instagram_reel_matcher.get_tracked_reels()
 
     # --- Phase 1: every independent read, issued together ------------------
     comment_fetches: list[tuple[EmbeddedProperty, str, Future]] = []
-    for prop in tracked_properties:
-        media_pk = instagram_reel_matcher.resolve_media_pk(prop)
+    for tracked in tracked_reels:
+        media_pk = instagram_reel_matcher.resolve_media_pk(tracked)
         if media_pk is None:
             step_logger.warn(
-                f"Instagram polling: property {prop.record_id!r} has a reel link but it couldn't be resolved "
-                "yet — will retry next cycle. Check the link is a real, public reel URL."
+                f"Instagram polling: property {tracked.prop.record_id!r} has a reel link but it couldn't be "
+                "resolved yet — will retry next cycle. Check the link is a real, public reel URL."
             )
             continue
-        comment_fetches.append((prop, media_pk, pool.submit(_fetch_comments, client, prop, media_pk)))
+        comment_fetches.append(
+            (tracked.prop, media_pk, pool.submit(_fetch_comments, client, tracked.prop, media_pk))
+        )
 
     threads_fetch = pool.submit(_fetch_threads, client)
 
@@ -299,6 +392,16 @@ def _handle_comment(prop: EmbeddedProperty, media_pk: str, comment) -> None:
     comment_key = f"comment:{comment.pk}"
     dm_key = f"comment_dm:{comment.pk}"
 
+    # Asked BEFORE the two lookups below, and that ordering is the point:
+    # once an account is out of allowance, every further comment it has left
+    # is dropped on an in-memory dictionary lookup, without the database
+    # being asked anything at all. Reading the allowance consumes nothing,
+    # so this cannot itself push anyone over.
+    if daily_quota.is_exhausted(_COMMENT_BUCKET, commenter_id, _comment_limits()):
+        _drop_over_quota(comment_key, commenter_id, "comment", first_refusal=False)
+        instagram_contact_store.mark_event_ignored(dm_key)
+        return
+
     replied = instagram_contact_store.is_event_processed(comment_key)
     dm_done = instagram_contact_store.is_event_processed(dm_key)
     if replied and dm_done:
@@ -311,6 +414,17 @@ def _handle_comment(prop: EmbeddedProperty, media_pk: str, comment) -> None:
         # re-running it — re-running would nudge people about comments from
         # days ago the moment this ships.
         instagram_contact_store.mark_event_processed(dm_key)
+        return
+
+    # Genuinely new, and this account still has allowance a moment ago —
+    # so this is where the comment is actually booked against it. Counted
+    # here rather than at the top so that re-seeing an already-handled
+    # comment (which happens on every cycle until it ages out of
+    # Instagram's own list) never spends anything.
+    booking = daily_quota.consume(_COMMENT_BUCKET, commenter_id, _comment_limits())
+    if not booking.allowed:
+        _drop_over_quota(comment_key, commenter_id, "comment", first_refusal=booking.first_refusal)
+        instagram_contact_store.mark_event_ignored(dm_key)
         return
 
     step_logger.info(
@@ -351,7 +465,34 @@ def _handle_thread(thread) -> None:
             continue  # our own outbound message, not something to react to
 
         message_key = f"dm_message:{message.id}"
+        sender_id = str(message.user_id) if message.user_id else None
+
+        # Same ordering, and the same reasoning, as the comment path: an
+        # account already out of allowance is dropped on a dictionary
+        # lookup, before the database is asked anything. Resolved up here
+        # (it used to be read after the reel match) purely because the
+        # allowance is keyed on the sender and has to be able to answer
+        # first — a message with no sender id is still handled exactly as
+        # it was, just a few lines earlier.
+        if sender_id is not None and daily_quota.is_exhausted(_DM_BUCKET, sender_id, _dm_limits()):
+            _drop_over_quota(message_key, sender_id, "DM", first_refusal=False)
+            continue
+
         if instagram_contact_store.is_event_processed(message_key):
+            continue
+
+        if sender_id is None:
+            instagram_contact_store.mark_event_ignored(message_key)
+            continue
+
+        # Booked before the reel is matched, so that EVERY new incoming
+        # message counts — not just the ones that turn out to be a shared
+        # reel. A message that matches nothing still costs a row written to
+        # mark it handled, and an inbox filled with plain text would
+        # otherwise be an unlimited supply of those.
+        booking = daily_quota.consume(_DM_BUCKET, sender_id, _dm_limits())
+        if not booking.allowed:
+            _drop_over_quota(message_key, sender_id, "DM", first_refusal=booking.first_refusal)
             continue
 
         prop = _match_shared_reel(message)
@@ -359,13 +500,19 @@ def _handle_thread(thread) -> None:
             # Either not a reel share at all, or a reel share that matched
             # nothing we track — either way there's nothing to act on, and
             # no reason to look at this exact message again.
-            instagram_contact_store.mark_event_processed(message_key)
+            #
+            # Marked in memory rather than written to the database, and the
+            # reason is cost: this is the branch EVERY ordinary DM takes —
+            # a "hi", a thank-you, anything that is not a reel — and each
+            # one used to write a row purely to record that it was of no
+            # interest. Nothing was ever sent for it, so there is no
+            # duplicate reply to protect against; the worst a restart can
+            # do is have this message examined once more and reach the same
+            # conclusion. (A message we ACT on is still written durably,
+            # below, where a duplicate really would matter.)
+            instagram_contact_store.mark_event_ignored(message_key)
             continue
 
-        sender_id = str(message.user_id) if message.user_id else None
-        if sender_id is None:
-            instagram_contact_store.mark_event_processed(message_key)
-            continue
         sender = next((u for u in thread.users if str(u.pk) == sender_id), None)
         step_logger.info(
             f"Instagram polling: new shared reel from @{sender.username if sender else sender_id} matches "
@@ -494,7 +641,7 @@ def _maybe_send_property_sequence(
                     f"Failed to send the Instagram nudge DM to user {ig_user_id!r} — will retry next poll."
                 )
                 return "failed"
-            _last_dm_at[dedupe_key] = time.monotonic()
+            _remember_dm_time(dedupe_key, time.monotonic())
             step_logger.success(
                 f"Instagram user {ig_user_id!r} (@{ig_username}) had already been sent property "
                 f"{prop.record_id!r} — sent a short nudge DM instead of repeating the sequence."
@@ -506,7 +653,7 @@ def _maybe_send_property_sequence(
 
         sent = (
             send(templates.build_property_info_message(prop))
-            and send(templates.DM_FOLLOWUP_TEXT)
+            and send(templates.build_site_visit_message())
             and send(templates.build_more_options_message(form_link))
         )
         if not sent:
@@ -517,7 +664,7 @@ def _maybe_send_property_sequence(
 
         if dedupe_key is not None:
             instagram_contact_store.mark_event_processed(dedupe_key)
-            _last_dm_at[dedupe_key] = time.monotonic()
+            _remember_dm_time(dedupe_key, time.monotonic())
         instagram_contact_store.upsert_contact(
             existing_contact.model_copy(update={"ig_username": ig_username or existing_contact.ig_username})
             if existing_contact is not None

@@ -85,6 +85,7 @@ export default function RequirementsForm({
   token,
   idPrefix = "req",
   contextNote,
+  onSubmitted,
 }: {
   /** Present only when the visitor arrived from a link we sent them. */
   token?: string;
@@ -95,6 +96,11 @@ export default function RequirementsForm({
    *  listing still says which listing it was about — the fields themselves
    *  have nowhere else to carry that. Never overwrites saved text. */
   contextNote?: string;
+  /** Called ONLY when a submission was actually saved ("ok") — never for a
+   *  refusal, which the visitor has to stay and read. The home page uses it
+   *  to acknowledge the submission and carry them up to the properties;
+   *  anywhere that passes nothing keeps the plain inline ending. */
+  onSubmitted?: () => void;
 }) {
   // "loading" only ever happens with a token — a visitor who just scrolled
   // down here has nothing to fetch and should see the form immediately.
@@ -110,6 +116,11 @@ export default function RequirementsForm({
   // a LINK may override the browser's remembered number.
   const [fromLink, setFromLink] = useState(false);
   const [hasActiveAssignment, setHasActiveAssignment] = useState(false);
+  // How many more times this number may submit before the form refuses (see
+  // the backend's MAX_REQUIREMENT_SUBMISSIONS). null until a prefill answers
+  // — and for a visitor who has never been looked up, which is exactly the
+  // case where there is nothing worth warning anyone about.
+  const [updatesRemaining, setUpdatesRemaining] = useState<number | null>(null);
 
   const [phone, setPhone] = useState("");
   const [name, setName] = useState("");
@@ -135,9 +146,12 @@ export default function RequirementsForm({
   const [formError, setFormError] = useState<string | null>(null);
   const [busy, setBusy] = useState(false);
   const [done, setDone] = useState(false);
-  // Set when the backend refused to save because a site visit is already
-  // assigned — a different ending from `done`, and not a failure.
-  const [lockedMessage, setLockedMessage] = useState<string | null>(null);
+  // Set when the backend deliberately refused to SAVE — a site visit is
+  // already assigned, or this number has used up its online updates. A
+  // different ending from `done`, and neither of them a failure: the
+  // difference that matters is that the requirements on file are unchanged
+  // and a person, not the form, is now the way to change them.
+  const [refusal, setRefusal] = useState<{ title: string; body: string } | null>(null);
 
   const phoneRef = useRef<HTMLInputElement>(null);
   const verification = usePhoneVerification();
@@ -227,6 +241,7 @@ export default function RequirementsForm({
     setIsNewClient(data.is_new_client);
     setChannel(data.channel);
     setHasActiveAssignment(data.has_active_assignment);
+    setUpdatesRemaining(data.updates_remaining ?? null);
     setPhone(data.phone ?? "");
     setName(data.name ?? "");
     setEmail(data.email ?? "");
@@ -406,9 +421,31 @@ export default function RequirementsForm({
           verification_token: verificationToken ?? null,
         });
       }
-      // "locked" is a deliberate refusal, not a failure — the client has a
-      // site visit assigned and has just been messaged about it on WhatsApp.
-      if (result?.status === "locked") setLockedMessage(result.message ?? null);
+      // Two deliberate refusals, neither of them a failure. "locked": a site
+      // visit is assigned and they have just been messaged about it on
+      // WhatsApp. "limit_reached": the online update allowance is spent, and
+      // deliberately NO message is sent for that one (see the backend) — so
+      // the words on screen are the only explanation there will be, which is
+      // why they are shown rather than a generic error.
+      if (result?.status === "locked") {
+        setRefusal({
+          title: "We've messaged you on WhatsApp.",
+          body:
+            result.message ??
+            "You have a site visit assigned with one of our agents, so we've kept your requirements as they are for now.",
+        });
+      } else if (result?.status === "limit_reached") {
+        setRefusal({
+          title: "We've kept your requirements as they are.",
+          body:
+            result.message ??
+            "You've already updated your requirements three times. Just message us on WhatsApp or give us a call and we'll gladly make any further changes for you.",
+        });
+      } else {
+        // Saved. The page this form is on decides what happens next — the
+        // home page acknowledges it and carries them up to the properties.
+        onSubmitted?.();
+      }
       setDone(true);
     } catch (error) {
       setFormError(
@@ -456,13 +493,12 @@ export default function RequirementsForm({
   if (done) {
     return (
       <div className="lead-done" role="status">
-        <span className="lead-done__icon">
-          {lockedMessage ? <IconAlert size={22} /> : <IconCheck size={22} />}
-        </span>
-        <h3>{lockedMessage ? "We've messaged you on WhatsApp." : "Thank you — we've got it."}</h3>
+        <span className="lead-done__icon">{refusal ? <IconAlert size={22} /> : <IconCheck size={22} />}</span>
+        <h3>{refusal ? refusal.title : "Thank you — we've got it."}</h3>
         <p>
-          {lockedMessage ??
-            "Your requirements are saved, and one of us will message you on WhatsApp shortly with the properties that actually fit. No call centre — just a person."}
+          {refusal
+            ? refusal.body
+            : "Your requirements are saved, and one of us will message you on WhatsApp shortly with the properties that actually fit. No call centre — just a person."}
         </p>
       </div>
     );
@@ -485,6 +521,21 @@ export default function RequirementsForm({
           You have a site visit assigned with one of our agents, so your requirements are locked while that's in
           progress. Do send your changes — we'll message you on WhatsApp and a quick call is all it takes to update
           them.
+        </p>
+      )}
+
+      {/* Said BEFORE they retype everything, never after — the same
+          courtesy has_active_assignment above gets, and for the same
+          reason. Only ever shown to someone who is UPDATING: a first-time
+          visitor has their full allowance and no reason to be told there is
+          one. Zero left is the firmer wording, because at that point the
+          form will refuse and the way forward is a person. */}
+      {!isNewClient && updatesRemaining !== null && updatesRemaining <= 1 && (
+        <p className="form-note">
+          <IconAlert size={16} />
+          {updatesRemaining === 0
+            ? "You've already updated your requirements a few times, so this form can't change them again. Do send us a message on WhatsApp or give us a call — we'll happily update them for you."
+            : "Just so you know, this is the last update we can take through this form. After it, a quick message or call is all it takes and we'll update things for you ourselves."}
         </p>
       )}
 

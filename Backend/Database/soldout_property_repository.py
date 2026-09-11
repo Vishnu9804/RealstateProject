@@ -200,7 +200,7 @@ def move_property_to_soldout(record_id: str) -> MoveOutcome:
             .join(WhatsAppMessageRow, WhatsAppMessageRow.id == PropertyRow.source_message_id)
             .where(PropertyRow.id == row_id)
         )
-        copied = session.execute(
+        session.execute(
             insert(SoldOutPropertyRow).from_select(
                 ["record_id", "source_message_id", *_PROPERTY_COLUMNS, *_MESSAGE_COLUMNS, "created_at"],
                 source,
@@ -211,13 +211,26 @@ def move_property_to_soldout(record_id: str) -> MoveOutcome:
         # across a real foreign key (properties.source_message_id
         # REFERENCES whatsapp_messages(id)), so it cannot match nothing —
         # but "should" is not good enough when the cost of being wrong is
-        # deleting a property with no copy of it anywhere. Raising rolls the
-        # whole transaction back and leaves the property exactly where it
-        # was; the operator sees an error and nothing is lost.
-        if copied.rowcount != 1:
+        # deleting a property with no copy of it anywhere.
+        #
+        # Verified with a real existence check rather than the INSERT
+        # statement's own `.rowcount`: psycopg (v3) reports -1 — "not
+        # determinable" — for an INSERT ... SELECT with no VALUES clause,
+        # rather than the actual row count, so a numeric rowcount check
+        # rejects every successful copy instead of only a failed one. A
+        # SELECT against the unique index on record_id proves the row is
+        # really there, at the cost of one cheap indexed lookup, and is
+        # correct regardless of what any particular driver's rowcount
+        # reports. Raising rolls the whole transaction back and leaves the
+        # property exactly where it was; the operator sees an error and
+        # nothing is lost.
+        copy_confirmed = session.execute(
+            select(SoldOutPropertyRow.id).where(SoldOutPropertyRow.record_id == canonical_record_id)
+        ).first()
+        if copy_confirmed is None:
             raise RuntimeError(
                 f"Could not copy property {canonical_record_id!r} into the sold-out table "
-                f"({copied.rowcount} row(s) written) — the property has been left untouched."
+                "— the property has been left untouched."
             )
 
         # 5. Out of the property database. Every existing read in the

@@ -336,39 +336,6 @@ def clear_assignments_for_client(client_phone: str) -> List[ActiveAssignment]:
     return removed
 
 
-def get_active_assignments_for_property(property_record_id: str) -> List[ActiveAssignment]:
-    """Every active (not-yet-completed) visit against ONE property, across
-    every agent and every client — the full rows, not just ids, because the
-    caller needs to know WHICH agents to tell when this property comes off
-    the market (see Service/WhatsAppDataFetchingService/soldout_property_service.py).
-    The property-shaped sibling of get_active_assignments_for_client above."""
-    if is_client_database_configured():
-        return agent_assignment_repository.get_active_for_property(property_record_id)
-    return [a for a in _assignments if a.property_record_id == property_record_id]
-
-
-def clear_assignments_for_property(property_record_id: str) -> List[ActiveAssignment]:
-    """Cancels every active visit against ONE property — across every agent
-    and every client — and returns exactly what was removed, so the caller
-    can tell each agent involved.
-
-    The property-shaped sibling of clear_assignments_for_client above: used
-    when a property is taken off the market for good (see
-    Service/WhatsAppDataFetchingService/soldout_property_service.py). Same
-    rule as that function: only ACTIVE assignments go. Completed visits are
-    permanent history — the visit genuinely happened, and a sale closing
-    afterwards doesn't unhappen it, or undo the agent's credit for it.
-    """
-    removed = get_active_assignments_for_property(property_record_id)
-    if not removed:
-        return []
-    if is_client_database_configured():
-        agent_assignment_repository.delete_all_for_property(property_record_id)
-    else:
-        _assignments[:] = [a for a in _assignments if a.property_record_id != property_record_id]
-    return removed
-
-
 def _get_all_visits() -> List[VisitRecord]:
     if is_client_database_configured():
         return agent_visit_repository.get_all_visits()

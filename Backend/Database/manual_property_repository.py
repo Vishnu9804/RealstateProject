@@ -45,20 +45,6 @@ def delete_all_for_client(client_phone: str) -> None:
         session.execute(delete(ManualPropertyRow).where(ManualPropertyRow.client_phone == client_phone))
 
 
-def delete_all_for_property(property_record_id: str) -> int:
-    """Un-picks ONE property for every client that had it hand-picked, in
-    one statement, and returns how many rows went. Used when that property
-    is taken off the market for good (sold out — see
-    Service/WhatsAppDataFetchingService/soldout_property_service.py): a
-    hand-pick is a promise to show someone this specific listing, and there
-    is nothing left to show."""
-    with get_client_session() as session:
-        result = session.execute(
-            delete(ManualPropertyRow).where(ManualPropertyRow.property_record_id == property_record_id)
-        )
-        return result.rowcount or 0
-
-
 def get_for_client(client_phone: str) -> List[str]:
     stmt = (
         select(ManualPropertyRow.property_record_id)

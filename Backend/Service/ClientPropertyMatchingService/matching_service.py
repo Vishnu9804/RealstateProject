@@ -135,28 +135,6 @@ def clear_matches_for_client(phone: str) -> None:
     _persist_scores(phone, [], _now())
 
 
-def remove_property_from_matches(record_id: str) -> int:
-    """Drops every cached score for ONE property, across every client, and
-    returns how many were dropped.
-
-    Called when that property is taken off the market for good (sold out —
-    see Service/WhatsAppDataFetchingService/soldout_property_service.py).
-    _build_result already skips a score whose property has gone, so the
-    dialog was never going to show it; this exists so the cheap per-bucket
-    COUNTS (get_match_counts, get_scored_property_ids — both cache-only
-    reads by design) can't keep counting something that no longer exists.
-    Nothing is re-scored here: removing a property from the cache is not a
-    change to any client's requirements."""
-    if is_client_database_configured():
-        return matching_repository.delete_matches_for_property(record_id)
-    removed = 0
-    for phone, scores in _score_cache.items():
-        kept = [score for score in scores if score.record_id != record_id]
-        removed += len(scores) - len(kept)
-        _score_cache[phone] = kept
-    return removed
-
-
 def get_scored_property_ids(phone: str) -> set:
     """Every property id currently scored for this client, any bucket —
     the same cheap, cache-only read get_match_counts above does, just the

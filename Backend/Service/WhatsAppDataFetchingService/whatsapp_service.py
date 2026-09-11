@@ -59,7 +59,6 @@ from Service.WhatsAppDataFetchingService import (
     property_pipeline_service,
     requirement_filter_service,
     requirement_pipeline_service,
-    soldout_property_service,
     whatsapp_connection_manager,
 )
 from Service.WhatsAppDataFetchingService.message_buffer_service import MessageBufferService
@@ -116,12 +115,6 @@ def get_status() -> dict:
         "duplicate_message_count": property_pipeline_service.get_duplicate_message_count(),
         "needs_review_property_count": property_pipeline_service.get_needs_review_count(),
         "outsider_property_count": property_pipeline_service.get_outsider_count(),
-        # Properties whose deal has closed and which therefore no longer
-        # live in `properties` at all (see soldout_property_service). Doubles
-        # as the Sold out view's change signal: rows there are only ever
-        # inserted or deleted, never edited, so a count is all that view
-        # needs to know whether to re-fetch.
-        "soldout_property_count": soldout_property_service.get_soldout_count(),
         # Cheap change signal for the Properties/Landing Page pages: this
         # status poll already runs continuously (StatusProvider, shared
         # across every internal page), so piggybacking the version here

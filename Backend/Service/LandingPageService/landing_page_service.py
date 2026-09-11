@@ -26,7 +26,7 @@ from Model.WhatsAppDataFetchingModel.embedded_property import EmbeddedProperty
 from Model.WhatsAppInquiryHandlingModel.client_record import ClientRecord
 from Service.ClientPropertyMatchingService import matching_service
 from Service.LandingPageService import lead_store
-from Service.WhatsAppDataFetchingService import area_filter_service, property_vector_store, soldout_property_service
+from Service.WhatsAppDataFetchingService import area_filter_service, property_vector_store
 from Service.WhatsAppInquiryHandlingService import assignment_lock_service, client_store, otp_service
 from Service.WhatsAppInquiryHandlingService.phone_utils import normalize_phone
 
@@ -136,27 +136,14 @@ def get_property_ids_for_phone(phone: str) -> List[str]:
     about here, so it can show them a second time under its "Web Site
     Property Inquiry" section (components/ClientMatchesDialog.tsx) even
     when they're already sitting in a scored bucket for an unrelated
-    reason. Order matches the raw enquiries themselves (newest first).
-
-    SOLD-OUT properties are excluded. The enquiry itself is history and is
-    never deleted -- the lead row still records who asked and about what --
-    but a closed deal has nothing left to show or hand to an agent. This
-    function feeds BOTH the dialog's own section and the Inquiries table's
-    Matches count (Controller/ClientPropertyMatchingController/
-    matching_controller.py), so filtering here, once, is what keeps those two
-    from disagreeing. It costs one indexed lookup over the ids already in
-    hand, and nothing at all for a client with no website enquiries -- see
-    soldout_property_service.filter_soldout_record_ids."""
+    reason. Order matches the raw enquiries themselves (newest first)."""
     seen: set = set()
     ids: List[str] = []
     for lead in lead_store.find_leads_for_phone(phone):
         if lead.property_record_id and lead.property_record_id not in seen:
             seen.add(lead.property_record_id)
             ids.append(lead.property_record_id)
-    # Sold-out properties are dropped here, in the ONE place leads become
-    # property ids -- see the note at the end of this function's docstring.
-    sold_out = soldout_property_service.filter_soldout_record_ids(ids)
-    return [record_id for record_id in ids if record_id not in sold_out]
+    return ids
 
 
 def _sync_to_inquiries(lead: LandingLeadRecord, prop: Optional[EmbeddedProperty]) -> None:

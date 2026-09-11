@@ -42,25 +42,6 @@ def replace_matches_for_client(phone: str, scores: List[MatchScore]) -> None:
             )
 
 
-def delete_matches_for_property(property_record_id: str) -> int:
-    """Drops every cached score pointing at ONE property, for every client,
-    and returns how many rows went.
-
-    Used when a property leaves the live table for good (sold out — see
-    Service/WhatsAppDataFetchingService/soldout_property_service.py). The
-    matches DIALOG already skips a score whose property no longer exists
-    (matching_service._build_result), but the per-bucket COUNTS the
-    Inquiries table renders are read straight off this cache — so leaving
-    the rows behind would make a badge claim more matches than the dialog
-    can show. One statement, not one per client: the row set is defined by
-    the property here, not by who happened to match it."""
-    with get_client_session() as session:
-        result = session.execute(
-            delete(ClientPropertyMatchRow).where(ClientPropertyMatchRow.property_record_id == property_record_id)
-        )
-        return result.rowcount or 0
-
-
 def get_matches_for_client(phone: str) -> Tuple[List[MatchScore], Optional[datetime]]:
     """Returns (scores, computed_at) — computed_at is None when there's no
     cached result yet (client never had a recompute run)."""

@@ -15,6 +15,7 @@ from Model.ClientPropertyMatchingModel.requirement_match_result import Requireme
 from Service.AgentManagementService import agent_store, manual_property_store
 from Service.ClientPropertyMatchingService import matching_service, requirement_matching_service
 from Service.LandingPageService import landing_page_service
+from Service.WhatsAppDataFetchingService import soldout_property_service
 
 router = APIRouter(prefix="/matching", tags=["matching"])
 
@@ -75,7 +76,17 @@ def get_client_match_counts(phone: str) -> MatchCounts:
     # dialog's own header count never disagree. A website enquiry that DID
     # score, or that staff also hand-picked, is already inside scored_ids
     # or manual_ids and must not be counted twice.
-    website_ids = set(landing_page_service.get_property_ids_for_phone(phone))
+    # Minus anything since sold out. Every OTHER id source above lives in
+    # a table the sale itself cleans out (see Database/
+    # soldout_property_repository.py's move_property_to_soldout), but a
+    # website enquiry is a record of a PERSON's interest and is deliberately
+    # kept — so this is the one place a sold-out property could still be
+    # counted as outstanding, making this badge disagree with the dialog it
+    # summarises (ClientMatchesDialog.tsx skips any property that is no
+    # longer in the property list). An in-memory set difference, no query.
+    website_ids = (
+        set(landing_page_service.get_property_ids_for_phone(phone)) - soldout_property_service.get_sold_out_ids()
+    )
     website_only_ids = website_ids - scored_ids - manual_ids - completed_ids
     # The one figure the table actually renders — see MatchCounts.total.
     # A set, not a sum: the three sources overlap, and `completed` is not

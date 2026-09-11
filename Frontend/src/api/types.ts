@@ -39,6 +39,14 @@ export interface WhatsAppStatusResponse {
   /** The same opaque change token, for the broker-requirements list —
    *  powers the Broker Requirements page's change-driven refresh. */
   requirements_version: string;
+  /** How many properties have been marked sold out — read from the
+   *  backend's own in-memory cache, so it costs no database work. Shown on
+   *  the Properties page's Sold out tab label. */
+  soldout_property_count: number;
+  /** And the same opaque change token for that list. A sold-out record is
+   *  never edited, so this only moves when a NEW sale is recorded — which
+   *  is what lets the Sold out tab fetch once and then sit still. */
+  soldout_version: string;
 }
 
 export interface WhatsAppGroup {
@@ -458,6 +466,39 @@ export interface PropertyRecord {
   on_landing_page: boolean;
   landing_page_updated_at: string | null;
   qualified_at: string | null;
+}
+
+/**
+ * Mirrors Backend/Model/WhatsAppDataFetchingModel/soldout_property.py's
+ * SoldOutPropertyRecord — a property whose deal is done.
+ *
+ * Deliberately a PropertyRecord plus two sale fields, because it extends
+ * one on the backend for the same reason: the Sold out tab is the
+ * Properties page's own table, cards, filters, search and detail dialog
+ * reused as-is, not a second set of components kept in step by hand.
+ *
+ * These records live ONLY in the sold-out table. The property they came
+ * from is gone from the property database, so it no longer appears in the
+ * Main/Outsider/Needs review tabs, on the Landing Page page, on the public
+ * site, in any client's matches, in anyone's hand-picked list, or in an
+ * agent's pending visits.
+ */
+export interface SoldOutPropertyRecord extends PropertyRecord {
+  sold_out_at: string;
+  /** Pre-formatted IST, honouring the same 12h/24h display setting as
+   *  `formatted_timestamp` — so no date maths happens on this side. */
+  formatted_sold_out_at: string;
+}
+
+/** What marking a property sold out actually did. `agents_notified` counts
+ *  agents REACHED on WhatsApp, so a send that failed shows up rather than
+ *  being reported as done. One message per agent, however many visits they
+ *  held for this property. */
+export interface SoldOutActionResult {
+  property: SoldOutPropertyRecord;
+  visits_cancelled: number;
+  agents_notified: number;
+  agents_failed: number;
 }
 
 /**

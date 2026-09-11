@@ -42,6 +42,22 @@ def clear_for_client(client_phone: str) -> None:
     _manual_properties.pop(client_phone, None)
 
 
+def drop_property_from_memory(property_record_id: str) -> None:
+    """Removes one property from EVERY client's hand-picked list — used when
+    that property is marked sold out (see Service/WhatsAppDataFetchingService/
+    soldout_property_service.py): a property nobody can be shown any more
+    has no business still sitting in someone's shortlist.
+
+    IN-MEMORY FALLBACK ONLY, and called only on that path. With a database
+    configured, the equivalent DELETE runs inside the single transaction
+    that performs the move — see Database/soldout_property_repository.py's
+    move_property_to_soldout.
+    """
+    for client_phone, ids in _manual_properties.items():
+        if property_record_id in ids:
+            _manual_properties[client_phone] = [value for value in ids if value != property_record_id]
+
+
 def get_manual_properties(client_phone: str) -> List[str]:
     if is_client_database_configured():
         return manual_property_repository.get_for_client(client_phone)

@@ -336,6 +336,28 @@ def clear_assignments_for_client(client_phone: str) -> List[ActiveAssignment]:
     return removed
 
 
+def take_memory_assignments_for_property(property_record_id: str) -> List[ActiveAssignment]:
+    """Cancels every active visit to ONE property, across every agent and
+    every client, and returns exactly what was removed so the caller can
+    tell each agent involved — used when that property is marked sold out
+    (see Service/WhatsAppDataFetchingService/soldout_property_service.py).
+
+    Completed visits are never touched, for the same reason
+    clear_assignments_for_client leaves them alone: a visit that actually
+    happened is permanent history, and cancelling a pending visit is a
+    different thing from un-recording one already made.
+
+    IN-MEMORY FALLBACK ONLY, and called only on that path. With a database
+    configured, the equivalent read-then-DELETE runs inside the single
+    transaction that performs the move — see Database/
+    soldout_property_repository.py's move_property_to_soldout.
+    """
+    removed = [a for a in _assignments if a.property_record_id == property_record_id]
+    if removed:
+        _assignments[:] = [a for a in _assignments if a.property_record_id != property_record_id]
+    return removed
+
+
 def _get_all_visits() -> List[VisitRecord]:
     if is_client_database_configured():
         return agent_visit_repository.get_all_visits()

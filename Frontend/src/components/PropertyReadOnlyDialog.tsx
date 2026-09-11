@@ -177,7 +177,17 @@ export default function PropertyReadOnlyDialog({
               </button>
             </div>
             <div className="detail-modal__body">
-              <EmptyState icon={<IconAlert size={36} />} title="No longer available" body="This property has since been deleted." />
+              {/* Two ways a property reaches this state now: it was
+                  deleted, or its deal closed and it was moved to Sold out
+                  (see the Properties page's Sold out tab) — which takes it
+                  out of the property database entirely. This dialog only
+                  ever gets an id, so it cannot tell which, and naming both
+                  is more use than confidently naming the wrong one. */}
+              <EmptyState
+                icon={<IconAlert size={36} />}
+                title="No longer available"
+                body="This property is no longer in your property database — it was either deleted or marked sold out."
+              />
             </div>
             <div className="detail-modal__foot">
               <Button variant="ghost" onClick={onClose}>

@@ -203,6 +203,22 @@ def clear_matches_for_client(phone: str) -> None:
     _persist_scores(phone, [], _now())
 
 
+def drop_property_from_memory_cache(record_id: str) -> None:
+    """Forgets one property's cached score for EVERY client — used when that
+    property leaves the property database for good by being marked sold out
+    (see Service/WhatsAppDataFetchingService/soldout_property_service.py).
+
+    IN-MEMORY FALLBACK ONLY, and called only on that path. With a database
+    configured, the equivalent DELETE runs inside the single transaction
+    that performs the move (see Database/soldout_property_repository.py's
+    move_property_to_soldout), so that the property's removal and the
+    disappearance of every match pointing at it can never come apart.
+    """
+    for phone, scores in _score_cache.items():
+        if any(score.record_id == record_id for score in scores):
+            _score_cache[phone] = [score for score in scores if score.record_id != record_id]
+
+
 def get_scored_property_ids(phone: str) -> set:
     """Every property id currently scored for this client, any bucket —
     the same cheap, cache-only read get_match_counts above does, just the

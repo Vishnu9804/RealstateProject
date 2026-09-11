@@ -59,6 +59,7 @@ from Service.WhatsAppDataFetchingService import (
     property_pipeline_service,
     requirement_filter_service,
     requirement_pipeline_service,
+    soldout_property_service,
     whatsapp_connection_manager,
 )
 from Service.WhatsAppDataFetchingService.message_buffer_service import MessageBufferService
@@ -123,6 +124,13 @@ def get_status() -> dict:
         "properties_version": property_pipeline_service.get_properties_version(),
         # The same trick for the Broker Requirements page's own list.
         "requirements_version": requirement_pipeline_service.get_requirements_version(),
+        # And again for the Properties page's Sold out tab. Both values are
+        # read from that feature's own in-memory cache (see
+        # soldout_property_store.version), so piggybacking them on this
+        # already-continuous poll costs nothing and means the tab never has
+        # to poll the database to notice a sale.
+        "soldout_property_count": soldout_property_service.get_sold_out_count(),
+        "soldout_version": soldout_property_service.get_sold_out_version(),
     }
 
 

@@ -1,7 +1,8 @@
 import { useCallback, useEffect, useMemo, useRef, useState } from "react";
 import { createPortal } from "react-dom";
 import { propertyApi } from "../api/propertyApi";
-import type { PropertyRecord } from "../api/types";
+import { soldoutPropertyApi } from "../api/soldoutPropertyApi";
+import type { PropertyRecord, SoldOutPropertyRecord } from "../api/types";
 import { useAppStatus } from "../state/StatusProvider";
 import { useDebounced, usePersistentState } from "../hooks/useUi";
 import { friendlyError } from "../lib/apiError";
@@ -35,6 +36,7 @@ import FilterPopover, { type SortControl } from "../components/ui/FilterPopover"
 import ConfirmDialog from "../components/ui/ConfirmDialog";
 import RowRail from "../components/ui/RowRail";
 import PropertyFormDialog from "../components/PropertyFormDialog";
+import MoveMenu from "../components/ui/MoveMenu";
 import {
   Badge,
   Button,
@@ -73,15 +75,23 @@ import {
   IconX,
 } from "../components/ui/Icons";
 
-/** The three mutually-exclusive views: Main and Outsider are the property's
+/** The four mutually-exclusive views. Main and Outsider are the property's
  *  permanent home (review_status), toggled via the Main/Outsider capsule;
  *  Needs review is an orthogonal queue (needs_review=true, from either
  *  home) opened via its own button. A property is in that queue because
  *  almost nothing could be extracted from its message, and it leaves by a
  *  human completing it and picking Main or Outsider — this is the only
  *  page that shows the queue at all (the matching dialogs never do, since
- *  a flagged property isn't matched). */
-export type ViewTab = "main" | "outsider" | "needsReview";
+ *  a flagged property isn't matched).
+ *
+ *  "soldout" is different in kind from the other three: those are three
+ *  views of the SAME list (the property database), filtered by the flags on
+ *  each row. Sold out reads a different list entirely — properties whose
+ *  deal is done no longer exist in the property database at all (see
+ *  Backend/Database/soldout_property_models.py on why that is a separate
+ *  table rather than a flag), so this tab fetches its own data and shows it
+ *  read-only: there is nothing left to edit, move or assign. */
+export type ViewTab = "main" | "outsider" | "needsReview" | "soldout";
 
 const FETCH_LIMIT = 500;
 
@@ -167,15 +177,38 @@ export default function DashboardPage() {
   // — re-picking "Main" on every visit would be a small annoyance that
   // repeats forever.
   const [viewTab, setViewTab] = usePersistentState<ViewTab>("dashboard.tab", "main");
-  const [confirmAction, setConfirmAction] = useState<{ type: "delete" | "move"; property: PropertyRecord } | null>(
-    null,
-  );
+  // `move` carries its destination explicitly rather than deriving it from
+  // the property: with three destinations to choose from, "the other one"
+  // is no longer a meaningful answer (see MoveMenu.tsx).
+  const [confirmAction, setConfirmAction] = useState<
+    | { type: "delete"; property: PropertyRecord }
+    | { type: "move"; property: PropertyRecord; target: "accepted" | "outsider" }
+    | { type: "soldout"; property: PropertyRecord }
+    | null
+  >(null);
   const [actionBusy, setActionBusy] = useState(false);
   const [formDialog, setFormDialog] = useState<{ mode: "add" | "edit"; property?: PropertyRecord } | null>(null);
   // Not persisted like `view`/`viewTab` — this is a quick one-off lens on
   // the current list, not a standing preference worth remembering across
   // visits.
   const [reelOnly, setReelOnly] = useState(false);
+
+  // The Sold out tab's own list, fetched from its own endpoint (see the
+  // ViewTab comment on why it is not a filtered view of `properties`).
+  // `null` means "not loaded yet" — deliberately not loaded on mount: most
+  // visits to this page never open that tab, and a request nobody asked for
+  // is a request worth not making. The effect below loads it the first time
+  // the tab is actually opened, and again only when the backend's sold-out
+  // change token says a new sale has been recorded.
+  const [soldout, setSoldout] = useState<SoldOutPropertyRecord[] | null>(null);
+  const [soldoutError, setSoldoutError] = useState<string | null>(null);
+  const lastSoldoutVersion = useRef<string | null>(null);
+  // Deliberately a ref, not derived from `soldout` being non-null: the
+  // effect below must not have the state it writes among its dependencies,
+  // or every completed load would re-trigger it (and, while the status poll
+  // has not answered yet and there is no version to compare against, that
+  // would be an unbounded fetch loop rather than one extra request).
+  const soldoutLoaded = useRef(false);
 
   const searchRef = useRef<HTMLInputElement>(null);
   const listTopRef = useRef<HTMLDivElement>(null);
@@ -262,6 +295,39 @@ export default function DashboardPage() {
     void load(false);
   }, [appStatus?.properties_version, load]);
 
+  const loadSoldout = useCallback(async () => {
+    try {
+      const data = await soldoutPropertyApi.getSoldOutProperties(FETCH_LIMIT);
+      setSoldout(data);
+      setSoldoutError(null);
+    } catch (err) {
+      setSoldoutError(friendlyError(err));
+      // So leaving this tab and coming back retries, instead of the first
+      // failed attempt latching the error in place for the whole session.
+      soldoutLoaded.current = false;
+    }
+  }, []);
+
+  // Loads the sold-out list the first time its tab is opened, and re-loads
+  // it only when the backend's own change token moves — i.e. when a sale
+  // has actually been recorded, by this tab or anywhere else. A sold-out
+  // record is never edited, so between sales there is nothing to re-fetch,
+  // and the request that proves it costs no database work on either side
+  // (see soldoutPropertyApi's own comment).
+  const soldoutVersion = appStatus?.soldout_version;
+  useEffect(() => {
+    if (viewTab !== "soldout") return;
+    // Already holding this exact version — nothing to do. `undefined` means
+    // the status poll has not answered yet, which is not a new version and
+    // must not count as one.
+    if (soldoutLoaded.current && (soldoutVersion === undefined || lastSoldoutVersion.current === soldoutVersion)) {
+      return;
+    }
+    soldoutLoaded.current = true;
+    lastSoldoutVersion.current = soldoutVersion ?? null;
+    void loadSoldout();
+  }, [viewTab, soldoutVersion, loadSoldout]);
+
   // "/" jumps to search from anywhere on the page — the single most-used
   // control should never require aiming at it.
   useEffect(() => {
@@ -278,15 +344,27 @@ export default function DashboardPage() {
   }, []);
 
   const allProperties = useMemo(() => properties ?? [], [properties]);
+  const onSoldOutTab = viewTab === "soldout";
+  const soldOutList = useMemo(() => soldout ?? [], [soldout]);
+  /** The pool the open tab draws from: the property database for the three
+   *  views of it, the sold-out list for its own tab. Everything downstream
+   *  (search, column filters, sorting, paging, the empty states) works off
+   *  this, which is what lets one page serve both without a second copy of
+   *  any of it. */
+  const tabSource: PropertyRecord[] = onSoldOutTab ? soldOutList : allProperties;
 
   // Derived from the live list rather than snapshotted at open time — a
   // background poll landing while the dialog is open keeps it showing
   // current data, and a delete (which removes the property from this list
   // entirely) closes it automatically for free, with no extra bookkeeping.
   const detailProperty = useMemo(
-    () => (detailId ? (allProperties.find((p) => p.record_id === detailId) ?? null) : null),
-    [detailId, allProperties],
+    () => (detailId ? (tabSource.find((p) => p.record_id === detailId) ?? null) : null),
+    [detailId, tabSource],
   );
+  /** The sale date, when the open dialog is showing a sold-out record —
+   *  which is also what puts that dialog into its read-only mode (see
+   *  PropertyDetailDialog's own `soldOutAt` prop). */
+  const detailSoldOutAt = detailProperty ? soldOutStamp(detailProperty) : null;
 
   const needsReviewCount = useMemo(() => allProperties.filter((p) => p.needs_review).length, [allProperties]);
 
@@ -300,10 +378,13 @@ export default function DashboardPage() {
   // only in the Needs review queue until a human accepts it, at which point
   // it simply reappears here under whichever review_status it already has.
   const tabFiltered = useMemo(() => {
+    // The sold-out list has no sub-division: every record in it is sold, so
+    // there is no flag left to filter it by.
+    if (viewTab === "soldout") return soldOutList;
     if (viewTab === "needsReview") return allProperties.filter((p) => p.needs_review);
     if (viewTab === "outsider") return allProperties.filter((p) => p.review_status === "outsider" && !p.needs_review);
     return allProperties.filter((p) => p.review_status === "accepted" && !p.needs_review);
-  }, [allProperties, viewTab]);
+  }, [allProperties, soldOutList, viewTab]);
 
   const localities = useMemo(() => {
     // Case-folded to match how the Area filter groups its options —
@@ -312,6 +393,8 @@ export default function DashboardPage() {
     allProperties.forEach((p) => p.area_name?.trim() && set.add(p.area_name.trim().toLowerCase()));
     return set.size;
   }, [allProperties]);
+
+  const soldOutCount = appStatus?.soldout_property_count ?? soldOutList.length;
 
   const passesFilters = useMemo(() => compileFilters(filters), [filters]);
 
@@ -469,6 +552,12 @@ export default function DashboardPage() {
   // background fetch below only exists to backfill photos.
   function openDetail(recordId: string) {
     setDetailId(recordId);
+    // A sold-out record is already complete in the list this tab fetched
+    // (everything except photos, which come from its own endpoint on
+    // demand), and it no longer exists in the property database — so the
+    // backfill below would only produce a 404 and an error toast for a
+    // dialog that in fact has everything it needs.
+    if (onSoldOutTab) return;
     const cached = getCachedPropertyDetail(recordId);
     if (cached) {
       updateLocalProperty(recordId, cached);
@@ -539,7 +628,7 @@ export default function DashboardPage() {
   async function confirmMove() {
     if (!confirmAction || confirmAction.type !== "move") return;
     const property = confirmAction.property;
-    const nextStatus = property.review_status === "outsider" ? "accepted" : "outsider";
+    const nextStatus = confirmAction.target;
     setActionBusy(true);
     try {
       const updated = await propertyApi.updateProperty(property.record_id, { review_status: nextStatus });
@@ -549,6 +638,44 @@ export default function DashboardPage() {
       setConfirmAction(null);
     } catch (err) {
       toast.push({ tone: "bad", title: "Couldn't move property", message: friendlyError(err) });
+    } finally {
+      setActionBusy(false);
+    }
+  }
+
+  /** Moving a property to Sold out is not a status change like the other
+   *  two destinations — it takes the property out of the property database
+   *  altogether, so locally it is a removal, exactly like a delete. The
+   *  sold-out list then reloads (the record has to come back with the
+   *  `sold_out_at` the backend assigned), and the toast reports what the
+   *  one request actually did on the other side: the visits it cancelled
+   *  and the agents it reached. */
+  async function confirmSoldOut() {
+    if (!confirmAction || confirmAction.type !== "soldout") return;
+    const property = confirmAction.property;
+    setActionBusy(true);
+    try {
+      const result = await soldoutPropertyApi.markSoldOut(property.record_id);
+      removeLocalProperty(property.record_id);
+      setDetailId(null);
+      // Folded in locally as well as reloaded, so switching to the Sold out
+      // tab right now shows it even before the status poll's next tick.
+      setSoldout((prev) => (prev ? [result.property, ...prev.filter((p) => p.record_id !== property.record_id)] : prev));
+      lastSoldoutVersion.current = null;
+      const cancelled =
+        result.visits_cancelled > 0
+          ? ` ${result.visits_cancelled} pending visit${result.visits_cancelled === 1 ? "" : "s"} cancelled, ` +
+            `${result.agents_notified} agent${result.agents_notified === 1 ? "" : "s"} notified on WhatsApp` +
+            (result.agents_failed > 0 ? ` (${result.agents_failed} could not be reached — tell them by hand).` : ".")
+          : "";
+      toast.push({
+        tone: result.agents_failed > 0 ? "warn" : "ok",
+        title: "Marked sold out",
+        message: `It now appears only in the Sold out tab.${cancelled}`,
+      });
+      setConfirmAction(null);
+    } catch (err) {
+      toast.push({ tone: "bad", title: "Couldn't mark this property sold out", message: friendlyError(err) });
     } finally {
       setActionBusy(false);
     }
@@ -617,7 +744,11 @@ export default function DashboardPage() {
         </div>
       </header>
 
-      {allProperties.length > 0 && (
+      {/* Hidden on the Sold out tab: every tile here counts something about
+          the live property database (stored, needing review, outsider,
+          localities), and showing those above a list of closed deals reads
+          as if they described it. */}
+      {allProperties.length > 0 && !onSoldOutTab && (
         <div className="stat-grid">
           <Stat label="Stored" value={allProperties.length} icon={<IconBuilding size={13} />} delay={0} />
           <Stat label="Showing" value={visibleProperties.length} icon={<IconSearch size={13} />} tone="accent" delay={60} />
@@ -650,13 +781,17 @@ export default function DashboardPage() {
           />
         </div>
 
-        <Segmented<"main" | "outsider">
-          ariaLabel="Main or Outsider"
+        <Segmented<"main" | "outsider" | "soldout">
+          ariaLabel="Main, Outsider or Sold out"
           value={viewTab === "needsReview" ? null : viewTab}
           onChange={setViewTab}
           options={[
             { value: "main", label: "Main" },
             { value: "outsider", label: `Outsider${outsiderCount ? ` (${outsiderCount})` : ""}` },
+            // The count comes from the status poll (already running for
+            // every page), so the tab can show how many sales there are
+            // without this page fetching the list first.
+            { value: "soldout", label: `Sold out${soldOutCount ? ` (${soldOutCount})` : ""}` },
           ]}
         />
 
@@ -731,7 +866,7 @@ export default function DashboardPage() {
 
       {/* In card view there are no column headings to click, so the same
           dialogs get an explicit row of triggers rather than disappearing. */}
-      {view === "cards" && allProperties.length > 0 && (
+      {view === "cards" && tabSource.length > 0 && (
         <div className="filter-strip">
           <span className="faint small">Filter by</span>
           {FILTER_DEFS.map((def) => (
@@ -754,18 +889,24 @@ export default function DashboardPage() {
         </Note>
       )}
 
-      {loading && (
+      {(loading || (onSoldOutTab && soldout === null && soldoutError === null)) && (
         <Panel>
           <div className="stack stack-3">
             <div className="row-flex faint small">
-              <span className="spinner" /> Loading properties…
+              <span className="spinner" /> Loading {onSoldOutTab ? "sold-out properties" : "properties"}…
             </div>
             <SkeletonRows rows={6} />
           </div>
         </Panel>
       )}
 
-      {properties !== null && allProperties.length === 0 && (
+      {onSoldOutTab && soldoutError && (
+        <Note tone="bad" icon={<IconAlert size={17} />}>
+          <strong>Couldn't load the sold-out properties.</strong> {soldoutError}
+        </Note>
+      )}
+
+      {!onSoldOutTab && properties !== null && allProperties.length === 0 && (
         <Panel>
           <EmptyState
             icon={<IconInbox size={38} />}
@@ -775,7 +916,17 @@ export default function DashboardPage() {
         </Panel>
       )}
 
-      {allProperties.length > 0 && tabFiltered.length === 0 && (
+      {onSoldOutTab && soldout !== null && soldOutList.length === 0 && (
+        <Panel>
+          <EmptyState
+            icon={<IconTag size={36} />}
+            title="No sold-out properties yet"
+            body="A property lands here when you move it to Sold out from the Properties list. It then leaves the property database entirely — off this page's other tabs, off the Landing Page, off the public website, and out of every client's matches — and lives only here."
+          />
+        </Panel>
+      )}
+
+      {!onSoldOutTab && allProperties.length > 0 && tabFiltered.length === 0 && (
         <Panel>
           <EmptyState
             icon={<IconInbox size={36} />}
@@ -817,7 +968,8 @@ export default function DashboardPage() {
               onOpenFilter={(key, anchor) => setOpenFilter(openFilter?.key === key ? null : { key, anchor })}
               viewTab={viewTab}
               onAccept={handleAccept}
-              onMove={(property) => setConfirmAction({ type: "move", property })}
+              onMove={(property, target) => setConfirmAction({ type: "move", property, target })}
+              onSoldOut={(property) => setConfirmAction({ type: "soldout", property })}
               onDelete={(property) => setConfirmAction({ type: "delete", property })}
               onEdit={(property) => openEdit(property)}
             />
@@ -829,7 +981,8 @@ export default function DashboardPage() {
               freshIds={freshIds}
               viewTab={viewTab}
               onAccept={handleAccept}
-              onMove={(property) => setConfirmAction({ type: "move", property })}
+              onMove={(property, target) => setConfirmAction({ type: "move", property, target })}
+              onSoldOut={(property) => setConfirmAction({ type: "soldout", property })}
               onDelete={(property) => setConfirmAction({ type: "delete", property })}
               onEdit={(property) => openEdit(property)}
             />
@@ -842,7 +995,10 @@ export default function DashboardPage() {
         <FilterPopover
           def={FILTER_DEF_BY_KEY[openFilter.key]}
           anchorEl={openFilter.anchor}
-          properties={allProperties}
+          /* The open tab's own pool, so on the Sold out tab the value
+             pickers list the areas/BHKs/types that actually appear among
+             sold properties rather than among live ones. */
+          properties={tabSource}
           filter={filters[openFilter.key]}
           onChange={(next) => setColumnFilter(openFilter.key, next)}
           onClose={() => setOpenFilter(null)}
@@ -855,10 +1011,22 @@ export default function DashboardPage() {
           property={detailProperty}
           viewTab={viewTab}
           onResolveReview={handleResolveReview}
-          onMove={(property) => setConfirmAction({ type: "move", property })}
+          onMove={(property) =>
+            setConfirmAction({
+              type: "move",
+              property,
+              target: property.review_status === "outsider" ? "accepted" : "outsider",
+            })
+          }
+          onSoldOut={(property) => setConfirmAction({ type: "soldout", property })}
           onDelete={(property) => setConfirmAction({ type: "delete", property })}
           onEdit={(property) => openEdit(property)}
           onClose={() => setDetailId(null)}
+          soldOutAt={detailSoldOutAt}
+          /* Sold-out photos come from their own endpoint — the property they
+             belonged to is no longer in the property database, so the usual
+             one would 404. */
+          loadImages={onSoldOutTab ? soldoutPropertyApi.getSoldOutPropertyImages : undefined}
         />
       )}
 
@@ -883,7 +1051,13 @@ export default function DashboardPage() {
 
       {confirmAction && (
         <ConfirmDialog
-          title={confirmAction.type === "delete" ? "Delete this property?" : "Move this property?"}
+          title={
+            confirmAction.type === "delete"
+              ? "Delete this property?"
+              : confirmAction.type === "soldout"
+                ? "Mark this property sold out?"
+                : "Move this property?"
+          }
           body={
             confirmAction.type === "delete" ? (
               <>
@@ -892,20 +1066,52 @@ export default function DashboardPage() {
                   This removes it from your database <strong>permanently</strong> — it cannot be undone.
                 </p>
               </>
+            ) : confirmAction.type === "soldout" ? (
+              <>
+                <PropertySummary property={confirmAction.property} />
+                {/* Spelled out in full because this is not reversible from
+                    the UI, and because most of what it does happens
+                    somewhere the operator isn't looking: other clients'
+                    matches, the public website, and agents' phones. */}
+                <p style={{ marginTop: 12 }}>
+                  It moves into the <strong>Sold out</strong> tab and leaves your property database, so it
+                  disappears from Main/Outsider, the Landing Page, the public website, every client's matches and
+                  every hand-picked list.
+                </p>
+                <p style={{ marginTop: 8 }}>
+                  Every <strong>pending site visit</strong> for it is cancelled, and each agent who had one is
+                  told on WhatsApp — once, however many visits they were holding. Visits already completed are
+                  kept as history.
+                </p>
+                <p className="faint small" style={{ marginTop: 8 }}>
+                  This cannot be undone from here.
+                </p>
+              </>
             ) : (
               <>
                 <PropertySummary property={confirmAction.property} />
                 <p style={{ marginTop: 12 }}>
-                  Move it to{" "}
-                  <strong>{confirmAction.property.review_status === "outsider" ? "Main" : "Outsider"}</strong>?
+                  Move it to <strong>{confirmAction.target === "outsider" ? "Outsider" : "Main"}</strong>?
                 </p>
               </>
             )
           }
-          confirmLabel={confirmAction.type === "delete" ? "Delete forever" : "Move"}
-          tone={confirmAction.type === "delete" ? "danger" : "default"}
+          confirmLabel={
+            confirmAction.type === "delete"
+              ? "Delete forever"
+              : confirmAction.type === "soldout"
+                ? "Mark sold out"
+                : "Move"
+          }
+          tone={confirmAction.type === "move" ? "default" : "danger"}
           busy={actionBusy}
-          onConfirm={confirmAction.type === "delete" ? confirmDelete : confirmMove}
+          onConfirm={
+            confirmAction.type === "delete"
+              ? confirmDelete
+              : confirmAction.type === "soldout"
+                ? confirmSoldOut
+                : confirmMove
+          }
           onClose={() => !actionBusy && setConfirmAction(null)}
         />
       )}
@@ -1050,7 +1256,10 @@ interface ListProps {
   freshIds: Set<string>;
   viewTab: ViewTab;
   onAccept: (property: PropertyRecord) => void;
-  onMove: (property: PropertyRecord) => void;
+  /** The destination is passed explicitly — see the `confirmAction` state's
+   *  own comment on why "the other one" stopped being an answer. */
+  onMove: (property: PropertyRecord, target: "accepted" | "outsider") => void;
+  onSoldOut: (property: PropertyRecord) => void;
   onDelete: (property: PropertyRecord) => void;
   onEdit: (property: PropertyRecord) => void;
 }
@@ -1069,6 +1278,7 @@ function PropertyTable({
   viewTab,
   onAccept,
   onMove,
+  onSoldOut,
   onDelete,
   onEdit,
 }: ListProps & {
@@ -1204,15 +1414,20 @@ function PropertyTable({
                     <td className="cell-num" style={{ whiteSpace: "nowrap" }}>
                       {property.formatted_timestamp}
                     </td>
-                  <td onClick={(event) => event.stopPropagation()}>
-                    <RowActions
-                      property={property}
-                      viewTab={viewTab}
-                      onAccept={onAccept}
-                      onMove={onMove}
-                      onDelete={onDelete}
-                      onEdit={onEdit}
-                    />
+                  <td onClick={(event) => event.stopPropagation()} style={{ textAlign: "right" }}>
+                    {viewTab === "soldout" ? (
+                      <SoldOutStamp property={property} />
+                    ) : (
+                      <RowActions
+                        property={property}
+                        viewTab={viewTab}
+                        onAccept={onAccept}
+                        onMove={onMove}
+                        onSoldOut={onSoldOut}
+                        onDelete={onDelete}
+                        onEdit={onEdit}
+                      />
+                    )}
                   </td>
                 </tr>
               );
@@ -1235,6 +1450,7 @@ function PropertyCards({
   viewTab,
   onAccept,
   onMove,
+  onSoldOut,
   onDelete,
   onEdit,
 }: ListProps) {
@@ -1316,7 +1532,19 @@ function PropertyCards({
                 <IconUsers size={11} /> {sourceLabel(property)} · {property.formatted_timestamp}
               </span>
               <div onClick={(event) => event.stopPropagation()}>
-                <RowActions property={property} viewTab={viewTab} onAccept={onAccept} onMove={onMove} onDelete={onDelete} onEdit={onEdit} />
+                {viewTab === "soldout" ? (
+                  <SoldOutStamp property={property} />
+                ) : (
+                  <RowActions
+                    property={property}
+                    viewTab={viewTab}
+                    onAccept={onAccept}
+                    onMove={onMove}
+                    onSoldOut={onSoldOut}
+                    onDelete={onDelete}
+                    onEdit={onEdit}
+                  />
+                )}
               </div>
             </div>
           </Panel>
@@ -1328,26 +1556,69 @@ function PropertyCards({
 
 /* ---------------------------------------------------------------- actions */
 
+/** The sale date, for a record that has one — which is exactly the records
+ *  in the Sold out tab. Read this way rather than from a flag so that
+ *  anywhere handling a plain PropertyRecord can still recognise a sold-out
+ *  one without every component learning about a second type. */
+export function soldOutStamp(property: PropertyRecord): string | null {
+  return (property as Partial<SoldOutPropertyRecord>).formatted_sold_out_at ?? null;
+}
+
+/** What the Sold out tab shows where the Edit/Move/Delete buttons would
+ *  otherwise be. That tab is read-only — the property has left the database
+ *  and there is nothing left to edit, move or assign — so the cell carries
+ *  the one fact those buttons no longer can. */
+function SoldOutStamp({ property }: { property: PropertyRecord }) {
+  const stamp = soldOutStamp(property);
+  if (!stamp) return null;
+  return (
+    <span className="soldout-stamp" title={`Marked sold out on ${stamp}`}>
+      <IconTag size={12} /> Sold {stamp}
+    </span>
+  );
+}
+
 /** Delete and Move-to are available on every property in every view; Accept
  *  only makes sense while looking at the Needs review queue. Shared between
  *  the table's action cell and the card's action row so the icon set and
- *  behaviour never drift apart between layouts. */
+ *  behaviour never drift apart between layouts.
+ *
+ *  Not rendered at all in the Sold out tab (its callers show SoldOutStamp
+ *  instead): every action here either edits the property or moves it
+ *  somewhere, and a sold property is no longer in the database to do either
+ *  to. */
 function RowActions({
   property,
   viewTab,
   onAccept,
   onMove,
+  onSoldOut,
   onDelete,
   onEdit,
 }: {
   property: PropertyRecord;
   viewTab: ViewTab;
   onAccept: (property: PropertyRecord) => void;
-  onMove: (property: PropertyRecord) => void;
+  onMove: (property: PropertyRecord, target: "accepted" | "outsider") => void;
+  onSoldOut: (property: PropertyRecord) => void;
   onDelete: (property: PropertyRecord) => void;
   onEdit: (property: PropertyRecord) => void;
 }) {
-  const movesTo = property.review_status === "outsider" ? "Main" : "Outsider";
+  const isOutsider = property.review_status === "outsider";
+  // The home it is already in is left out — offering "Move to Main" on a
+  // property that is in Main is an option that does nothing.
+  const moveTargets = [
+    isOutsider
+      ? { key: "main", label: "Move to Main", onSelect: () => onMove(property, "accepted") }
+      : { key: "outsider", label: "Move to Outsider", onSelect: () => onMove(property, "outsider") },
+    {
+      key: "soldout",
+      label: "Move to Sold out",
+      hint: "Removes it everywhere, cancels visits",
+      danger: true,
+      onSelect: () => onSoldOut(property),
+    },
+  ];
   return (
     <div className="row-actions">
       {viewTab === "needsReview" && (
@@ -1376,15 +1647,7 @@ function RowActions({
           <IconEdit size={15} />
         </button>
       )}
-      <button
-        type="button"
-        className="row-actions__btn"
-        title={`Move to ${movesTo}`}
-        aria-label={`Move to ${movesTo}`}
-        onClick={() => onMove(property)}
-      >
-        <IconMove size={15} />
-      </button>
+      <MoveMenu targets={moveTargets} />
       <button
         type="button"
         className="row-actions__btn row-actions__btn--danger"
@@ -1415,10 +1678,13 @@ export function PropertyDetailDialog({
   viewTab,
   onResolveReview,
   onMove,
+  onSoldOut,
   onDelete,
   onEdit,
   onClose,
   selectAction,
+  soldOutAt,
+  loadImages,
 }: {
   property: PropertyRecord;
   viewTab: ViewTab;
@@ -1429,9 +1695,23 @@ export function PropertyDetailDialog({
    *  place (see its own viewTab prop, always "main"/"outsider" there). */
   onResolveReview?: (property: PropertyRecord, targetStatus: "accepted" | "outsider") => void;
   onMove: (property: PropertyRecord) => void;
+  /** Only set by the Properties page — adds "Mark sold out" to the footer.
+   *  Undefined on the Landing Page page, so the button simply doesn't
+   *  render there (a property is sold out from the Properties list, which
+   *  is where the whole move lives). */
+  onSoldOut?: (property: PropertyRecord) => void;
   onDelete: (property: PropertyRecord) => void;
   onEdit: (property: PropertyRecord) => void;
   onClose: () => void;
+  /** The sale date, set only when this dialog is showing a SOLD-OUT record.
+   *  It is what puts the dialog into read-only mode: no Edit, no Move, no
+   *  Delete — the property has left the database, and every one of those
+   *  actions would have nothing to act on. */
+  soldOutAt?: string | null;
+  /** Where to fetch this record's photos from. Defaults to the properties
+   *  endpoint; the Sold out tab passes its own, because the property that
+   *  owned these photos no longer exists in the property database. */
+  loadImages?: (recordId: string) => Promise<{ image_urls: string[] }>;
   /** Only set by the Landing Page page — an extra footer button, just left
    *  of Edit, that marks this property selected (green on Ready to Add, red
    *  on Live) and closes the dialog, same as clicking its row's own select
@@ -1473,7 +1753,7 @@ export function PropertyDetailDialog({
     setLoadingPhotos(true);
     setPhotoError(null);
     try {
-      const { image_urls } = await propertyApi.getPropertyImages(property.record_id);
+      const { image_urls } = await (loadImages ?? propertyApi.getPropertyImages)(property.record_id);
       setFetchedPhotos(image_urls);
     } catch (err) {
       setPhotoError(friendlyError(err));
@@ -1568,6 +1848,14 @@ export function PropertyDetailDialog({
                 </button>
               ))}
             </div>
+          )}
+
+          {soldOutAt && (
+            <Note tone="info" icon={<IconTag size={16} />}>
+              <strong>Sold out on {soldOutAt}.</strong> This is a record of a completed deal — it is no longer in
+              your property database, so it does not appear on the Landing Page, the public website, or in any
+              client's matches, and every pending site visit for it was cancelled when it was marked sold out.
+            </Note>
           )}
 
           {property.needs_review && property.review_notes && (
@@ -1678,10 +1966,10 @@ export function PropertyDetailDialog({
             Close
           </Button>
           <span className="row-flex" style={{ marginLeft: "auto", gap: 10 }}>
-            {/* Needs review resolves itself by explicitly picking a home
-                tab — no separate Accept step, and no dynamic single
-                "Move to X" that only ever offers one direction. */}
-            {viewTab === "needsReview" ? (
+            {/* A sold-out record has no actions at all: it is not in the
+                property database, so there is nothing to edit, move,
+                publish or delete. Close is the whole footer. */}
+            {soldOutAt ? null : viewTab === "needsReview" ? (
               <>
                 <Button icon={<IconCheck size={14} />} onClick={() => onResolveReview?.(property, "accepted")}>
                   Move to Main
@@ -1715,11 +2003,18 @@ export function PropertyDetailDialog({
                 <Button variant="ghost" icon={<IconMove size={14} />} onClick={() => onMove(property)}>
                   Move to {movesTo}
                 </Button>
+                {onSoldOut && (
+                  <Button variant="ghost" icon={<IconTag size={14} />} onClick={() => onSoldOut(property)}>
+                    Mark sold out
+                  </Button>
+                )}
               </>
             )}
-            <Button className="btn--danger" icon={<IconTrash size={14} />} onClick={() => onDelete(property)}>
-              Delete
-            </Button>
+            {!soldOutAt && (
+              <Button className="btn--danger" icon={<IconTrash size={14} />} onClick={() => onDelete(property)}>
+                Delete
+              </Button>
+            )}
           </span>
         </div>
       </div>

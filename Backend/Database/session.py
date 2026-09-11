@@ -133,6 +133,17 @@ def init_db() -> None:
     # table is silently never created.
     from Database import broker_requirement_models  # noqa: F401
 
+    # Same import-for-side-effect reasoning, for the sold-out properties
+    # table: defining SoldOutPropertyRow is what registers
+    # `soldout_properties` on the Base above, and create_all can only create
+    # tables it has been told about. Stated here explicitly rather than left
+    # to the fact that main.py's import graph happens to reach that model
+    # too — this function's correctness must not depend on what some other
+    # module imports. No ALTER TABLE companion is needed below: this is a
+    # brand-new table, which is exactly the case create_all handles on its
+    # own.
+    from Database import soldout_property_models  # noqa: F401
+
     # Same import-for-side-effect reasoning, for the client-records tables:
     # ClientBase is a second declarative base (kept separate from Base so
     # the two features' models can never accidentally collide), but both

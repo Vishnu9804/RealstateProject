@@ -11,9 +11,11 @@ export interface WhatsAppStatusResponse {
   joined_group_count: number;
   monitored_group_count: number;
   monitored_personal_chat_count: number;
-  /** The Requirement selection's own counts, kept separate from the two
-   *  above and never added to them — the same chat can be selected on both
-   *  sides, so a combined total would double-count it. */
+  /** Property and Requirement share one selection now (see
+   *  WhatsAppConnection.property_requirement_group_jids), so these always
+   *  mirror monitored_group_count/monitored_personal_chat_count above —
+   *  kept as their own fields only so this response shape didn't need to
+   *  change. */
   monitored_requirement_group_count: number;
   monitored_requirement_personal_chat_count: number;
   captured_message_count: number;
@@ -72,14 +74,12 @@ export interface WhatsAppConnection {
   status: string;
   roles: ConnectionRole[];
   joined_groups: WhatsAppGroup[];
-  property_group_jids: string[];
-  property_personal_numbers: string[];
-  /** The Requirement selection — an entirely separate set from the Property
-   *  one above, over the same joined_groups. Overlap is allowed and
-   *  meaningful: a chat picked for Property must NOT render as already
-   *  selected in the Requirement picker, and vice versa. */
-  requirement_group_jids: string[];
-  requirement_personal_numbers: string[];
+  /** ONE selection feeding BOTH the property and requirement pipelines.
+   *  Whether a message from a watched chat becomes a property listing or a
+   *  broker requirement is decided by its content on the backend, not by
+   *  which list it was picked into. */
+  property_requirement_group_jids: string[];
+  property_requirement_personal_numbers: string[];
   /** True for the not-yet-paired onboarding slot the QR code currently
    *  belongs to — not a real, usable connection yet. */
   is_pending: boolean;

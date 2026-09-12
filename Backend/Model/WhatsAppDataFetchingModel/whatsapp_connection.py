@@ -21,23 +21,21 @@ class WhatsAppConnectionView(BaseModel):
     """One linked WhatsApp number, as the Connection page needs to see it.
     `joined_groups` is included directly so the frontend never has to fetch
     per-connection group lists separately to build the aggregated
-    Property/Requirement groups pickers — both pickers are built from this
-    one list."""
+    Property/Requirement groups picker."""
 
     connection_id: str
     phone_number: Optional[str] = None
     status: WhatsAppStatus
     roles: List[ConnectionRole] = []
     joined_groups: List[WhatsAppGroup] = []
-    property_group_jids: List[str] = []
-    property_personal_numbers: List[str] = []
-    # The Requirement selection — an entirely separate set from the Property
-    # one above, over the same joined_groups. Overlap between the two is
-    # allowed and meaningful (see whatsapp_connection_manager.py's module
-    # docstring), so the UI must render these two independently and never
-    # show one as "already selected" because of the other.
-    requirement_group_jids: List[str] = []
-    requirement_personal_numbers: List[str] = []
+    # ONE selection — groups/personal numbers watched for BOTH property
+    # listings and broker requirements. Which of the two a given message
+    # actually is gets decided by its content (see
+    # requirement_filter_service.matched_signal), not by picking it twice in
+    # two separate lists — see whatsapp_connection_manager.py's module
+    # docstring.
+    property_requirement_group_jids: List[str] = []
+    property_requirement_personal_numbers: List[str] = []
     is_pending: bool = False
     """True for the not-yet-paired onboarding slot the QR code currently
     belongs to — excluded from role assignment until it actually pairs."""
@@ -47,15 +45,10 @@ class UpdateRolesRequest(BaseModel):
     roles: List[ConnectionRole] = []
 
 
-class PropertySelectionRequest(BaseModel):
-    group_jids: List[str] = []
-    personal_numbers: List[str] = []
-
-
-class RequirementSelectionRequest(BaseModel):
-    """Same shape as PropertySelectionRequest, kept as its own type rather
-    than reused so the two endpoints can never be confused for one another
-    in the generated API schema — they write to different sets."""
+class PropertyRequirementSelectionRequest(BaseModel):
+    """Fully replaces which of a connection's groups/personal numbers feed
+    BOTH the property and the requirement pipelines — a single selection,
+    not two."""
 
     group_jids: List[str] = []
     personal_numbers: List[str] = []

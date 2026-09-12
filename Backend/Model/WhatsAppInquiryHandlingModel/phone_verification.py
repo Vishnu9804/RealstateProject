@@ -19,16 +19,32 @@ class OtpRequest(BaseModel):
 
     phone: str = Field(min_length=6, max_length=24)
 
+    # A verification this browser ALREADY holds, sent back so the server
+    # can recognise "this is the same number I confirmed a moment ago" and
+    # answer without another WhatsApp message. Optional in every sense: a
+    # browser that has never verified anything simply omits it, and one
+    # that sends a stale or unrelated token is treated exactly as if it had
+    # sent nothing. It is never used as the identity of a submission — only
+    # to decide whether a code needs sending.
+    verification_token: Optional[str] = Field(default=None, max_length=200)
+
 
 class OtpRequestResponse(BaseModel):
-    """`status` is "sent", "cooldown", "invalid" or "unavailable" — see
-    otp_service.OtpRequestResult for what each one means and, in
-    particular, why "unavailable" is not an error the visitor is stopped
-    by."""
+    """`status` is "verified", "sent", "cooldown", "invalid" or
+    "unavailable" — see otp_service.OtpRequestResult for what each one
+    means and, in particular, why "unavailable" is not an error the visitor
+    is stopped by.
+
+    `verification_token` / `expires_in_seconds` are populated for
+    "verified" and only for "verified": that status means no code is
+    needed, so the browser is handed the very same proof a successful
+    /confirm would have given it and carries on as if it had typed one."""
 
     status: str
     phone: Optional[str] = None
     retry_after_seconds: int = 0
+    verification_token: Optional[str] = None
+    expires_in_seconds: int = 0
 
 
 class OtpVerifyRequest(BaseModel):

@@ -51,10 +51,24 @@ img {
   display: block;
 }
 
+/* The two lines after `font`/`color` are a fix, not housekeeping.
+   A <button> with no explicit border still gets the user agent's
+   `2px outset ButtonBorder`, and one with no explicit background still
+   gets `ButtonFace` — on a near-black page both read as a rendering
+   fault. Several buttons here set a background but no border (the area
+   picker's remove and clear controls were the visible casualties: a grey
+   3D ring floating around the ×, and a grey box drawn around "Clear all"),
+   and every one of them was one forgotten line away from the same bug.
+   Resetting here means a button looks like nothing until this site says
+   otherwise, which is what every rule below already assumes. Buttons that
+   DO want a border or a fill state one — `.btn`, `.areas__chip`,
+   `.otp__action` — and a class always beats this element selector. */
 button {
   font: inherit;
   color: inherit;
   cursor: pointer;
+  border: 0;
+  background: none;
 }
 
 a {

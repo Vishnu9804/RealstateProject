@@ -953,6 +953,23 @@
 .field__action {
   padding: 14px 22px;
 }
+/* The way back out of a confirmed number, standing in the very slot
+   Confirm just vacated. Quieter and narrower than Confirm on purpose: it
+   occupies the same place but is emphatically not the next thing to do,
+   and every pixel it gives back goes to the number beside it. */
+.field__action--change {
+  gap: 7px;
+  padding: 13px 17px;
+  font-size: 13px;
+  color: var(--text-soft);
+}
+.field__action--change:hover:not(:disabled) {
+  color: var(--gold-100);
+}
+.field__action--change svg {
+  flex: none;
+  opacity: 0.85;
+}
 /* Fired once when a visitor tries to move on with a plausible number that
    hasn't been confirmed yet — draws the eye to Confirm without opening
    anything on its own. Runs once and stops (see the component's
@@ -978,6 +995,35 @@
     grid-template-columns: 1fr;
   }
 }
+/* The confirmed row — number plus "Change number" — wraps on its own
+   instead of stacking at a screen width.
+   "Change number" is a far wider label than the "Confirm" it replaces, so
+   this row runs out of room for the number sooner, and a clipped
+   "+91726585…" hides the one value on this form the visitor is meant to
+   check. A media query cannot fix that, because the row that runs out of
+   room FIRST is the property page's enquiry card — a ~300px column sitting
+   on a 1440px screen, which no viewport breakpoint can see. Flex-wrap
+   measures the row itself: the number keeps a 200px floor, and the moment
+   the button no longer fits beside it the button drops to its own line and
+   the number takes the full width. */
+.field__row--change {
+  display: flex;
+  flex-wrap: wrap;
+  align-items: center;
+  gap: 10px;
+}
+.field__row--change > input {
+  flex: 1 1 200px;
+  /* Without this a flex item refuses to shrink below its content width,
+     which is exactly how the clipping happened in the first place. */
+  min-width: 0;
+}
+.field__row--change > .btn {
+  /* Never grows into the space the number gave up, never shrinks its own
+     label onto two lines. */
+  flex: 0 1 auto;
+  white-space: nowrap;
+}
 
 /* ===================== WhatsApp number confirmation =====================
 
@@ -986,13 +1032,27 @@
    on this site: it is the one moment the page genuinely cannot continue
    past, and everything else here is designed to sit inline instead. */
 
+/* Portalled onto <body> by the component, which is what lets this be a
+   window-sized overlay at all: rendered in place it sat inside the contact
+   section's <Reveal>, whose `will-change: transform` made IT the containing
+   block for `position: fixed`, so the dialog centred itself on the enquiry
+   card instead of on the screen and read as sitting far too high.
+
+   z-index clears the header (100), the toast (120) and the floating CTA
+   (90) — while a code is being asked for, this is the page. Flex rather
+   than grid, with `margin: auto` doing the centring, because that is the
+   one combination that still lets a dialog taller than the window scroll
+   instead of having its top edge clipped past reach. */
 .otp-backdrop {
   position: fixed;
   inset: 0;
-  z-index: 120;
-  display: grid;
-  place-items: center;
+  z-index: 200;
+  display: flex;
   padding: 20px;
+  overflow-y: auto;
+  /* A scroll that runs out inside the dialog stops there rather than
+     carrying on down the page behind it. */
+  overscroll-behavior: contain;
   background: rgba(3, 3, 5, 0.82);
   backdrop-filter: blur(10px) saturate(120%);
   animation: otp-fade-in 220ms var(--ease-out) both;
@@ -1021,6 +1081,11 @@
 .otp {
   position: relative;
   width: min(432px, 100%);
+  /* Both of these belong to the centring above, not to the look: `margin`
+     is what centres a flex item that may overflow, and `flex: none` stops
+     a tall dialog being squashed instead of scrolling. */
+  margin: auto;
+  flex: none;
   display: grid;
   justify-items: center;
   gap: 12px;
@@ -1094,6 +1159,22 @@
   color: var(--text);
   border-color: var(--hairline-strong);
   background: var(--glass-2);
+}
+
+/* The first beat, before we know whether a code is even needed. Same
+   surface, same gold bloom, just short — so the full dialog reads as this
+   panel growing rather than as a second thing replacing it. */
+.otp--checking {
+  gap: 16px;
+  padding: 36px 30px 34px;
+}
+.otp__checking {
+  display: flex;
+  align-items: center;
+  gap: 10px;
+  margin: 0;
+  color: var(--text-soft);
+  font-size: 14px;
 }
 
 .otp__icon {
@@ -1477,14 +1558,18 @@
 .areas__pick {
   display: inline-flex;
   align-items: center;
-  gap: 4px;
-  padding: 8px 8px 8px 15px;
+  gap: 6px;
+  /* Right padding is smaller than left on purpose: the × already carries
+     its own circle, so matching the two sides would leave a visible gap of
+     dead gold between it and the capsule's edge. */
+  padding: 6px 6px 6px 15px;
   border-radius: var(--r-pill);
   border: 1px solid transparent;
   background-image: var(--accent-text);
   color: #16120a;
   font-size: 13px;
   font-weight: 600;
+  line-height: 1;
   animation: area-pop 240ms var(--ease-spring) both;
 }
 
@@ -1499,30 +1584,83 @@
   }
 }
 
+/* The × that takes an area back off.
+   A solid ink disc, not a tinted one: on a gold capsule a translucent wash
+   barely separates from its background, so the one thing you are meant to
+   aim at was the hardest thing on the chip to see. Dark-on-gold reads as a
+   button at a glance and states its own hit area, which is the whole job —
+   a 24px disc against an 11px glyph, so the thing you aim at is
+   comfortably larger than the mark you are aiming at. */
 .areas__remove {
   display: grid;
   place-items: center;
-  width: 20px;
-  height: 20px;
+  width: 24px;
+  height: 24px;
+  flex: none;
+  padding: 0;
   border-radius: 50%;
-  background: rgba(22, 18, 10, 0.16);
-  color: #16120a;
-  transition: background-color var(--t-fast) linear;
+  background: rgba(22, 18, 10, 0.5);
+  color: var(--gold-100);
+  transition:
+    background-color var(--t-fast) linear,
+    color var(--t-fast) linear,
+    transform var(--t-fast) var(--ease-spring);
 }
 .areas__remove:hover:not(:disabled) {
-  background: rgba(22, 18, 10, 0.34);
+  background: #16120a;
+  color: #fff;
+  transform: scale(1.08);
+}
+.areas__remove:active:not(:disabled) {
+  transform: scale(0.94);
+}
+/* Keyboard users get the ring drawn OUTSIDE the disc, where the gold
+   capsule makes it visible — an inset one would vanish into the ink. */
+.areas__remove:focus-visible {
+  outline: 2px solid #16120a;
+  outline-offset: 2px;
+}
+.areas__remove svg {
+  /* The stroke is the icon's only substance at this size; thin enough and
+     it stops reading as an × at all. */
+  stroke-width: 2.6;
 }
 
+/* "Clear all" — the same height and the same pill as the areas beside it,
+   so the row reads as one set of controls, but hollow rather than gold.
+   Filling it would make "remove everything" look exactly as chosen as the
+   areas it removes; an outline says "an action about these" instead. It
+   turns red-ish only on hover, which is the one moment saying what it does
+   is useful rather than alarming. */
 .areas__clear {
-  padding: 6px 4px;
-  background: none;
+  display: inline-flex;
+  align-items: center;
+  height: 30px;
+  padding: 0 14px;
+  border-radius: var(--r-pill);
+  border: 1px dashed var(--hairline-strong);
+  background: transparent;
   color: var(--text-faint);
   font-size: 12px;
-  border-bottom: 1px solid transparent;
+  font-weight: 500;
+  letter-spacing: 0.01em;
+  transition:
+    color var(--t-fast) linear,
+    border-color var(--t-fast) linear,
+    background-color var(--t-fast) linear;
 }
 .areas__clear:hover:not(:disabled) {
-  color: var(--text-soft);
-  border-bottom-color: var(--hairline-strong);
+  color: #e8918a;
+  border-color: rgba(217, 115, 107, 0.45);
+  background: rgba(217, 115, 107, 0.08);
+}
+.areas__clear:focus-visible {
+  outline: 2px solid var(--accent);
+  outline-offset: 2px;
+}
+.areas__clear:disabled {
+  opacity: 0.5;
+  cursor: not-allowed;
 }
 
 /* Same shell as every .field input, with the magnifier tucked inside so it
@@ -1573,15 +1711,23 @@
 .areas__wipe {
   display: grid;
   place-items: center;
-  width: 24px;
-  height: 24px;
+  width: 26px;
+  height: 26px;
+  padding: 0;
   border-radius: 50%;
   color: var(--text-faint);
   background: var(--glass-2);
+  transition:
+    color var(--t-fast) linear,
+    background-color var(--t-fast) linear;
 }
 .areas__wipe:hover {
   color: var(--text);
   background: var(--glass-3);
+}
+.areas__wipe:focus-visible {
+  outline: 2px solid var(--accent);
+  outline-offset: 2px;
 }
 
 /* Capped and scrollable rather than fifty capsules pushing the rest of the

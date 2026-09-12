@@ -163,6 +163,12 @@ export default function DashboardPage() {
   const [search, setSearch] = useState("");
   const query = useDebounced(search, 180);
   const [filters, setFilters] = useState<FilterState>({});
+  // Computed early (rather than down by the toolbar that reads it) — the
+  // sold-out load effect below also needs to know whether a search/filter is
+  // active, since that's what decides whether it must fetch the sold-out
+  // list early to keep that tab's capsule count honest.
+  const activeFilterCount = countActiveFilters(filters);
+  const filtersActive = query.trim().length > 0 || activeFilterCount > 0;
   const [openFilter, setOpenFilter] = useState<{ key: string; anchor: HTMLElement } | null>(null);
   // The chosen layout is remembered: on a wide screen the table wins, on a
   // laptop people often prefer cards, and re-picking it on every visit is a
@@ -308,15 +314,18 @@ export default function DashboardPage() {
     }
   }, []);
 
-  // Loads the sold-out list the first time its tab is opened, and re-loads
-  // it only when the backend's own change token moves — i.e. when a sale
-  // has actually been recorded, by this tab or anywhere else. A sold-out
-  // record is never edited, so between sales there is nothing to re-fetch,
-  // and the request that proves it costs no database work on either side
-  // (see soldoutPropertyApi's own comment).
+  // Loads the sold-out list the first time its tab is opened — or the first
+  // time a search/filter goes active anywhere on the page, since the Sold
+  // out capsule's own count (below) needs the real list to report how many
+  // sold-out properties match, not just how many exist — and re-loads it
+  // only when the backend's own change token moves — i.e. when a sale has
+  // actually been recorded, by this tab or anywhere else. A sold-out record
+  // is never edited, so between sales there is nothing to re-fetch, and the
+  // request that proves it costs no database work on either side (see
+  // soldoutPropertyApi's own comment).
   const soldoutVersion = appStatus?.soldout_version;
   useEffect(() => {
-    if (viewTab !== "soldout") return;
+    if (viewTab !== "soldout" && !filtersActive) return;
     // Already holding this exact version — nothing to do. `undefined` means
     // the status poll has not answered yet, which is not a new version and
     // must not count as one.
@@ -326,7 +335,7 @@ export default function DashboardPage() {
     soldoutLoaded.current = true;
     lastSoldoutVersion.current = soldoutVersion ?? null;
     void loadSoldout();
-  }, [viewTab, soldoutVersion, loadSoldout]);
+  }, [viewTab, filtersActive, soldoutVersion, loadSoldout]);
 
   // "/" jumps to search from anywhere on the page — the single most-used
   // control should never require aiming at it.
@@ -373,18 +382,30 @@ export default function DashboardPage() {
     [allProperties],
   );
 
-  // The base set for whichever of the three views is open. Main/Outsider
-  // each exclude anything still pending review — a flagged property lives
-  // only in the Needs review queue until a human accepts it, at which point
-  // it simply reappears here under whichever review_status it already has.
+  // The base set for each of the three views, computed regardless of which
+  // one is currently open — the Main/Outsider/Sold out capsule needs all
+  // three counts at once (below), while the open tab only needs its own
+  // (tabFiltered). Main/Outsider each exclude anything still pending review
+  // — a flagged property lives only in the Needs review queue until a human
+  // accepts it, at which point it simply reappears here under whichever
+  // review_status it already has.
+  const mainBase = useMemo(
+    () => allProperties.filter((p) => p.review_status === "accepted" && !p.needs_review),
+    [allProperties],
+  );
+  const outsiderBase = useMemo(
+    () => allProperties.filter((p) => p.review_status === "outsider" && !p.needs_review),
+    [allProperties],
+  );
+
   const tabFiltered = useMemo(() => {
     // The sold-out list has no sub-division: every record in it is sold, so
     // there is no flag left to filter it by.
     if (viewTab === "soldout") return soldOutList;
     if (viewTab === "needsReview") return allProperties.filter((p) => p.needs_review);
-    if (viewTab === "outsider") return allProperties.filter((p) => p.review_status === "outsider" && !p.needs_review);
-    return allProperties.filter((p) => p.review_status === "accepted" && !p.needs_review);
-  }, [allProperties, soldOutList, viewTab]);
+    if (viewTab === "outsider") return outsiderBase;
+    return mainBase;
+  }, [allProperties, soldOutList, viewTab, mainBase, outsiderBase]);
 
   const localities = useMemo(() => {
     // Case-folded to match how the Area filter groups its options —
@@ -394,13 +415,15 @@ export default function DashboardPage() {
     return set.size;
   }, [allProperties]);
 
-  const soldOutCount = appStatus?.soldout_property_count ?? soldOutList.length;
-
   const passesFilters = useMemo(() => compileFilters(filters), [filters]);
 
-  const visibleProperties = useMemo(() => {
-    const needle = query.trim().toLowerCase();
-    const filtered = tabFiltered.filter((property) => {
+  // Shared by visibleProperties (the open tab's own list, below) and the
+  // capsule counts (every tab's count, further below) — one predicate for
+  // both, so a search or column-filter change can never move the list
+  // without moving the brackets alongside it, or vice versa.
+  const needle = query.trim().toLowerCase();
+  const matchesSearchAndFilters = useCallback(
+    (property: PropertyRecord) => {
       if (!passesFilters(property)) return false;
       if (reelOnly && !property.instagram_reel_url) return false;
       if (!needle) return true;
@@ -421,7 +444,35 @@ export default function DashboardPage() {
         .join(" ")
         .toLowerCase();
       return haystack.includes(needle);
-    });
+    },
+    [passesFilters, reelOnly, needle],
+  );
+
+  // The Main/Outsider/Sold out capsule's own counts — how many of each
+  // tab's properties match the search box and column filters currently
+  // applied, so the bracket tracks what's actually showing instead of
+  // always reporting each tab's full, unfiltered size.
+  const mainCount = useMemo(
+    () => mainBase.filter(matchesSearchAndFilters).length,
+    [mainBase, matchesSearchAndFilters],
+  );
+  const outsiderCountFiltered = useMemo(
+    () => outsiderBase.filter(matchesSearchAndFilters).length,
+    [outsiderBase, matchesSearchAndFilters],
+  );
+  const soldOutCountFiltered = useMemo(
+    () => soldOutList.filter(matchesSearchAndFilters).length,
+    [soldOutList, matchesSearchAndFilters],
+  );
+  // Until the sold-out list has actually been fetched (see the load effect
+  // above — it loads early once a search/filter goes active, precisely so
+  // this can catch up quickly), fall back to the status poll's unfiltered
+  // total — a brief "still loading" state, not a wrong one, since nothing
+  // has been filtered out of it yet.
+  const soldOutCount = soldout !== null ? soldOutCountFiltered : (appStatus?.soldout_property_count ?? 0);
+
+  const visibleProperties = useMemo(() => {
+    const filtered = tabFiltered.filter(matchesSearchAndFilters);
 
     const direction = sortDir === "asc" ? 1 : -1;
     // Records missing the sorted field always sink to the bottom regardless
@@ -444,7 +495,7 @@ export default function DashboardPage() {
           return compareNullable(a.message_timestamp, b.message_timestamp, direction);
       }
     });
-  }, [tabFiltered, query, passesFilters, sortKey, sortDir, reelOnly]);
+  }, [tabFiltered, matchesSearchAndFilters, sortKey, sortDir]);
 
   const pageCount = Math.max(1, Math.ceil(visibleProperties.length / PAGE_SIZE));
   const pageItems = useMemo(
@@ -491,9 +542,6 @@ export default function DashboardPage() {
       applySort(key, key === "society" || key === "locality" ? "asc" : "desc");
     }
   }
-
-  const activeFilterCount = countActiveFilters(filters);
-  const filtersActive = query.trim().length > 0 || activeFilterCount > 0;
 
   function resetAll() {
     setSearch("");
@@ -786,11 +834,12 @@ export default function DashboardPage() {
           value={viewTab === "needsReview" ? null : viewTab}
           onChange={setViewTab}
           options={[
-            { value: "main", label: "Main" },
-            { value: "outsider", label: `Outsider${outsiderCount ? ` (${outsiderCount})` : ""}` },
-            // The count comes from the status poll (already running for
-            // every page), so the tab can show how many sales there are
-            // without this page fetching the list first.
+            // Each count reflects the search box and column filters
+            // currently applied (see matchesSearchAndFilters above) — not
+            // each tab's full, unfiltered size — so it stays in step with
+            // whatever the list is actually showing right now.
+            { value: "main", label: `Main${mainCount ? ` (${mainCount})` : ""}` },
+            { value: "outsider", label: `Outsider${outsiderCountFiltered ? ` (${outsiderCountFiltered})` : ""}` },
             { value: "soldout", label: `Sold out${soldOutCount ? ` (${soldOutCount})` : ""}` },
           ]}
         />

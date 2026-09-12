@@ -97,6 +97,20 @@ def upsert_client(
 
         step_logger.error(f"[Matching] Failed to auto-recompute matches for {saved.phone}: {exc!r}")
 
+    # This number is now, definitively, a client. Telling the public site's
+    # known-client cache so costs nothing and closes the only window it
+    # has: without this, a brand-new client whose number was looked up
+    # minutes earlier (and cached as "not one of ours") would keep being
+    # sent verification codes until that negative entry aged out. Lazy
+    # import and a swallowed failure for the same reason the matching call
+    # above has them — a cache hint may never break a save that succeeded.
+    try:
+        from Service.WhatsAppInquiryHandlingService import known_client_cache
+
+        known_client_cache.remember(saved.phone, True)
+    except Exception:  # noqa: BLE001
+        pass
+
     return saved
 
 
@@ -156,6 +170,16 @@ def delete_client(phone: str) -> bool:
     delete_client) — completed VISITS are the deliberate exception and are
     always kept, so a future enquiry from the same number still sees the
     properties it has already been shown."""
+    # Whatever happens below, this number is no longer a client — and the
+    # public site must stop treating it as one immediately, or a deleted
+    # client's number would keep skipping verification for hours.
+    try:
+        from Service.WhatsAppInquiryHandlingService import known_client_cache
+
+        known_client_cache.remember(phone, False)
+    except Exception:  # noqa: BLE001
+        pass
+
     if is_client_database_configured():
         return client_repository.delete_client(phone)
     global _version_counter
@@ -167,7 +191,24 @@ def delete_client(phone: str) -> bool:
 
 
 def client_exists(phone: str) -> bool:
-    return get_client_by_phone(phone) is not None
+    """Whether we hold a client record for this E.164 number, and nothing
+    about what is in it.
+
+    Used to be `get_client_by_phone(...) is not None`, which read the whole
+    row to answer a yes/no. That was harmless while every caller was an
+    internal one; it stopped being harmless when the public site's number
+    confirmation started asking the same question (see
+    known_client_cache.py), because that is a route an anonymous stranger
+    can call. The database path now selects the primary key alone — an
+    index probe and a few bytes on the wire instead of a full client
+    record.
+
+    Callers on the public path must go through known_client_cache.py rather
+    than here: this function has no cache and no ceiling in front of it, so
+    it costs a query every single time it is called."""
+    if is_client_database_configured():
+        return client_repository.client_exists(phone)
+    return phone in _clients
 
 
 def get_all_clients(limit: int = 100) -> List[ClientRecord]:

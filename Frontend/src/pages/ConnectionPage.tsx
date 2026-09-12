@@ -306,9 +306,9 @@ function WhatsAppTab() {
 
       <div className="two-col">
         {/* One role, two pipelines. A number added here has its groups
-            fetched once and then feeds whichever of Property / Requirement
-            the two pickers below point it at — which is why the block is
-            named for both rather than for Property alone. */}
+            fetched once and then feeds both Property and Requirement
+            together, via the single picker below — which is why the block
+            is named for both rather than for Property alone. */}
         <RoleBlock
           title="Numbers for Property/Requirement"
           icon={<IconBuilding size={15} />}
@@ -331,22 +331,19 @@ function WhatsAppTab() {
         />
       </div>
 
-      {/* Two independent selections over the SAME numbers and the SAME
-          group list. They are rendered as two separate panels, each seeded
-          only from its own server-side selection, so a group ticked for
-          Property never shows up ticked for Requirement (and vice versa) —
-          picking the same group on both sides is allowed and is what routes
-          a chat's listings and its requirements to their own pipelines. */}
-      <MonitoringPanel kind="property" propertyConns={propertyConns} onSaved={load} />
-      <MonitoringPanel kind="requirement" propertyConns={propertyConns} onSaved={load} />
+      {/* ONE selection over the SAME numbers and the SAME group list,
+          feeding both the property and the requirement pipelines — which of
+          the two a message becomes is decided by its own content on the
+          backend, not by which list it was picked into. */}
+      <MonitoringPanel propertyConns={propertyConns} onSaved={load} />
 
       {inquiryConns.length > 0 && (
         <Note tone="info" icon={<IconInfo size={16} />}>
           Only personal (1:1) chats on {inquiryConns.length === 1 ? "this number" : "these numbers"} are watched for
-          client inquiries — group messages are never used for inquiries, on any number, whether or not Property or
-          Requirement is also watching them. If a number is used for Property/Requirement too, every personal number
-          claimed by either of those selections is left out of Inquiry, so a broker feeding the pipelines never gets
-          an automated client reply and nothing is handled twice.
+          client inquiries — group messages are never used for inquiries, on any number, whether or not
+          Property/Requirement is also watching them. Every personal number selected under Property/Requirement
+          monitoring below is left out of Inquiry too, on every connected number, so a broker feeding the pipeline
+          never gets an automated client reply and nothing is handled twice.
         </Note>
       )}
 
@@ -741,18 +738,12 @@ function NumberPickerMenu({
    Monitoring selection — groups aggregated across every Property-role
    connection, plus a shared personal-numbers list.
 
-   Rendered TWICE, once per kind: "property" (which chats feed the property
-   pipeline) and "requirement" (which chats feed the broker-requirement
-   pipeline). Both read the same numbers and the same joined-group list, and
-   both write through the same shape of endpoint — but each instance is
-   seeded ONLY from its own server-side selection and saves ONLY its own.
-
-   That independence is the whole point, and it is why this is one
-   parameterised component rather than two hand-copied ones: the two panels
-   must behave identically in every respect except which set they read and
-   write, so a group ticked under Property renders completely untouched
-   under Requirement, and selecting it there too is a normal, expected
-   thing to do rather than something the UI quietly prevents or pre-fills.
+   ONE selection feeds BOTH the property and the broker-requirement
+   pipelines: whether a message from a watched chat ends up as a property
+   listing or a broker requirement is decided by its own content on the
+   backend (see requirement_filter_service.matched_signal), not by which of
+   two lists an operator picked it into — so there is only one panel, one
+   picker, one saved selection per connection.
    ========================================================================= */
 
 interface TaggedGroup extends WhatsAppGroup {
@@ -766,73 +757,35 @@ function setsEqual(a: Set<string>, b: Set<string>): boolean {
   return true;
 }
 
-type MonitoringKind = "property" | "requirement";
-
-/** Everything that differs between the two panels, in one place — so the
- *  behaviour below can be read once and trusted for both. */
-const MONITORING_CONFIG: Record<
-  MonitoringKind,
-  {
-    eyebrow: string;
-    heading: string;
-    blurb: string;
-    groupsHint: string;
-    personalHint: string;
-    emptyTitle: string;
-    emptyBody: string;
-    savedTitle: string;
-    stopWarning: string;
-    groupJidsOf: (connection: WhatsAppConnection) => string[];
-    personalNumbersOf: (connection: WhatsAppConnection) => string[];
-    save: (connectionId: string, groupJids: string[], personalNumbers: string[]) => Promise<WhatsAppConnection>;
-  }
-> = {
-  property: {
-    eyebrow: "Property monitoring",
-    heading: "Which chats feed the property pipeline?",
-    blurb:
-      "Groups from every number assigned above, in one list. Anything selected here is watched for property listings — messages that read as a requirement are never stored as properties, wherever they arrive.",
-    groupsHint: "Groups watched for property listings",
-    personalHint: "Applies across every number assigned to Property/Requirement.",
-    emptyTitle: "No number assigned yet",
-    emptyBody:
-      "Add a connected number to the Numbers for Property/Requirement block above to pick which groups feed the property pipeline.",
-    savedTitle: "Property monitoring updated",
-    stopWarning: "Nothing selected — saving this will stop property capture on these numbers.",
-    groupJidsOf: (connection) => connection.property_group_jids,
-    personalNumbersOf: (connection) => connection.property_personal_numbers,
-    save: (connectionId, groupJids, personalNumbers) =>
-      whatsappApi.updatePropertySelection(connectionId, groupJids, personalNumbers),
-  },
-  requirement: {
-    eyebrow: "Requirement monitoring",
-    heading: "Which chats feed the requirement pipeline?",
-    blurb:
-      "The same groups and numbers as above, selected independently. A chat can be watched for both — its listings go to Properties and its requirements go to Broker Requirements. Picking a group here does not select it above, and picking it above does not select it here.",
-    groupsHint: "Groups watched for broker requirements",
-    personalHint: "Applies across every number assigned to Property/Requirement.",
-    emptyTitle: "No number assigned yet",
-    emptyBody:
-      "Add a connected number to the Numbers for Property/Requirement block above to pick which groups feed the requirement pipeline.",
-    savedTitle: "Requirement monitoring updated",
-    stopWarning: "Nothing selected — saving this will stop requirement capture on these numbers.",
-    groupJidsOf: (connection) => connection.requirement_group_jids,
-    personalNumbersOf: (connection) => connection.requirement_personal_numbers,
-    save: (connectionId, groupJids, personalNumbers) =>
-      whatsappApi.updateRequirementSelection(connectionId, groupJids, personalNumbers),
-  },
+/** The single Property/Requirement monitoring selection's copy and I/O, in
+ *  one place — mirrors the shape the panel used to take per-kind, now with
+ *  exactly one variant. */
+const MONITORING_CONFIG = {
+  eyebrow: "Property/Requirement monitoring",
+  heading: "Which chats feed the property/requirement pipeline?",
+  blurb:
+    "Groups from every number assigned above, in one list. Anything selected here is watched for BOTH property listings and broker requirements — which one a given message is gets decided by its content, not by picking it twice.",
+  groupsHint: "Groups watched for property listings and broker requirements",
+  personalHint: "Applies across every number assigned to Property/Requirement.",
+  emptyTitle: "No number assigned yet",
+  emptyBody:
+    "Add a connected number to the Numbers for Property/Requirement block above to pick which groups feed the pipeline.",
+  savedTitle: "Property/Requirement monitoring updated",
+  stopWarning: "Nothing selected — saving this will stop property/requirement capture on these numbers.",
+  groupJidsOf: (connection: WhatsAppConnection) => connection.property_requirement_group_jids,
+  personalNumbersOf: (connection: WhatsAppConnection) => connection.property_requirement_personal_numbers,
+  save: (connectionId: string, groupJids: string[], personalNumbers: string[]) =>
+    whatsappApi.updatePropertyRequirementSelection(connectionId, groupJids, personalNumbers),
 };
 
 function MonitoringPanel({
-  kind,
   propertyConns,
   onSaved,
 }: {
-  kind: MonitoringKind;
   propertyConns: WhatsAppConnection[];
   onSaved: () => void | Promise<void>;
 }) {
-  const config = MONITORING_CONFIG[kind];
+  const config = MONITORING_CONFIG;
   const toast = useToast();
   const [groupFilter, setGroupFilter] = useState("");
   const debouncedFilter = useDebounced(groupFilter, 140);
@@ -1034,7 +987,7 @@ function MonitoringPanel({
             value={groupFilter}
             onChange={setGroupFilter}
             placeholder="Filter groups by name…"
-            ariaLabel={`Filter ${kind} groups by name`}
+            ariaLabel="Filter property/requirement groups by name"
           />
 
           <div className="row-flex">
@@ -1082,7 +1035,7 @@ function MonitoringPanel({
             value={personalNumbersInput}
             onChange={(e) => setPersonalNumbersInput(e.target.value)}
             rows={4}
-            aria-label={`Personal phone numbers to monitor for ${kind}`}
+            aria-label="Personal phone numbers to monitor for property/requirement"
             placeholder="919876543210, 919812345678"
           />
 
@@ -1108,16 +1061,11 @@ function MonitoringPanel({
             </Note>
           )}
 
-          {/* Stated once, on the Requirement side, because this is the one
-              consequence of these two panels that is not obvious from the
-              checkboxes themselves. */}
-          {kind === "requirement" && (
-            <Note tone="info" icon={<IconInfo size={16} />}>
-              A personal number listed here (or under Property monitoring) never receives the automatic client-inquiry
-              reply, even if the same WhatsApp number also has the Client Inquiry role — it is treated as a broker
-              feeding the pipelines, not as a client to answer.
-            </Note>
-          )}
+          <Note tone="info" icon={<IconInfo size={16} />}>
+            A personal number listed here never receives the automatic client-inquiry reply, even if that same number
+            also has the Client Inquiry role — it is treated as a broker feeding the property/requirement pipeline,
+            not as a client to answer.
+          </Note>
         </div>
       </div>
 

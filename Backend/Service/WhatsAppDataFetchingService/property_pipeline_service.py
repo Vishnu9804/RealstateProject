@@ -21,6 +21,17 @@ structuring — the exact vector that ends up in the store, read later only
 by client-property match scoring (Service/ClientPropertyMatchingService/
 scoring.py). Nothing downstream ever re-embeds or recomputes it.
 
+Not every message in a batch is a listing, and one specific kind of
+non-listing is no longer simply dropped: a DEMAND — someone asking FOR a
+property rather than offering one ("I want to look for 3bhk flat in vesu").
+The cheap keyword filter upstream is built for precision and lets a demand
+phrased without its trigger words through to here; the structuring stage now
+recognises it by meaning and hands it back (see
+_forward_to_requirement_pipeline), which pushes it into the requirement
+buffer so it becomes a broker requirement instead of a bogus property. Only
+messages that yielded NO property at all can take that path, so it can never
+remove anything that would otherwise have been stored here.
+
 needs_review means one thing now: the LLM could barely extract anything
 from this property's own text (see Agent/WhatsAppDataFetchingAgent/
 property_structurer.py's PART 4 and _apply_information_review). It is a
@@ -87,7 +98,14 @@ def handle_batch_ready(batch: List[WhatsAppChatMessage]) -> None:
         return
 
     step_logger.step(f"Sending batch of {len(batch)} qualified message(s) to GLM for structuring")
-    properties = property_structurer.structure_batch(batch)
+    properties, requirement_messages = property_structurer.structure_batch_with_routing(batch)
+
+    # Before the property work below, and deliberately not conditional on it:
+    # these messages produced no property at all (see
+    # property_structurer.structure_batch_with_routing), so nothing here can
+    # compete with them and there is no reason to make them wait on an
+    # embedding pass they have no part in.
+    _forward_to_requirement_pipeline(requirement_messages)
 
     _record_area_knowledge(properties)
 
@@ -125,6 +143,37 @@ def handle_batch_ready(batch: List[WhatsAppChatMessage]) -> None:
         f"{len(batch)} message(s) structured"
         + (f" ({received_count - len(batch)} skipped as already-seen text)" if received_count != len(batch) else "")
     )
+
+
+def _forward_to_requirement_pipeline(messages: List[WhatsAppChatMessage]) -> None:
+    """Hands the messages the LLM identified as DEMANDS (PART 1's
+    is_requirement) over to the requirement pipeline.
+
+    They go into the requirement BUFFER rather than straight into a
+    requirement LLM call, so they ride along with whatever the keyword filter
+    is already collecting and share a batch with it — one or two re-routed
+    messages must not each buy their own API call. Nothing new is written to
+    the database on this path: a demand becomes a requirement row (no
+    embedding vector, no fingerprint lookup), which is strictly less database
+    work than the property row it would otherwise have become.
+
+    The import is local because whatsapp_service imports THIS module at
+    module level — the same lazy-import pattern requirement_pipeline_service
+    uses to reach the matching feature. Swallowed broadly for the same reason
+    as _record_area_knowledge: this is the tail end of a batch that has
+    already succeeded, and a re-route failure must never take the properties
+    down with it."""
+    if not messages:
+        return
+    try:
+        from Service.WhatsAppDataFetchingService import whatsapp_service
+
+        whatsapp_service.enqueue_requirement_messages(messages)
+    except Exception as exc:  # noqa: BLE001
+        step_logger.error(
+            f"Could not re-route {len(messages)} demand message(s) to the requirement pipeline "
+            f"(the properties in this batch are unaffected): {exc!r}"
+        )
 
 
 def _drop_duplicate_messages(batch: List[WhatsAppChatMessage]) -> List[WhatsAppChatMessage]:

@@ -9,17 +9,19 @@ Design
 Each linked number is a `_Connection`, wrapping one `WhatsAppConnectionClient`
 (one neonize session, one session db file, one QR/pairing lifecycle). A
 connection can be assigned any combination of roles ("property", "inquiry")
-via `set_roles`, and — only meaningful for "property" — TWO independent chat
-selections: a Property one via `set_property_selection` and a Requirement
-one via `set_requirement_selection`.
+via `set_roles`, and — only meaningful for "property" — ONE chat selection,
+set via `set_property_requirement_selection`: which groups/personal numbers
+feed the combined property/requirement pipeline.
 
-Those two selections are deliberately independent sets over the SAME
-connection: the number is linked once (the Connection page calls that block
-"Numbers for Property/Requirement"), its joined groups are fetched once, and
-the operator then picks which of them feed listings and which feed
-requirements. The same group or personal number may appear in both, in
-either alone, or in neither, and selecting it on one side never marks it
-selected on the other.
+That selection is a single set over the connection's joined groups: the
+number is linked once (the Connection page calls that block "Numbers for
+Property/Requirement"), its joined groups are fetched once, and the
+operator picks which of them to watch. Whether a given message from a
+watched chat turns out to be a property listing or a broker requirement is
+decided purely by its CONTENT (see requirement_filter_service.matched_signal
+and whatsapp_service.handle_intake_message) — there is no separate list to
+pick a chat into "twice" for the two outcomes; being selected here is
+opting a chat into both at once.
 
 Onboarding a new number is on-demand, not always-running: `start_onboarding()`
 spins up one extra, not-yet-paired connection — the "pending" slot — only
@@ -35,25 +37,29 @@ its own pairing watchdog gives up.
 
 Dispatch rule (per incoming message, see `_handle_message`): a message is
 "claimed by data fetching" for its connection if that connection has the
-"property" role AND the message's chat is in that connection's Property
-selection, its Requirement selection, or both — in which case it goes to
-the data-fetching intake (whatsapp_service.handle_intake_message), carrying
-WHICH of the two selections claimed it. That intake, not this module, then
-decides listing-vs-requirement; this module only ever reports where a
-message is allowed to go, never what it is.
+"property" role AND the message's chat is in that connection's
+property/requirement selection — in which case it goes to the data-fetching
+intake (whatsapp_service.handle_intake_message), which decides
+listing-vs-requirement from the message's content; this module only ever
+reports where a message is allowed to go, never what it is.
 
-A message claimed by either selection is deliberately EXCLUDED from Inquiry
+A message claimed by that selection is deliberately EXCLUDED from Inquiry
 even if the same connection also has the "inquiry" role — a chat the
-operator has pointed at the listing/requirement pipelines must never also
-receive an automated inquiry reply. Inquiry itself only ever considers
-PERSONAL (1:1) chats — a group message never reaches Inquiry on any
-connection, claimed or not, since a group has no single owner to key a
-client record on and the operator wants group traffic kept out of Inquiry
-entirely, not just whatever subset the other pipelines happen to be
-watching. A connection with neither role, a group message on an
-inquiry-only connection, or a message matching no rule, is dropped without
-reaching any pipeline or LLM call. This is what makes "the same number for
-all of them, but never double-counted" possible.
+operator has pointed at the listing/requirement pipeline must never also
+receive an automated inquiry reply. That exclusion is GLOBAL, not just
+per-connection: a personal number configured as a property/requirement
+personal number on any Property-role connection is excluded from Inquiry
+no matter which linked number it happens to message — the same physical
+sender must never be claimed by the listing/requirement pipeline on one
+connection while also triggering an automated inquiry reply on another.
+Inquiry itself only ever considers PERSONAL (1:1) chats — a group message
+never reaches Inquiry on any connection, claimed or not, since a group has
+no single owner to key a client record on and the operator wants group
+traffic kept out of Inquiry entirely, not just whatever subset the other
+pipeline happens to be watching. A connection with neither role, a group
+message on an inquiry-only connection, or a message matching no rule, is
+dropped without reaching any pipeline or LLM call. This is what makes "the
+same number for all of them, but never double-counted" possible.
 
 Migration
 ---------
@@ -136,14 +142,11 @@ class _Connection:
     status: WhatsAppStatus = WhatsAppStatus.STARTING
     phone_number: Optional[str] = None
     roles: Set[str] = field(default_factory=set)
-    property_group_jids: Set[str] = field(default_factory=set)
-    property_personal_numbers: Set[str] = field(default_factory=set)
-    # The Requirement selection, over the same joined_groups as above and
-    # completely independent of it — see the module docstring. Only
-    # meaningful while this connection holds the "property" role, and
-    # cleared alongside the Property selection when that role is dropped.
-    requirement_group_jids: Set[str] = field(default_factory=set)
-    requirement_personal_numbers: Set[str] = field(default_factory=set)
+    # ONE selection feeding BOTH the property and requirement pipelines —
+    # see the module docstring. Only meaningful while this connection holds
+    # the "property" role, and cleared when that role is dropped.
+    property_requirement_group_jids: Set[str] = field(default_factory=set)
+    property_requirement_personal_numbers: Set[str] = field(default_factory=set)
     joined_groups: List[WhatsAppGroup] = field(default_factory=list)
     qr_png: Optional[bytes] = None
     _promoted: bool = False
@@ -171,16 +174,15 @@ _last_start_time = 0.0
 # WhatsAppDataFetchingService package's sibling, so importing back from here
 # risks a cycle. Same pattern as outbound_messenger.py's set_client.
 #
-# The intake handler takes the message plus two booleans — whether the
-# Property selection and whether the Requirement selection claimed it. Both
-# can be True at once (the same chat picked on both sides is explicitly
-# allowed), and the intake decides what to actually do with that; see
-# whatsapp_service.handle_intake_message.
-_on_intake_message: Optional[Callable[[WhatsAppChatMessage, bool, bool], None]] = None
+# The intake handler is only ever called for a message the single
+# property/requirement selection claimed; it decides for itself, from the
+# message's content, whether that makes it a property listing or a broker
+# requirement — see whatsapp_service.handle_intake_message.
+_on_intake_message: Optional[Callable[[WhatsAppChatMessage], None]] = None
 _on_inquiry_message: Optional[Callable[[InquiryChatMessage], None]] = None
 
 
-def register_intake_handler(handler: Callable[[WhatsAppChatMessage, bool, bool], None]) -> None:
+def register_intake_handler(handler: Callable[[WhatsAppChatMessage], None]) -> None:
     global _on_intake_message
     _on_intake_message = handler
 
@@ -265,10 +267,8 @@ def _replace_stuck_connection(old_conn: _Connection) -> None:
                 is_pending=False,
                 phone_number=old_conn.phone_number,
                 roles=set(old_conn.roles),
-                property_group_jids=set(old_conn.property_group_jids),
-                property_personal_numbers=set(old_conn.property_personal_numbers),
-                requirement_group_jids=set(old_conn.requirement_group_jids),
-                requirement_personal_numbers=set(old_conn.requirement_personal_numbers),
+                property_requirement_group_jids=set(old_conn.property_requirement_group_jids),
+                property_requirement_personal_numbers=set(old_conn.property_requirement_personal_numbers),
                 joined_groups=list(old_conn.joined_groups),
                 _promoted=True,
             )
@@ -296,8 +296,8 @@ def _load_or_migrate_roster() -> List[dict]:
                 "connection_id": "legacy-property",
                 "session_db_path": _LEGACY_PROPERTY_SESSION_DB,
                 "roles": ["property"],
-                "property_group_jids": list(group_jids),
-                "property_personal_numbers": [_normalize_digits(n) for n in personal_numbers],
+                "property_requirement_group_jids": list(group_jids),
+                "property_requirement_personal_numbers": [_normalize_digits(n) for n in personal_numbers],
                 "phone_number": None,
             }
         )
@@ -308,8 +308,8 @@ def _load_or_migrate_roster() -> List[dict]:
                 "connection_id": "legacy-inquiry",
                 "session_db_path": _LEGACY_INQUIRY_SESSION_DB,
                 "roles": ["inquiry"],
-                "property_group_jids": [],
-                "property_personal_numbers": [],
+                "property_requirement_group_jids": [],
+                "property_requirement_personal_numbers": [],
                 "phone_number": None,
             }
         )
@@ -324,6 +324,22 @@ def _restore_connection(entry: dict) -> None:
     connection_id = entry["connection_id"]
     session_db_path = entry.get("session_db_path") or _connection_session_db_path(connection_id)
     client = _build_client(connection_id, session_db_path)
+    # Union the new single-selection key with the OLD (pre-merge) separate
+    # property/requirement keys, so a roster saved by an older version of
+    # this module keeps every chat it used to watch on either side — nothing
+    # the operator previously selected silently stops being monitored just
+    # because the two lists became one. Once this connection is next saved
+    # (_persist_roster), only the new key is written.
+    group_jids = (
+        set(entry.get("property_requirement_group_jids", []))
+        | set(entry.get("property_group_jids", []))
+        | set(entry.get("requirement_group_jids", []))
+    )
+    personal_numbers = (
+        set(entry.get("property_requirement_personal_numbers", []))
+        | set(entry.get("property_personal_numbers", []))
+        | set(entry.get("requirement_personal_numbers", []))
+    )
     conn = _Connection(
         connection_id=connection_id,
         session_db_path=session_db_path,
@@ -331,17 +347,8 @@ def _restore_connection(entry: dict) -> None:
         is_pending=False,
         phone_number=entry.get("phone_number"),
         roles=set(entry.get("roles", [])),
-        property_group_jids=set(entry.get("property_group_jids", [])),
-        property_personal_numbers=set(_normalize_digits(n) for n in entry.get("property_personal_numbers", [])),
-        # Absent from every roster saved before the Requirement selection
-        # existed, and from the legacy migration entries — an empty set is
-        # exactly right for both: an existing install keeps capturing
-        # properties precisely as before and simply has nothing selected for
-        # requirements until the operator picks something.
-        requirement_group_jids=set(entry.get("requirement_group_jids", [])),
-        requirement_personal_numbers=set(
-            _normalize_digits(n) for n in entry.get("requirement_personal_numbers", [])
-        ),
+        property_requirement_group_jids=group_jids,
+        property_requirement_personal_numbers={_normalize_digits(n) for n in personal_numbers if _normalize_digits(n)},
         _promoted=True,
     )
     with _lock:
@@ -513,35 +520,64 @@ def _handle_message(connection_id: str, message: WhatsAppChatMessage) -> None:
         roles = set(conn.roles)
         has_property_role = ConnectionRole.PROPERTY in roles
         sender_digits = _normalize_digits(message.sender_phone)
-        property_claimed = has_property_role and (
-            (message.chat_type == "group" and message.chat_jid in conn.property_group_jids)
-            or (message.chat_type == "personal" and sender_digits in conn.property_personal_numbers)
-        )
-        # The Requirement selection is an independent set over the same
-        # connection (see the module docstring), so this is computed the
-        # same way and INDEPENDENTLY — both can be true at once when the
-        # operator selected the same chat on both sides, which is
-        # deliberately allowed.
-        requirement_claimed = has_property_role and (
-            (message.chat_type == "group" and message.chat_jid in conn.requirement_group_jids)
-            or (message.chat_type == "personal" and sender_digits in conn.requirement_personal_numbers)
+        # ONE selection feeding BOTH the property and requirement pipelines
+        # — see the module docstring. whatsapp_service.handle_intake_message
+        # decides from the message's own content which of the two it is;
+        # this flag only says "this chat is opted into that pipeline",
+        # for both outcomes at once.
+        property_requirement_claimed = has_property_role and (
+            (message.chat_type == "group" and message.chat_jid in conn.property_requirement_group_jids)
+            or (message.chat_type == "personal" and sender_digits in conn.property_requirement_personal_numbers)
         )
         # Inquiry NEVER looks at group messages, on any connection, whether
         # or not that group is claimed elsewhere — a group chat has no
         # single owner to key a client record on, and the operator has been
         # explicit that group traffic must stay fully out of Inquiry, not
-        # just the specific groups the other pipelines happen to be
+        # just the specific groups the other pipeline happens to be
         # watching. Only a personal (1:1) chat can be an inquiry, and even
-        # then only if NEITHER the Property nor the Requirement selection on
-        # this same connection has already claimed that exact number: a
-        # number the operator pointed at either pipeline must never also get
-        # an automated inquiry reply.
+        # then only if the property/requirement selection on this same
+        # connection has not already claimed that exact number: a number
+        # the operator pointed at that pipeline must never also get an
+        # automated inquiry reply.
+        #
+        # That exclusion has to hold GLOBALLY, not just for the connection
+        # the message happened to arrive on: the operator picks
+        # property/requirement personal numbers (n1, n2, ...) once, on
+        # whichever Property-role connection(s) they're configured under,
+        # and those same physical numbers may also message a *different*
+        # linked number that happens to carry the Inquiry role. Without
+        # this, "I want a flat" from a number the operator already pointed
+        # at the listing/requirement pipeline would still slip into Inquiry
+        # just because it wasn't claimed on *this* connection's own list.
+        sender_is_property_or_requirement_number = any(
+            not other.is_pending
+            and ConnectionRole.PROPERTY in other.roles
+            and sender_digits in other.property_requirement_personal_numbers
+            for other in _connections.values()
+        )
         inquiry_eligible = (
             ConnectionRole.INQUIRY in roles
             and message.chat_type == "personal"
-            and not property_claimed
-            and not requirement_claimed
+            and not property_requirement_claimed
+            and not sender_is_property_or_requirement_number
         )
+
+        # TEMP DIAGNOSTIC — remove once the exclusion-not-triggering report is
+        # confirmed fixed. Prints the exact values this decision was made
+        # from, for every personal message on a connection that could
+        # possibly route to Inquiry, so a mismatch is visible in the log
+        # instead of only inferred from behaviour.
+        if message.chat_type == "personal" and ConnectionRole.INQUIRY in roles:
+            step_logger.info(
+                "[Diag] sender_raw=" + repr(message.sender_phone)
+                + " sender_digits=" + repr(sender_digits)
+                + " has_property_role=" + repr(has_property_role)
+                + " conn_personal_numbers=" + repr(sorted(conn.property_requirement_personal_numbers))
+                + " property_requirement_claimed=" + repr(property_requirement_claimed)
+                + " sender_is_property_or_requirement_number=" + repr(sender_is_property_or_requirement_number)
+                + " inquiry_eligible=" + repr(inquiry_eligible)
+                + " connection_id=" + repr(connection_id)
+            )
 
     # Stamped here and nowhere else: this is the one place that knows which
     # connection a message came in on, and every pipeline downstream needs
@@ -551,8 +587,8 @@ def _handle_message(connection_id: str, message: WhatsAppChatMessage) -> None:
     # rewrite.
     message = message.model_copy(update={"connection_id": connection_id})
 
-    if (property_claimed or requirement_claimed) and _on_intake_message is not None:
-        _on_intake_message(message, property_claimed, requirement_claimed)
+    if property_requirement_claimed and _on_intake_message is not None:
+        _on_intake_message(message)
     if inquiry_eligible and _on_inquiry_message is not None:
         _on_inquiry_message(_to_inquiry_message(message))
 
@@ -577,10 +613,8 @@ def _persist_roster() -> None:
                 "connection_id": conn.connection_id,
                 "session_db_path": conn.session_db_path,
                 "roles": sorted(conn.roles),
-                "property_group_jids": sorted(conn.property_group_jids),
-                "property_personal_numbers": sorted(conn.property_personal_numbers),
-                "requirement_group_jids": sorted(conn.requirement_group_jids),
-                "requirement_personal_numbers": sorted(conn.requirement_personal_numbers),
+                "property_requirement_group_jids": sorted(conn.property_requirement_group_jids),
+                "property_requirement_personal_numbers": sorted(conn.property_requirement_personal_numbers),
                 "phone_number": conn.phone_number,
             }
             for conn in _connections.values()
@@ -601,10 +635,8 @@ def list_connections() -> List[WhatsAppConnectionView]:
                 status=conn.status,
                 roles=[ConnectionRole(r) for r in sorted(conn.roles)],
                 joined_groups=list(conn.joined_groups),
-                property_group_jids=sorted(conn.property_group_jids),
-                property_personal_numbers=sorted(conn.property_personal_numbers),
-                requirement_group_jids=sorted(conn.requirement_group_jids),
-                requirement_personal_numbers=sorted(conn.requirement_personal_numbers),
+                property_requirement_group_jids=sorted(conn.property_requirement_group_jids),
+                property_requirement_personal_numbers=sorted(conn.property_requirement_personal_numbers),
                 is_pending=conn.is_pending,
             )
             for conn in _connections.values()
@@ -664,41 +696,25 @@ def set_roles(connection_id: str, roles: List[str]) -> WhatsAppConnectionView:
             raise KeyError(connection_id)
         conn.roles = set(roles)
         if ConnectionRole.PROPERTY not in conn.roles:
-            conn.property_group_jids = set()
-            conn.property_personal_numbers = set()
-            # Both selections hang off the same role — see the module
-            # docstring — so dropping it clears both. Leaving a Requirement
-            # selection behind on a number that no longer feeds data
-            # fetching would silently resume capturing the moment the role
-            # came back, against chats the operator may no longer want.
-            conn.requirement_group_jids = set()
-            conn.requirement_personal_numbers = set()
+            # The selection hangs off this role — see the module docstring —
+            # so dropping it clears the selection. Leaving it behind on a
+            # number that no longer feeds data fetching would silently
+            # resume capturing the moment the role came back, against chats
+            # the operator may no longer want.
+            conn.property_requirement_group_jids = set()
+            conn.property_requirement_personal_numbers = set()
     _persist_roster()
     return _view_of(connection_id)
 
 
-def set_property_selection(connection_id: str, group_jids: List[str], personal_numbers: List[str]) -> WhatsAppConnectionView:
-    with _lock:
-        conn = _connections.get(connection_id)
-        if conn is None or conn.is_pending:
-            raise KeyError(connection_id)
-        if ConnectionRole.PROPERTY not in conn.roles:
-            raise ValueError("This connection does not have the property role.")
-        joined_jids = {g.jid for g in conn.joined_groups}
-        conn.property_group_jids = {jid for jid in group_jids if jid in joined_jids}
-        conn.property_personal_numbers = {_normalize_digits(n) for n in personal_numbers if _normalize_digits(n)}
-    _persist_roster()
-    return _view_of(connection_id)
-
-
-def set_requirement_selection(
+def set_property_requirement_selection(
     connection_id: str, group_jids: List[str], personal_numbers: List[str]
 ) -> WhatsAppConnectionView:
     """Fully replaces which of this connection's groups/personal numbers feed
-    the REQUIREMENT pipeline. Deliberately a mirror image of
-    set_property_selection, writing to a completely separate pair of sets:
-    the two selections overlap freely and neither one is derived from,
-    validated against, or subtracted from the other."""
+    the combined property/requirement pipeline. A single selection: whether
+    a message from a watched chat becomes a property listing or a broker
+    requirement is decided by its content (requirement_filter_service),
+    not by which of two lists it was picked into."""
     with _lock:
         conn = _connections.get(connection_id)
         if conn is None or conn.is_pending:
@@ -706,8 +722,10 @@ def set_requirement_selection(
         if ConnectionRole.PROPERTY not in conn.roles:
             raise ValueError("This connection does not have the property role.")
         joined_jids = {g.jid for g in conn.joined_groups}
-        conn.requirement_group_jids = {jid for jid in group_jids if jid in joined_jids}
-        conn.requirement_personal_numbers = {_normalize_digits(n) for n in personal_numbers if _normalize_digits(n)}
+        conn.property_requirement_group_jids = {jid for jid in group_jids if jid in joined_jids}
+        conn.property_requirement_personal_numbers = {
+            _normalize_digits(n) for n in personal_numbers if _normalize_digits(n)
+        }
     _persist_roster()
     return _view_of(connection_id)
 
@@ -730,10 +748,8 @@ def _view_of(connection_id: str) -> WhatsAppConnectionView:
             status=conn.status,
             roles=[ConnectionRole(r) for r in sorted(conn.roles)],
             joined_groups=list(conn.joined_groups),
-            property_group_jids=sorted(conn.property_group_jids),
-            property_personal_numbers=sorted(conn.property_personal_numbers),
-            requirement_group_jids=sorted(conn.requirement_group_jids),
-            requirement_personal_numbers=sorted(conn.requirement_personal_numbers),
+            property_requirement_group_jids=sorted(conn.property_requirement_group_jids),
+            property_requirement_personal_numbers=sorted(conn.property_requirement_personal_numbers),
             is_pending=conn.is_pending,
         )
 
@@ -747,25 +763,23 @@ def get_status_summary() -> dict:
         confirmed = [c for c in _connections.values() if not c.is_pending]
         property_conns = [c for c in confirmed if ConnectionRole.PROPERTY in c.roles]
         joined_group_count = sum(len(c.joined_groups) for c in property_conns)
-        monitored_group_count = sum(len(c.property_group_jids) for c in property_conns)
-        monitored_personal_chat_count = sum(len(c.property_personal_numbers) for c in property_conns)
-        monitored_requirement_group_count = sum(len(c.requirement_group_jids) for c in property_conns)
-        monitored_requirement_personal_chat_count = sum(
-            len(c.requirement_personal_numbers) for c in property_conns
-        )
+        monitored_group_count = sum(len(c.property_requirement_group_jids) for c in property_conns)
+        monitored_personal_chat_count = sum(len(c.property_requirement_personal_numbers) for c in property_conns)
         statuses = [c.status for c in confirmed]
 
     overall = _summarize_status(statuses)
     return {
         "status": overall,
         "joined_group_count": joined_group_count,
-        # Property and Requirement are counted separately and are NOT added
-        # together: the same chat can legitimately be in both, so a combined
-        # total would double-count it and read as more coverage than there is.
         "monitored_group_count": monitored_group_count,
         "monitored_personal_chat_count": monitored_personal_chat_count,
-        "monitored_requirement_group_count": monitored_requirement_group_count,
-        "monitored_requirement_personal_chat_count": monitored_requirement_personal_chat_count,
+        # Property and Requirement no longer have separate selections — one
+        # selection feeds both — so these mirror the counts above exactly.
+        # Kept as their own keys (rather than removed) purely so
+        # whatsapp_service.get_status() and the frontend's WhatsAppStatusResponse
+        # type don't need to change shape for this.
+        "monitored_requirement_group_count": monitored_group_count,
+        "monitored_requirement_personal_chat_count": monitored_personal_chat_count,
     }
 
 

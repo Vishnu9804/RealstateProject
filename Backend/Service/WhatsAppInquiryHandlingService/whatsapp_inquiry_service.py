@@ -4,8 +4,8 @@ Service/WhatsAppDataFetchingService/whatsapp_connection_manager.py; this
 module registers itself as that manager's inquiry-message handler (see
 `start_agent_in_background`) and gets called with every personal (1:1)
 message a connection's Inquiry role claims — a group message never reaches
-here, on any connection, regardless of role or Property selection (see
-whatsapp_connection_manager.py's `_handle_message`).
+here, on any connection, regardless of role or property/requirement
+selection (see whatsapp_connection_manager.py's `_handle_message`).
 
 `_captured_messages` is a capped in-memory list purely as proof that live
 messages are being received — later steps (buffering, LLM classification,

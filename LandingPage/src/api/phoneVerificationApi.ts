@@ -18,8 +18,19 @@ import type { InquiryFormPrefill, OtpRequestResponse, OtpVerifyResponse } from "
  * the lookup is keyed on proof of ownership instead.
  */
 export const phoneVerificationApi = {
-  requestCode: (phone: string): Promise<OtpRequestResponse> =>
-    apiClient.post("/whatsapp-inquiry/verify/request", { phone }),
+  /**
+   * `priorToken` is whatever verification this browser is already holding
+   * (lib/verifiedPhone.ts), sent so the server can recognise a number this
+   * browser has ALREADY proved and answer "verified" instead of sending a
+   * second message. Omitted when there is nothing stored, ignored when it
+   * is for a different number or has expired — it can only ever remove a
+   * WhatsApp send, never authorise anything.
+   */
+  requestCode: (phone: string, priorToken?: string | null): Promise<OtpRequestResponse> =>
+    apiClient.post("/whatsapp-inquiry/verify/request", {
+      phone,
+      verification_token: priorToken ?? null,
+    }),
 
   confirmCode: (phone: string, code: string): Promise<OtpVerifyResponse> =>
     apiClient.post("/whatsapp-inquiry/verify/confirm", { phone, code }),

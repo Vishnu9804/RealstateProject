@@ -11,8 +11,7 @@ whatsapp_connection_manager.py; this module only translates HTTP <-> Service.
 from fastapi import APIRouter, HTTPException, Response
 
 from Model.WhatsAppDataFetchingModel.whatsapp_connection import (
-    PropertySelectionRequest,
-    RequirementSelectionRequest,
+    PropertyRequirementSelectionRequest,
     UpdateRolesRequest,
     WhatsAppConnectionView,
 )
@@ -67,28 +66,17 @@ def update_roles(connection_id: str, body: UpdateRolesRequest) -> WhatsAppConnec
         raise HTTPException(status_code=404, detail="No such connection.")
 
 
-@router.post("/{connection_id}/property-selection", response_model=WhatsAppConnectionView)
-def update_property_selection(connection_id: str, body: PropertySelectionRequest) -> WhatsAppConnectionView:
+@router.post("/{connection_id}/property-requirement-selection", response_model=WhatsAppConnectionView)
+def update_property_requirement_selection(
+    connection_id: str, body: PropertyRequirementSelectionRequest
+) -> WhatsAppConnectionView:
     """Fully replaces which of this connection's groups/personal numbers
-    feed the property pipeline. Only valid for a connection that currently
-    has the Property role."""
+    feed the property/requirement pipeline (a single selection — which of
+    the two a message becomes is decided by its content, not by which list
+    it's in). Only valid for a connection that currently has the Property
+    role."""
     try:
-        return whatsapp_connection_manager.set_property_selection(connection_id, body.group_jids, body.personal_numbers)
-    except KeyError:
-        raise HTTPException(status_code=404, detail="No such connection.")
-    except ValueError as exc:
-        raise HTTPException(status_code=409, detail=str(exc))
-
-
-@router.post("/{connection_id}/requirement-selection", response_model=WhatsAppConnectionView)
-def update_requirement_selection(connection_id: str, body: RequirementSelectionRequest) -> WhatsAppConnectionView:
-    """Fully replaces which of this connection's groups/personal numbers
-    feed the REQUIREMENT pipeline. Same shape and same role requirement as
-    the property-selection route above, and completely independent of it —
-    a chat can be selected here, there, both, or neither, and saving one
-    never changes the other."""
-    try:
-        return whatsapp_connection_manager.set_requirement_selection(
+        return whatsapp_connection_manager.set_property_requirement_selection(
             connection_id, body.group_jids, body.personal_numbers
         )
     except KeyError:

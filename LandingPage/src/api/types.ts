@@ -62,13 +62,24 @@ export interface LeadSubmission {
  * Backend/Model/WhatsAppInquiryHandlingModel/phone_verification.py.
  */
 export interface OtpRequestResponse {
-  /** "sent" | "cooldown" | "unavailable" — see that model's docstring.
+  /** "verified" | "sent" | "cooldown" | "unavailable" — see that model's
+   *  docstring.
+   *
+   *  "verified" means no code is needed at all: either this browser's own
+   *  earlier proof already covers this exact number, or the number is
+   *  already one of our clients. `verification_token` is then set and is
+   *  the same credential a successful /confirm would have returned, so the
+   *  dialog closes straight into the confirmed state.
+   *
    *  "unavailable" means WE cannot send a code right now (no linked
    *  WhatsApp number), and is the one status the site treats as "carry on
    *  without verifying" rather than as a failure. */
   status: string;
   phone: string | null;
   retry_after_seconds: number;
+  /** Set for "verified" and only for "verified". */
+  verification_token?: string | null;
+  expires_in_seconds?: number;
 }
 
 export interface OtpVerifyResponse {

@@ -25,17 +25,16 @@ export const whatsappApi = {
   updateRoles: (connectionId: string, roles: ConnectionRole[]): Promise<WhatsAppConnection> =>
     apiClient.patch(`/whatsapp/connections/${encodeURIComponent(connectionId)}/roles`, { roles }),
 
-  updatePropertySelection: (connectionId: string, groupJids: string[], personalNumbers: string[]): Promise<WhatsAppConnection> =>
-    apiClient.post(`/whatsapp/connections/${encodeURIComponent(connectionId)}/property-selection`, {
-      group_jids: groupJids,
-      personal_numbers: personalNumbers,
-    }),
-
-  /** The Requirement selection's own endpoint. Completely independent of
-   *  updatePropertySelection above — saving one never touches the other,
-   *  and the same group/number may be in both. */
-  updateRequirementSelection: (connectionId: string, groupJids: string[], personalNumbers: string[]): Promise<WhatsAppConnection> =>
-    apiClient.post(`/whatsapp/connections/${encodeURIComponent(connectionId)}/requirement-selection`, {
+  /** Replaces which of this connection's groups/personal numbers feed the
+   *  combined property/requirement pipeline — a single selection. Whether a
+   *  message from a watched chat becomes a property listing or a broker
+   *  requirement is decided by its content on the backend. */
+  updatePropertyRequirementSelection: (
+    connectionId: string,
+    groupJids: string[],
+    personalNumbers: string[],
+  ): Promise<WhatsAppConnection> =>
+    apiClient.post(`/whatsapp/connections/${encodeURIComponent(connectionId)}/property-requirement-selection`, {
       group_jids: groupJids,
       personal_numbers: personalNumbers,
     }),

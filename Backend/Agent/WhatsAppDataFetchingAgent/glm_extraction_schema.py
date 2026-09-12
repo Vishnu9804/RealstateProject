@@ -170,9 +170,20 @@ class GLMPropertyExtraction(BaseModel):
 
     source_message_id: str = Field(description="Must exactly match the message's id as given in the prompt.")
     is_property_listing: bool = Field(
-        description="True only if the message is a genuine buy/sell/rent real-estate listing or request — "
-        "see the classification rules in the prompt. False for anything else, including messages that merely "
-        "discuss or mention a property/area without actually offering or seeking one."
+        description="True only if the message OFFERS a specific real-estate property for sale or rent — see "
+        "the classification rules in the prompt. False for anything else, including a message ASKING for a "
+        "property (that is is_requirement below) and messages that merely discuss or mention a property/area "
+        "without actually offering one."
+    )
+    is_requirement: bool = Field(
+        default=False,
+        description="True only when the message is a DEMAND — someone asking FOR a property they do not have "
+        "(\"I want to look for 3bhk flat in vesu\", \"3BHK joie chhe Vesu ma\", \"need shop on rent in "
+        "Althan\") — rather than offering one. Mutually exclusive with is_property_listing: when this is true, "
+        "is_property_listing is false and \"properties\" stays EMPTY, because the message is handed to a "
+        "separate requirement-extraction stage instead of being stored as a listing. Defaults to False (fail "
+        "safe) if the model omits the field, which leaves the message treated exactly as it was before this "
+        "field existed — so a missing signal can never re-route a real listing away from the Properties page.",
     )
     property_lines: List[str] = Field(
         default_factory=list,

@@ -108,18 +108,28 @@ export default function AreaPicker({
           {selected.map((area) => (
             <span className="areas__pick" role="listitem" key={areaKey(area)}>
               {area}
+              {/* title as well as aria-label: the disc says "press me"
+                  but not what it removes, and a hover tooltip is the
+                  cheapest way to say so without widening every capsule. */}
               <button
                 type="button"
                 className="areas__remove"
                 onClick={() => remove(area)}
                 disabled={disabled}
                 aria-label={`Remove ${area}`}
+                title={`Remove ${area}`}
               >
-                <IconClose size={13} />
+                <IconClose size={11} />
               </button>
             </span>
           ))}
-          <button type="button" className="areas__clear" onClick={() => onChange([])} disabled={disabled}>
+          <button
+            type="button"
+            className="areas__clear"
+            onClick={() => onChange([])}
+            disabled={disabled}
+            aria-label="Remove all selected areas"
+          >
             Clear all
           </button>
         </div>

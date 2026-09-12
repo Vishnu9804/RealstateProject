@@ -8,7 +8,7 @@ import { usePhoneVerification } from "../hooks/usePhoneVerification";
 import { formatBudgetDisplay, isPlausiblePhone, parseCompactInr } from "../lib/format";
 import { joinAreas, mergeAreas, splitAreas, SURAT_AREAS } from "../lib/suratAreas";
 import AreaPicker from "./AreaPicker";
-import { IconAlert, IconArrowRight, IconCheck } from "./Icons";
+import { IconAlert, IconArrowRight, IconCheck, IconEdit } from "./Icons";
 import PhoneVerifyDialog from "./PhoneVerifyDialog";
 
 const PROPERTY_TYPES = [
@@ -139,6 +139,10 @@ export default function RequirementsForm({
   const [areaOptions, setAreaOptions] = useState<string[]>(SURAT_AREAS);
   const [additionalRequirements, setAdditionalRequirements] = useState(contextNote ?? "");
 
+  // "Change number" was pressed: the field opens back up for typing. It
+  // says nothing about whether the number is CONFIRMED — see the three
+  // flags below, where that distinction is the whole point.
+  const [editingPhone, setEditingPhone] = useState(false);
   const [phoneError, setPhoneError] = useState<string | null>(null);
   // Pulses the Confirm button rather than opening the code dialog on its
   // own — clicking Confirm is the only thing that ever opens it.
@@ -156,14 +160,27 @@ export default function RequirementsForm({
   const phoneRef = useRef<HTMLInputElement>(null);
   const verification = usePhoneVerification();
 
-  // A link-supplied number is fixed by the token; a typed one is fixed once
-  // it has been confirmed with a code. Nothing else locks the field.
+  // Three flags, and keeping them apart is what makes "Change number"
+  // safe to add:
+  //
+  //  - phoneEstablished: we KNOW this number is theirs. A link-supplied one
+  //    is fixed by its token; a typed one, once confirmed. Nothing a
+  //    button does can change this — only the number in the box can.
+  //  - phoneLocked: purely about the input being read-only. This is the
+  //    only thing "Change number" touches.
+  //  - phoneSettled: whether the rest of the form may be filled in. Reads
+  //    phoneEstablished, deliberately NOT phoneLocked — someone who opened
+  //    the field and left the same confirmed number in it has proved
+  //    nothing less than they had a second ago, and re-gating the whole
+  //    form at them for pressing a button would be nonsense.
+  //
+  // bypassed is the one escape hatch: we couldn't send a code at all
+  // (nothing linked to send from), so the form behaves exactly as it did
+  // before verification existed rather than trapping a real visitor.
   const phoneFromToken = fromLink && channel === "whatsapp" && phone.trim().length > 0;
-  const phoneLocked = phoneFromToken || verification.isVerified(phone);
-  // The one escape hatch: we couldn't send a code at all (nothing linked to
-  // send from), so the form behaves exactly as it did before verification
-  // existed rather than trapping a real visitor. See usePhoneVerification.
-  const phoneSettled = phoneLocked || verification.bypassed;
+  const phoneEstablished = phoneFromToken || verification.isVerified(phone);
+  const phoneLocked = phoneEstablished && !editingPhone;
+  const phoneSettled = phoneEstablished || verification.bypassed;
 
   useEffect(() => {
     if (!token) {
@@ -304,7 +321,17 @@ export default function RequirementsForm({
 
   /** Opens the code dialog, which sends the code the moment it mounts.
    *  The ONLY thing that ever opens it — every other gate below just points
-   *  at this button instead of triggering it itself. */
+   *  at this button instead of triggering it itself.
+   *
+   *  Except when there is nothing left to confirm. Someone who presses
+   *  "Change number", thinks better of it (or retypes the very number they
+   *  just confirmed) and presses Confirm is asking us to re-prove something
+   *  this browser is still holding the proof of. That closes the field
+   *  again on the spot: no dialog, no WhatsApp message, and — the part
+   *  that matters for a database billed by the hour — not so much as an
+   *  HTTP request. Which also means the loop someone might try to abuse
+   *  (confirm, change, confirm, change…) costs the server nothing at all
+   *  after the first code, because it never reaches the server. */
   function beginConfirm() {
     if (!isPlausiblePhone(phone)) {
       setPhoneError(PHONE_REQUIRED_MESSAGE);
@@ -313,7 +340,31 @@ export default function RequirementsForm({
     }
     setPhoneError(null);
     setConfirmPulse(false);
+    if (verification.isVerified(phone)) {
+      // Snap back to the canonical E.164 the confirmation was minted for,
+      // exactly as a real one would have — "9876543210" and
+      // "+919876543210" are the same number to us but only one of them is
+      // the string we store and submit, and the field should show that one.
+      if (verification.verified) setPhone(verification.verified.phone);
+      setEditingPhone(false);
+      return;
+    }
     verification.startVerification(phone.trim());
+  }
+
+  /** Re-opens the number for typing. Deliberately does NOT drop the stored
+   *  verification: it is still valid proof for the number it was minted
+   *  for, which is exactly what lets the same number be re-confirmed above
+   *  without another code. */
+  function beginEditPhone() {
+    setEditingPhone(true);
+    setPhoneError(null);
+    // Selected, not just focused — the point of pressing this is to
+    // replace the number, so the first keystroke should replace it.
+    window.setTimeout(() => {
+      phoneRef.current?.focus();
+      phoneRef.current?.select();
+    }, 0);
   }
 
   /**
@@ -462,16 +513,19 @@ export default function RequirementsForm({
     verification.pendingPhone !== null ? (
       <PhoneVerifyDialog
         phone={verification.pendingPhone}
+        priorToken={verification.verified?.token}
         onVerified={(verifiedPhone, verifiedToken, expiresInSeconds) => {
           // The canonical E.164 form replaces whatever was typed, so what
           // is shown, stored and submitted are all the same string.
           setPhone(verifiedPhone);
           setPhoneError(null);
+          setEditingPhone(false);
           verification.completeVerification(verifiedPhone, verifiedToken, expiresInSeconds);
         }}
         onUnavailable={() => {
           verification.markUnavailable();
           setPhoneError(null);
+          setEditingPhone(false);
         }}
         onClose={() => {
           verification.cancelVerification();
@@ -548,7 +602,21 @@ export default function RequirementsForm({
         <label className="field__label" htmlFor={`${idPrefix}-phone`}>
           WhatsApp number
         </label>
-        <div className={phoneLocked ? "field__row" : "field__row field__row--action"}>
+        {/* One slot, always the same width and the same place: Confirm
+            while the number is open for typing, "Change number" once it is
+            settled. A confirmed number used to leave that slot empty, which
+            made the number look permanent when it isn't — the way back was
+            simply missing. A link-supplied number is the one that really
+            is permanent, so it gets no button at all. */}
+        <div
+          className={
+            phoneLocked
+              ? phoneFromToken
+                ? "field__row"
+                : "field__row field__row--action field__row--change"
+              : "field__row field__row--action"
+          }
+        >
           <input
             id={`${idPrefix}-phone`}
             ref={phoneRef}
@@ -566,23 +634,34 @@ export default function RequirementsForm({
             aria-describedby={phoneError ? `${idPrefix}-phone-error` : undefined}
             maxLength={24}
           />
-          {!phoneLocked && (
-            // Turns gold — the site's one "go" colour — the instant the
-            // number looks complete, so it's obviously the next thing to
-            // press without needing to be told. Pulses on top of that when
-            // the visitor tried to move on without pressing it.
-            <button
-              type="button"
-              className={`btn field__action ${isPlausiblePhone(phone) ? "btn--primary" : "btn--ghost"}${
-                confirmPulse ? " is-pulsing" : ""
-              }`}
-              onClick={beginConfirm}
-              disabled={!isPlausiblePhone(phone)}
-              onAnimationEnd={() => setConfirmPulse(false)}
-            >
-              Confirm
-            </button>
-          )}
+          {phoneLocked
+            ? !phoneFromToken && (
+                <button
+                  type="button"
+                  className="btn btn--ghost field__action field__action--change"
+                  onClick={beginEditPhone}
+                >
+                  <IconEdit size={15} />
+                  Change number
+                </button>
+              )
+            : // Turns gold — the site's one "go" colour — the instant the
+              // number looks complete, so it's obviously the next thing to
+              // press without needing to be told. Pulses on top of that when
+              // the visitor tried to move on without pressing it.
+              (
+                <button
+                  type="button"
+                  className={`btn field__action ${isPlausiblePhone(phone) ? "btn--primary" : "btn--ghost"}${
+                    confirmPulse ? " is-pulsing" : ""
+                  }`}
+                  onClick={beginConfirm}
+                  disabled={!isPlausiblePhone(phone)}
+                  onAnimationEnd={() => setConfirmPulse(false)}
+                >
+                  Confirm
+                </button>
+              )}
         </div>
         {phoneLocked ? (
           <span className="field__hint">
@@ -590,10 +669,20 @@ export default function RequirementsForm({
               ? "Taken from your WhatsApp chat with us — nothing to type."
               : "Confirmed on WhatsApp — we'll use this number for everything."}
           </span>
+        ) : phoneError ? (
+          <span className="field__error" id={`${idPrefix}-phone-error`}>
+            {phoneError}
+          </span>
         ) : (
-          phoneError && (
-            <span className="field__error" id={`${idPrefix}-phone-error`}>
-              {phoneError}
+          // Said only while the field is open after a confirmation, and it
+          // is the answer to the question that opening it raises: "will
+          // this cost me another code?" Not for anyone typing a number for
+          // the first time — they have nothing to put back.
+          editingPhone && (
+            <span className="field__hint">
+              {phoneEstablished
+                ? "This is still your confirmed number — tap Confirm to keep it, no new code needed."
+                : "Tap Confirm when you're done. If you go back to the number you already confirmed, we won't send another code."}
             </span>
           )
         )}

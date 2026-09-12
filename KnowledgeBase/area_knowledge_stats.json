@@ -1,19 +1,19 @@
 {
   "stats": {
-    "batches_observed": 5,
-    "properties_seen": 80,
-    "properties_recorded": 50,
-    "properties_skipped_no_area": 30,
-    "properties_all_known": 8,
+    "batches_observed": 10,
+    "properties_seen": 85,
+    "properties_recorded": 54,
+    "properties_skipped_no_area": 31,
+    "properties_all_known": 12,
     "properties_with_new_places": 42,
-    "place_lookups": 130,
-    "place_hits": 49,
+    "place_lookups": 137,
+    "place_hits": 56,
     "place_writes": 81,
     "cross_area_collisions": 5,
     "by_source": {
       "area": {
-        "lookups": 50,
-        "hits": 36,
+        "lookups": 54,
+        "hits": 40,
         "writes": 14
       },
       "address": {
@@ -22,15 +22,15 @@
         "writes": 43
       },
       "society": {
-        "lookups": 26,
-        "hits": 2,
+        "lookups": 29,
+        "hits": 5,
         "writes": 24
       }
     },
     "by_status": {
       "accepted": {
-        "lookups": 103,
-        "hits": 46,
+        "lookups": 110,
+        "hits": 53,
         "writes": 57
       },
       "outsider": {
@@ -40,7 +40,7 @@
       }
     },
     "first_observed_at": "2026-09-11T18:27:11.591660+00:00",
-    "last_observed_at": "2026-09-11T19:05:33.377652+00:00",
+    "last_observed_at": "2026-09-12T14:59:19.881513+00:00",
     "stats_since": "2026-09-11T18:22:36.255953+00:00"
   },
   "area_stats": {
@@ -53,12 +53,12 @@
       "last_updated": "2026-09-11T18:28:48.764731+00:00"
     },
     "vesu": {
-      "lookups": 40,
-      "hits": 21,
+      "lookups": 47,
+      "hits": 28,
       "writes": 19,
-      "properties": 17,
+      "properties": 21,
       "first_seen": "2026-09-11T18:27:11.591793+00:00",
-      "last_updated": "2026-09-11T18:54:14.070123+00:00"
+      "last_updated": "2026-09-12T14:59:19.881513+00:00"
     },
     "godadara": {
       "lookups": 2,
@@ -158,101 +158,6 @@
     }
   },
   "events": [
-    {
-      "at": "2026-09-11T18:27:11.591660+00:00",
-      "area": "Piplod",
-      "source_message_id": "3EB0323F5EC4FF27776152",
-      "record_id": "48c6ba37ed7b466daa9c9c2a45ea4498",
-      "review_status": "accepted",
-      "lookups": 3,
-      "hits": 0,
-      "writes": 3,
-      "hit_places": [],
-      "new_places": [
-        "Piplod",
-        "Ryan International School",
-        "Green Serene"
-      ],
-      "collisions": [],
-      "skipped": false,
-      "skip_reason": null
-    },
-    {
-      "at": "2026-09-11T18:27:11.591781+00:00",
-      "area": "Vesu",
-      "source_message_id": "3EB0323F5EC4FF27776152",
-      "record_id": "98a40c7b9acd41bc9f3d6f0b96431b54",
-      "review_status": "accepted",
-      "lookups": 3,
-      "hits": 0,
-      "writes": 3,
-      "hit_places": [],
-      "new_places": [
-        "Vesu",
-        "VIP Road",
-        "Vanilla Sky"
-      ],
-      "collisions": [],
-      "skipped": false,
-      "skip_reason": null
-    },
-    {
-      "at": "2026-09-11T18:27:11.591816+00:00",
-      "area": "Godadara",
-      "source_message_id": "3EB0323F5EC4FF27776152",
-      "record_id": "c7c6b7a251b643f08e1f9bb615593903",
-      "review_status": "outsider",
-      "lookups": 2,
-      "hits": 0,
-      "writes": 2,
-      "hit_places": [],
-      "new_places": [
-        "Godadara",
-        "Aranya-3 by Pramukh"
-      ],
-      "collisions": [],
-      "skipped": false,
-      "skip_reason": null
-    },
-    {
-      "at": "2026-09-11T18:27:11.591842+00:00",
-      "area": "Pal",
-      "source_message_id": "3EB051F743B21F7F5C2087",
-      "record_id": "5251e70e78a74f889110b75451ce3f2a",
-      "review_status": "accepted",
-      "lookups": 4,
-      "hits": 0,
-      "writes": 4,
-      "hit_places": [],
-      "new_places": [
-        "Pal",
-        "Megh Mayur Plaza",
-        "Parle Point",
-        "Keshav Park Society"
-      ],
-      "collisions": [],
-      "skipped": false,
-      "skip_reason": null
-    },
-    {
-      "at": "2026-09-11T18:27:11.591874+00:00",
-      "area": "Vesu",
-      "source_message_id": "3EB02465D23D3DF964C894",
-      "record_id": "87e160be00f84be08841e4937c66fad8",
-      "review_status": "accepted",
-      "lookups": 2,
-      "hits": 1,
-      "writes": 1,
-      "hit_places": [
-        "Vesu"
-      ],
-      "new_places": [
-        "Shilp Residency"
-      ],
-      "collisions": [],
-      "skipped": false,
-      "skip_reason": null
-    },
     {
       "at": "2026-09-11T18:27:11.591888+00:00",
       "area": "Adajan",
@@ -1573,6 +1478,92 @@
       "collisions": [
         "Ghod Dod Road (already known under Athwa)"
       ],
+      "skipped": false,
+      "skip_reason": null
+    },
+    {
+      "at": "2026-09-12T13:29:56.768437+00:00",
+      "area": null,
+      "source_message_id": "ACBEEC2A20A5D016C2004219F40938AE",
+      "record_id": "be4c4173be9c463fb41b149c4bfac068",
+      "review_status": "outsider",
+      "lookups": 0,
+      "hits": 0,
+      "writes": 0,
+      "hit_places": [],
+      "new_places": [],
+      "collisions": [],
+      "skipped": true,
+      "skip_reason": "The LLM returned no area_name for this property, so there is nothing to file its places under."
+    },
+    {
+      "at": "2026-09-12T14:01:15.902675+00:00",
+      "area": "Vesu",
+      "source_message_id": "ACB0A678C91B7F245863D82CDE29EE88",
+      "record_id": "c4c84cfdc2d442928c3379546a8cba20",
+      "review_status": "accepted",
+      "lookups": 1,
+      "hits": 1,
+      "writes": 0,
+      "hit_places": [
+        "Vesu"
+      ],
+      "new_places": [],
+      "collisions": [],
+      "skipped": false,
+      "skip_reason": null
+    },
+    {
+      "at": "2026-09-12T14:55:45.850961+00:00",
+      "area": "Vesu",
+      "source_message_id": "O1",
+      "record_id": "a6f889b7968a40808bbd24e593356081",
+      "review_status": "accepted",
+      "lookups": 2,
+      "hits": 2,
+      "writes": 0,
+      "hit_places": [
+        "Vesu",
+        "Shilp Residency"
+      ],
+      "new_places": [],
+      "collisions": [],
+      "skipped": false,
+      "skip_reason": null
+    },
+    {
+      "at": "2026-09-12T14:58:08.679138+00:00",
+      "area": "Vesu",
+      "source_message_id": "O1",
+      "record_id": "2510ad0507dc41a9862e58c3c00ff474",
+      "review_status": "accepted",
+      "lookups": 2,
+      "hits": 2,
+      "writes": 0,
+      "hit_places": [
+        "Vesu",
+        "Shilp Residency"
+      ],
+      "new_places": [],
+      "collisions": [],
+      "skipped": false,
+      "skip_reason": null
+    },
+    {
+      "at": "2026-09-12T14:59:19.881513+00:00",
+      "area": "Vesu",
+      "source_message_id": "O1",
+      "record_id": "2829c466fec04234be902d997cc77961",
+      "review_status": "accepted",
+      "lookups": 2,
+      "hits": 2,
+      "writes": 0,
+      "hit_places": [
+        "Vesu",
+        "Shilp Residency"
+      ],
+      "new_places": [],
+      "collisions": [],
       "skipped": false,
       "skip_reason": null
     }

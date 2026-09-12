@@ -31,3 +31,15 @@ class WhatsAppChatMessage(BaseModel):
     sender_saved_name: str
     text: str
     received_at: datetime
+
+    # Set only on a message the PROPERTY structuring stage read and concluded
+    # was a DEMAND rather than an offer (see property_structurer's PART 1
+    # is_requirement), on its way over to the requirement pipeline. Purely a
+    # routing breadcrumb: it tells the requirement prompt that this message
+    # has already been examined once and judged a demand, so the requirement
+    # stage doesn't bounce it back out as "not a requirement" and lose it
+    # between the two pipelines.
+    #
+    # Defaults False, so every message that arrives the normal way (via the
+    # keyword filter in whatsapp_service.py) is completely unaffected.
+    reclassified_as_requirement: bool = False

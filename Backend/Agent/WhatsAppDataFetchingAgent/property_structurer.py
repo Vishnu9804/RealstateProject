@@ -42,6 +42,13 @@ from Agent.WhatsAppDataFetchingAgent.glm_extraction_schema import (
     GLMPropertyExtraction,
     GLMPropertyListing,
 )
+from Agent.WhatsAppDataFetchingAgent.price_scales import (
+    CRORE as _CRORE,
+    LAKH as _LAKH,
+    SCALE_MULTIPLIERS as _SCALE_MULTIPLIERS,
+    SCALE_WORD_PATTERN as _SCALE_WORD_PATTERN,
+    THOUSAND as _THOUSAND,
+)
 from Config.settings import get_settings
 from Middleware import step_logger
 from Model.WhatsAppDataFetchingModel.structured_property import StructuredProperty
@@ -224,12 +231,41 @@ def structure_batch(batch: List[WhatsAppChatMessage]) -> List[StructuredProperty
     and skipped rather than crashing the caller. It is simply lost for now —
     there is nowhere durable to retry it from once this function returns
     (until the database gets a durable job queue)."""
+    return structure_batch_with_routing(batch)[0]
+
+
+def structure_batch_with_routing(
+    batch: List[WhatsAppChatMessage],
+) -> tuple[List[StructuredProperty], List[WhatsAppChatMessage]]:
+    """structure_batch, plus the second thing this stage now decides: which
+    messages in the batch were not listings at all but DEMANDS — someone
+    asking for a property rather than offering one (PART 1's is_requirement).
+
+    Returns (properties, messages_to_re_route). The second list is messages,
+    not records: nothing about a demand is extracted here. They are handed
+    back to the caller to push into the REQUIREMENT pipeline, which has its
+    own prompt, its own schema and its own page (see
+    Service/WhatsAppDataFetchingService/property_pipeline_service.py).
+
+    Why this exists: the cheap keyword filter that splits the two pipelines
+    upstream (requirement_filter_service) is built for precision, so a demand
+    phrased without one of its trigger words — "I want to look for 3bhk flat
+    in vesu" — slips past it and arrives here. Before, the only two outcomes
+    for such a message were "stored as a property" (wrong page, wrong shape,
+    and it pollutes client matching) or "dropped". Now the LLM, which is
+    already reading the message and does understand the difference between
+    offering and seeking, says which it is, and a demand gets re-routed
+    instead of mis-stored.
+
+    Strictly additive by construction: a message is only ever re-routed when
+    this stage produced NO properties for it, so nothing that would have been
+    stored as a property before can be taken away by it."""
     if not batch:
-        return []
+        return [], []
 
     content = _post_with_retries(batch)
     if content is None:
-        return []
+        return [], []
 
     extractions = _parse_extractions(content, len(batch))
     extractions = _recover_missed_properties(extractions, batch)
@@ -563,13 +599,14 @@ def _build_system_prompt(area_knowledge_supplied: bool = False) -> str:
             "pre-filter to merely LOOK property-related SOMEWHERE in its text (a BHK/RK "
             "mention, an area/price/location word, etc — that pre-filter says nothing "
             "about whether it's a real listing or which locality it's in). Your job has "
-            "four parts: (1) decide whether each message is actually a property listing, "
+            "four parts: (1) decide whether each message is actually a property listing "
+            "(an OFFER), a requirement (a DEMAND), or neither, "
             "(2) if it is, extract structured details from it, (3) for each extracted "
             "property, decide whether it falls inside one of the client's selected areas, "
             "and (4) for each extracted property, say whether its own text gave you enough "
             "to work with at all.",
             "",
-            "=== PART 1 — is_property_listing classification ===",
+            "=== PART 1 — is_property_listing / is_requirement classification ===",
             "",
             "The keyword match that got a message into this batch is a rough, generic "
             "pre-filter (BHK/RK, area/price/location words) — it says nothing about "
@@ -577,15 +614,63 @@ def _build_system_prompt(area_knowledge_supplied: bool = False) -> str:
             "is entirely yours, and it is the most important part of this task: get it "
             "wrong and junk data reaches a real database.",
             "",
-            "Set is_property_listing to TRUE only if the message is a genuine BUY, SELL, "
-            "or RENT real-estate listing or request — someone (broker, owner, agent, or "
-            "a buyer/tenant themselves) actively offering a specific property, or actively "
-            "asking to buy/rent one with concrete requirements. Examples that ARE listings: "
+            "Set is_property_listing to TRUE only if the message OFFERS a specific property "
+            "for sale or for rent — someone (broker, owner, agent) putting a property on the "
+            "table for someone else to take. Examples that ARE listings: "
             "\"2BHK flat available for rent in Vesu, 15000/month, contact 98xxxxxxx\", "
-            "\"Need 3BHK for rent near Althan, budget 20k, family only\", \"Shop for sale in "
-            "VIP Road, 400 sqft, 55 Lakh, urgent\".",
+            "\"Shop for sale in VIP Road, 400 sqft, 55 Lakh, urgent\", \"Flat For Sale Vesu, "
+            "Shilp Residency, Bhk 3, Sqft 1950, Rate 95 Lk\".",
             "",
-            "Set is_property_listing to FALSE for everything else, even if a tracked area "
+            "OFFER vs DEMAND — read this before deciding anything else. These groups carry "
+            "two completely different kinds of real-estate message, and they are handled by "
+            "two different systems:",
+            "  - An OFFER (a LISTING) presents a property the sender can show you: here is a "
+            "flat/shop/plot, this is its size, this is its price, contact me. That is "
+            "is_property_listing TRUE, is_requirement FALSE.",
+            "  - A DEMAND (a REQUIREMENT) asks for a property the sender does NOT have: "
+            "someone wants to buy or rent something and is describing what they are looking "
+            "for. That is is_property_listing FALSE and is_requirement TRUE, with "
+            "\"property_lines\" and \"properties\" both EMPTY.",
+            "",
+            "A demand is NEVER a listing, no matter how much detail it carries, and must "
+            "never be extracted into \"properties\". Judge it on MEANING, not on any single "
+            "keyword — these messages are written informally in English, Hindi and Gujarati "
+            "(often transliterated), so the same intent turns up in many shapes. ALL of "
+            "these are DEMANDS (is_requirement TRUE): \"I want to look for 3bhk flat in "
+            "vesu\", \"Looking for 3 BHK in Vesu\", \"3BHK joie chhe Vesu ma\", \"Need a shop "
+            "on rent near Althan, budget 25k\", \"Client requirement: 4BHK Piplod, budget "
+            "2cr\", \"anyone having 2BHK in Pal for rent?\", \"koi 3bhk che Vesu ma?\", "
+            "\"urgent requirement 2BHK Adajan, family\". The tell is that the sender is "
+            "SEEKING a property rather than presenting one: wording like \"want\", \"looking "
+            "for\", \"in search of\", \"need\", \"required\", \"requirement\", \"searching\", "
+            "\"chahiye\", \"joie chhe\", \"jarurat\", \"zaroorat\", \"anyone has/having\", a "
+            "question about what is available, or a BUDGET (what they are willing to pay) "
+            "where a listing would state a PRICE (what this property costs).",
+            "",
+            "CAREFUL — a listing routinely asks for the OTHER side of its own deal, and that "
+            "does NOT make it a demand. \"2BHK for sale in Vesu, genuine buyer required\", "
+            "\"tenant wanted for my shop\", \"customer chahiye\", \"brokerage required\", "
+            "\"documents needed\", \"advance 2 months required\" are all OFFERS: "
+            "is_property_listing TRUE, is_requirement FALSE. What is being asked for there is "
+            "a PERSON or a CONDITION, not a property. If the message describes a specific "
+            "property that the sender is offering, it is a listing even if it also asks for a "
+            "buyer, a tenant, a broker or a fee.",
+            "",
+            "When you set is_requirement TRUE, also write a one-line skip_reason saying what "
+            "is being sought (e.g. \"demand: 3 BHK flat wanted in Vesu\"). The message is NOT "
+            "discarded — it is passed to a separate requirement-extraction stage that "
+            "structures demands and shows them on their own page, so getting this split right "
+            "is what puts a message where it belongs instead of losing it.",
+            "",
+            "is_requirement is FALSE by default and only ever TRUE for a genuine demand. If "
+            "you are unsure whether a message is a demand or an offer, treat it as an OFFER "
+            "and leave is_requirement FALSE — a demand that lands in the listings is visible "
+            "and fixable, while wrongly re-routing a real listing takes it off the Properties "
+            "page. Never set is_requirement TRUE at the same time as is_property_listing, and "
+            "never return any entry in \"properties\" for a message you marked as a demand.",
+            "",
+            "Set BOTH is_property_listing and is_requirement to FALSE for everything else, "
+            "even if a tracked area "
             "is mentioned. In particular, FALSE covers: greetings, festival wishes, jokes, "
             "forwards, or general chit-chat that happens to name an area; traffic, weather, "
             "local news, politics, or community-event messages about an area; a question "
@@ -724,7 +809,28 @@ def _build_system_prompt(area_knowledge_supplied: bool = False) -> str:
             "Strip the ₹ symbol, \"Rs.\"/\"INR\", and Indian comma-grouping — e.g. "
             "\"1,25,00,000₹\" or \"1.25 crore\" becomes \"1.25cr\"; \"Rs.45,00,000/-\" or "
             "\"45 Lakh\" becomes \"45L\"; \"15,000/month\" becomes \"15k/month\"; a per-unit "
-            "\"1,25,000/vaar\" becomes \"1.25L/vaar\". Keep any \"/vaar\", \"/vigha\", "
+            "\"1,25,000/vaar\" becomes \"1.25L/vaar\".",
+            "",
+            "MONEY SHORT FORMS — brokers abbreviate lakh and crore heavily and inconsistently, "
+            "and a shorthand you fail to recognise costs the property its entire price. Treat ALL "
+            "of these as LAKH (x 1,00,000), in any capitalisation, with or without a space or a "
+            "dot: \"L\", \"Lk\", \"Lks\", \"Lkh\", \"Lac\", \"Lacs\", \"Lack\", \"Lacks\", "
+            "\"Lakh\", \"Lakhs\". Treat ALL of these as CRORE (x 1,00,00,000): \"Cr\", \"Crs\", "
+            "\"Cror\", \"Crore\", \"Crores\", \"Karod\". Treat \"K\", \"Hazar\" and \"Hajar\" as "
+            "THOUSAND. So \"Rate - 95 Lk\" is 95 lakh: price_text \"95L\", price_amount_inr "
+            "9500000. Never leave a price null just because the money word was abbreviated in a "
+            "way you don't usually see — if a figure is written with any of the words above, you "
+            "DO know what it means.",
+            "",
+            "PRICE LABELS — a figure introduced by \"Rate\", \"Price\", \"Dem\", \"Demand\", "
+            "\"Ask\"/\"Asking\", \"Cost\", \"Amount\" or \"Deal\" is that property's TOTAL price "
+            "(price_text / price_amount_inr). The word \"Rate\" in particular does NOT make it a "
+            "per-unit rate: a genuine per-unit rate always names the unit right after the figure "
+            "(\"Rate 6500/sqft\", \"Rate 85000 per vaar\"). \"Rate - 95 Lk\" with no unit after it "
+            "is a total price, never price_per_unit_text. In a rental listing the same applies to "
+            "\"Rent\", \"Bhade\" and \"Kiraya\" — that figure is the total (monthly) price.",
+            "",
+            "Keep any \"/vaar\", \"/vigha\", "
             "\"/sq ft\", \"/month\" unit suffix from the original wording on price_per_unit_text "
             "(and on price_text only when the message itself qualified the total that way, e.g. "
             "\"/month\" rent). This formatting must be exact and consistent for every price you "
@@ -918,6 +1024,7 @@ def _build_system_prompt(area_knowledge_supplied: bool = False) -> str:
             "    {",
             "      \"source_message_id\": \"<copied exactly from the message's id>\",",
             "      \"is_property_listing\": true or false,",
+            "      \"is_requirement\": true or false,",
             "      \"skip_reason\": \"<short reason, or null if is_property_listing is true>\",",
             "      \"property_lines\": [\"<short identifying words for each property, per STEP 0>\"],",
             "      \"properties\": [",
@@ -949,7 +1056,9 @@ def _build_system_prompt(area_knowledge_supplied: bool = False) -> str:
             "order they were given, with \"source_message_id\" matching each message's id "
             "exactly. \"property_lines\" and \"properties\" always have the SAME number of "
             "entries in the same order; both are empty lists whenever is_property_listing is "
-            "false.",
+            "false. \"is_requirement\" is present on EVERY extraction — false on all of them "
+            "except the messages that are demands rather than offers (PART 1), and never true "
+            "at the same time as \"is_property_listing\".",
         ]
     )
 
@@ -1074,10 +1183,13 @@ def _resolve_message_id(returned_id: Optional[str], messages_by_id: dict) -> Opt
 
 def _merge_with_message_data(
     extractions: List[GLMPropertyExtraction], batch: List[WhatsAppChatMessage]
-) -> List[StructuredProperty]:
+) -> tuple[List[StructuredProperty], List[WhatsAppChatMessage]]:
+    """Returns (properties, messages the model identified as DEMANDS rather
+    than offers — see structure_batch_with_routing)."""
     messages_by_id = {message.message_id: message for message in batch}
     seen_ids = set()
     properties: List[StructuredProperty] = []
+    requirement_messages: List[WhatsAppChatMessage] = []
 
     for extraction in extractions:
         resolved_id = _resolve_message_id(extraction.source_message_id, messages_by_id)
@@ -1091,6 +1203,26 @@ def _merge_with_message_data(
         seen_ids.add(resolved_id)
 
         if not extraction.is_property_listing or not extraction.properties:
+            # A DEMAND, not an offer — re-routed to the requirement pipeline
+            # instead of being dropped here. Guarded on `not
+            # extraction.properties` (already true on this branch) so this can
+            # only ever claim a message that produced no property at all: if
+            # the model contradicts itself by flagging a demand AND returning
+            # listings, the listings win and nothing is re-routed.
+            if extraction.is_requirement:
+                step_logger.success(
+                    f"-> Re-routed to the requirement pipeline (this is a DEMAND, not a listing): "
+                    f"{extraction.skip_reason or 'no reason given'} — {message.text[:80]!r}"
+                )
+                # A copy, so the flag never mutates the message object the
+                # intake layer is still holding in its captured/qualified
+                # lists. It travels with the message purely so the
+                # requirement prompt knows this one was already read and
+                # judged by the listing stage.
+                requirement_messages.append(
+                    message.model_copy(update={"reclassified_as_requirement": True})
+                )
+                continue
             step_logger.info(
                 f"Skipped (not a listing): {extraction.skip_reason or 'no reason given'} — {message.text[:80]!r}"
             )
@@ -1130,7 +1262,7 @@ def _merge_with_message_data(
     for missing_id in set(messages_by_id) - seen_ids:
         step_logger.warn(f"GLM did not return anything for message id {missing_id!r} — dropped from this batch.")
 
-    return properties
+    return properties, requirement_messages
 
 
 def _to_structured_property(
@@ -1193,6 +1325,10 @@ def _to_structured_property(
     _fill_missing_area_name(structured, listing.area_match_reason)
     _rescue_wrongly_flagged_outsider(structured)
     _sanitize_and_parse_prices(structured)
+    if single_property_message:
+        # Before the derivation below, so a price recovered straight from the
+        # broker's own wording can still feed "total = area x rate".
+        _recover_total_price_from_text(structured)
     _fill_missing_price_or_area(structured)
     if single_property_message:
         _sanitize_listing_type(structured)
@@ -1390,10 +1526,6 @@ def _rescue_wrongly_flagged_outsider(prop: StructuredProperty) -> None:
         prop.area_name = named
 
 
-_CRORE = 10_000_000
-_LAKH = 100_000
-_THOUSAND = 1_000
-
 # Catches a per-unit rate the LLM mislabeled as the total price (e.g.
 # price_text ends up holding "1.25L per Vaar" instead of a real total) —
 # despite the PRICE FIELDS prompt rule telling it never to do this, a small
@@ -1457,20 +1589,8 @@ def _sanitize_listing_type(prop: StructuredProperty) -> None:
 # remembering to also fill the numeric field every time.
 _PRICE_CLEAN_RE = re.compile(r"[₹,]|rs\.?|inr", re.IGNORECASE)
 _PRICE_NUMBER_RE = re.compile(
-    r"(\d+(?:\.\d+)?)\s*(cr|crore|crores|l|lac|lacs|lakh|lakhs|k|thousand)?", re.IGNORECASE
+    r"(\d+(?:\.\d+)?)\s*(" + _SCALE_WORD_PATTERN + r")?", re.IGNORECASE
 )
-_SCALE_MULTIPLIERS = {
-    "cr": _CRORE,
-    "crore": _CRORE,
-    "crores": _CRORE,
-    "l": _LAKH,
-    "lac": _LAKH,
-    "lacs": _LAKH,
-    "lakh": _LAKH,
-    "lakhs": _LAKH,
-    "k": _THOUSAND,
-    "thousand": _THOUSAND,
-}
 
 
 def _parse_price_text_to_inr(text: str) -> Optional[float]:
@@ -1503,7 +1623,7 @@ _UNIT_PHRASE_PATTERNS = {
     "vigha": r"vigha",
 }
 _NUMBER_SCALE_PATTERN = (
-    r"(?P<num>\d[\d,]*(?:\.\d+)?)\s*(?P<scale>cr|crore|crores|lac|lacs|lakh|lakhs|thousand|l|k)?\b"
+    r"(?P<num>\d[\d,]*(?:\.\d+)?)\s*(?P<scale>" + _SCALE_WORD_PATTERN + r")?\b"
 )
 
 
@@ -1541,11 +1661,26 @@ def _extract_per_unit_rate_from_text(text: Optional[str], unit: Optional[str]) -
 # mandatory in this pattern (unlike _NUMBER_SCALE_PATTERN above) because a
 # bare-digit total is exactly the safe case this check must leave alone.
 _SCALED_TOTAL_PATTERN = (
-    r"(?P<num>\d[\d,]*(?:\.\d+)?)\s*(?P<scale>cr|crore|crores|lac|lacs|lakh|lakhs|thousand|l|k)\b"
+    r"(?P<num>\d[\d,]*(?:\.\d+)?)\s*(?P<scale>" + _SCALE_WORD_PATTERN + r")\b"
 )
-_SCALED_PRICE_TEXT_RE = re.compile(
-    r"(?:cr|crore|crores|lac|lacs|lakh|lakhs|thousand|l|k)\s*$", re.IGNORECASE
-)
+_SCALED_PRICE_TEXT_RE = re.compile(r"(?:" + _SCALE_WORD_PATTERN + r")\s*$", re.IGNORECASE)
+
+
+_NOT_A_PER_UNIT_PHRASE = r"(?!\s*(?:per\s+|/\s*)(?:" + "|".join(_UNIT_PHRASE_PATTERNS.values()) + r"))"
+# Compiled once at import rather than per call: this runs for every
+# property of every batch, and the pattern never varies.
+_SCALED_TOTAL_RE = re.compile(_SCALED_TOTAL_PATTERN + _NOT_A_PER_UNIT_PHRASE, re.IGNORECASE)
+
+
+def _scaled_total_matches(text: Optional[str]) -> List[re.Match]:
+    """The raw matches behind _find_total_price_candidates — same scan, but
+    keeping each hit's position, which the recovery net below needs to look
+    at the words sitting just before a figure."""
+    return list(_SCALED_TOTAL_RE.finditer(text or ""))
+
+
+def _scaled_match_to_inr(match: re.Match) -> float:
+    return float(match.group("num").replace(",", "")) * _SCALE_MULTIPLIERS[match.group("scale").lower()]
 
 
 def _find_total_price_candidates(text: Optional[str]) -> List[float]:
@@ -1555,16 +1690,7 @@ def _find_total_price_candidates(text: Optional[str]) -> List[float]:
     message. Empty when the message never states a scaled total at all
     (e.g. it only ever quotes a per-unit rate), which is exactly the signal
     _verify_total_price_against_text uses to catch a hallucinated total."""
-    if not text:
-        return []
-    pattern = re.compile(
-        _SCALED_TOTAL_PATTERN + r"(?!\s*(?:per\s+|/\s*)(?:" + "|".join(_UNIT_PHRASE_PATTERNS.values()) + r"))",
-        re.IGNORECASE,
-    )
-    return [
-        float(match.group("num").replace(",", "")) * _SCALE_MULTIPLIERS[match.group("scale").lower()]
-        for match in pattern.finditer(text)
-    ]
+    return [_scaled_match_to_inr(match) for match in _scaled_total_matches(text)]
 
 
 # Every plain number written in a message, Indian comma-grouping included
@@ -1696,6 +1822,94 @@ def _sanitize_and_parse_prices(prop: StructuredProperty) -> None:
         )
         prop.price_per_unit_amount_inr = grounded_rate
         prop.price_per_unit_text = f"{_format_compact_inr(grounded_rate)}/{prop.carpet_area_unit}"
+
+
+# Words a broker puts directly in FRONT of the property's total price.
+# "Rate - 95 Lk" is overwhelmingly the most common shape in these groups,
+# and "Rate"/"Dem"/"Ask" are labels for the TOTAL, not for a per-unit rate
+# — a genuine per-unit rate always names its unit after the figure, which
+# _NOT_A_PER_UNIT_PHRASE already excludes.
+_PRICE_LABEL_PATTERN = (
+    r"(?:rate|price|prize|pric|dem|demand|demnd|asking|ask|cost|amt|amount|deal|value|rs|"
+    r"rent|bhade|bhada|bhadu|kiraya)"
+)
+_LABELLED_TOTAL_RE = re.compile(
+    r"\b" + _PRICE_LABEL_PATTERN + r"\b[^A-Za-z0-9\n]{0,8}" + _SCALED_TOTAL_PATTERN + _NOT_A_PER_UNIT_PHRASE,
+    re.IGNORECASE,
+)
+
+# A scaled figure sitting right after one of these is money, but not the
+# property's price — a deposit, a fee, a loan, a running cost. Only ever
+# consulted for the unlabelled fallback below, where there is no "Rate:"
+# style label to say what the number is.
+_NON_PRICE_CONTEXT_RE = re.compile(
+    r"(?:maintenance|maintainance|maintanance|deposit|brokerage|brokrage|commission|loan|emi|"
+    r"token|advance|tax|gst|charge|charges|fee|fees|salary|income|stamp|registration)"
+    r"[^A-Za-z0-9]{0,12}$",
+    re.IGNORECASE,
+)
+_NON_PRICE_LOOKBEHIND_CHARS = 28
+
+
+def _recover_total_price_from_text(prop: StructuredProperty) -> None:
+    """Last-resort, text-grounded fill for a property that ended up with NO
+    total price at all — run only for a single-property message (see
+    _to_structured_property), for exactly the same reason
+    _sanitize_listing_type is: in a bulk listing, message_text covers every
+    property in it, so a figure found anywhere in the text could belong to a
+    completely different line.
+
+    This is the other half of the "Rate - 95 Lk" fix. Teaching
+    price_scales.py the shorthand stops _verify_total_price_against_text
+    from wrongly WIPING a price the LLM read correctly; this covers the
+    remaining case where the LLM itself never returned one — a small model
+    reading "Rate - 95 Lk" and not recognising "Lk" as a money word at all,
+    so Price shows "—" even though the broker plainly wrote it.
+
+    Strictly additive and strictly grounded: it only ever runs when
+    price_text AND price_amount_inr are both empty, and the figure it fills
+    in is one the broker literally typed. Two tiers, most confident first:
+
+      1. A figure introduced by an explicit price label ("Rate - 95 Lk",
+         "Dem 1.25cr", "Price: 45 lakh"). The label is what makes this
+         unambiguous, so it is taken whenever it is found.
+      2. Failing that, a message that states exactly ONE scaled money
+         figure anywhere in it, and does not present that figure as a
+         deposit/brokerage/maintenance/loan amount. One figure, one
+         property, nothing else it could be. Two or more candidates is
+         genuine ambiguity and is left alone — a blank Price is better
+         than a wrong one.
+    """
+    if prop.price_amount_inr is not None or prop.price_text:
+        return
+    text = prop.message_text
+    if not text:
+        return
+
+    labelled = _LABELLED_TOTAL_RE.search(text)
+    if labelled is not None:
+        amount = _scaled_match_to_inr(labelled)
+        source = f"the labelled price {labelled.group(0).strip()!r}"
+    else:
+        candidates = _scaled_total_matches(text)
+        if len(candidates) != 1:
+            return
+        only = candidates[0]
+        before = text[max(0, only.start() - _NON_PRICE_LOOKBEHIND_CHARS) : only.start()]
+        if _NON_PRICE_CONTEXT_RE.search(before):
+            return
+        amount = _scaled_match_to_inr(only)
+        source = f"the single money figure {only.group(0).strip()!r} stated in the message"
+
+    if amount <= 0:
+        return
+    prop.price_amount_inr = amount
+    prop.price_text = _format_compact_inr(amount)
+    step_logger.info(
+        f"Property from message {prop.source_message_id!r} came back with no price at all, but the "
+        f"raw message states one — filled it as {prop.price_text} ({amount:,.0f} INR) from {source}, "
+        "so a price the broker actually wrote isn't shown as blank."
+    )
 
 
 def _format_compact_inr(amount: float) -> str:

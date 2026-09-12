@@ -38,7 +38,7 @@ from typing import Dict, List, NamedTuple, Optional
 
 from Middleware import step_logger
 from Service.WhatsAppDataFetchingService import whatsapp_connection_manager
-from Service.WhatsAppInquiryHandlingService import outbound_messenger
+from Service.WhatsAppInquiryHandlingService import known_client_cache, outbound_messenger
 from Service.WhatsAppInquiryHandlingService.phone_utils import normalize_phone
 
 _OTP_TTL_SECONDS = 5 * 60
@@ -51,6 +51,28 @@ _MAX_SENDS_PER_WINDOW = 5
 _MAX_ATTEMPTS = 5
 
 _VERIFICATION_TTL_SECONDS = 30 * 24 * 60 * 60
+
+# Skip the code entirely for a number we already hold a client record for.
+#
+# The reasoning FOR it: someone whose number is already in our books has,
+# by definition, already reached us on WhatsApp — we have messaged that
+# number and they have replied. Asking them to prove ownership of it again
+# every time they open the site is friction paid by the people we most want
+# to hear from.
+#
+# The cost, stated plainly because it is real: this is the one place the
+# guarantee in this module's docstring is deliberately relaxed. For a
+# number that is ALREADY a client, knowing the number becomes enough to be
+# treated as its owner — so someone who knows a client's phone number could
+# read back and overwrite that client's saved requirements without ever
+# holding the phone. Every OTHER number is unaffected and still has to pass
+# a code, which means the exposure is exactly the set of people already in
+# the client table and nothing wider.
+#
+# It is a single flag rather than a scattering of conditions so that
+# reversing the decision is one line: set this to False and every number
+# goes back to being sent a code, with no other change anywhere.
+AUTO_CONFIRM_KNOWN_CLIENTS = True
 
 # The code leads the message on purpose: a WhatsApp notification preview
 # shows the first line, so this is readable without opening the chat —
@@ -79,6 +101,13 @@ class _VerificationEntry(NamedTuple):
 class OtpRequestResult(NamedTuple):
     """`status` is what the browser branches on:
 
+      - "verified"    -> no code needed; this number is confirmed as of
+                         right now and `token` is the proof. Two things
+                         produce it, both described on request_otp: the
+                         caller already held a live verification for this
+                         same number, or the number is already one of our
+                         clients. The dialog never gets as far as showing
+                         its boxes.
       - "sent"        -> the dialog opens and asks for the code.
       - "invalid"     -> the number isn't a phone number at all.
       - "cooldown"    -> a code was just sent; the existing one still works.
@@ -95,6 +124,9 @@ class OtpRequestResult(NamedTuple):
     status: str
     phone: Optional[str] = None
     retry_after_seconds: int = 0
+    # Only ever set alongside status "verified" — the same token
+    # verify_otp would have minted, reached without a code.
+    token: Optional[str] = None
 
 
 # Ceilings on the three tables below, with a sweep that runs on the way
@@ -157,16 +189,51 @@ def _sweep_locked(now: float) -> None:
             del _verifications[token]
 
 
-def request_otp(raw_phone: str) -> OtpRequestResult:
+def request_otp(raw_phone: str, prior_token: Optional[str] = None) -> OtpRequestResult:
     """Mints (or reuses) a code for `raw_phone` and dispatches it over
     WhatsApp. Returns as soon as the code is stored — the send itself runs
     on a daemon thread, because the visitor is staring at a dialog waiting
     for it to open and a WhatsApp round trip is the one slow part of this.
     Whether a connection exists at all is an in-memory check, so the
-    "unavailable" answer above is still instant and honest."""
+    "unavailable" answer above is still instant and honest.
+
+    Two shortcuts come FIRST, and both answer "verified" without sending
+    anything at all. They are the difference between confirming a number
+    once and confirming it every time somebody taps the button:
+
+      1. `prior_token` — a verification this same browser already holds. If
+         it resolves to this very number, there is nothing left to prove:
+         the browser passed a code for it and the proof has not expired.
+         Re-typing a number you just confirmed, on a site that already has
+         your proof in hand, must never cost a second WhatsApp message.
+         This is a pure in-memory check against a bearer token only that
+         browser has, so it can neither be spoofed by typing a number nor
+         cost anything to serve.
+
+      2. A number that is ALREADY one of our clients (see
+         AUTO_CONFIRM_KNOWN_CLIENTS above for what that trades away, and
+         known_client_cache.py for why asking cannot become a database
+         bill).
+
+    Everything below them is unchanged: same per-number cooldown, same
+    hourly send cap, same reused-while-alive code. Those limits are what
+    stop this endpoint being used to send messages to a number somebody
+    else owns, and nothing here weakens them — the shortcuts REMOVE sends
+    rather than adding any.
+    """
     phone = normalize_phone(raw_phone)
     if phone is None:
         return OtpRequestResult(status="invalid")
+
+    # Free, and the single most common repeat case: the visitor changed
+    # their mind about the number, then changed it back.
+    if prior_token and resolve_verification(prior_token) == phone:
+        step_logger.info(f"[OTP] {phone}: already verified by this browser — no code needed.")
+        return OtpRequestResult(status="verified", phone=phone, token=_mint_verification(phone))
+
+    if AUTO_CONFIRM_KNOWN_CLIENTS and known_client_cache.is_known_client(phone):
+        step_logger.info(f"[OTP] {phone}: already one of our clients — confirmed without a code.")
+        return OtpRequestResult(status="verified", phone=phone, token=_mint_verification(phone))
 
     if whatsapp_connection_manager.get_sender_client(prefer_role="inquiry") is None:
         step_logger.error(f"[OTP] Cannot verify {phone}: no connected WhatsApp number to send from.")
@@ -239,10 +306,24 @@ def verify_otp(raw_phone: str, code: str) -> Optional[str]:
         # Correct: the code is spent immediately, so one code can never
         # mint two verification tokens.
         del _otps[phone]
-        token = secrets.token_urlsafe(24)
-        _verifications[token] = _VerificationEntry(phone=phone, expires_at=now + _VERIFICATION_TTL_SECONDS)
 
+    token = _mint_verification(phone)
     step_logger.success(f"[OTP] {phone}: number verified on the public site.")
+    return token
+
+
+def _mint_verification(phone: str) -> str:
+    """A fresh 30-day proof that this browser owns `phone`.
+
+    The one place a verification token is ever created, so the three ways
+    of arriving at one — passing a code, presenting an unexpired earlier
+    proof, and being a known client — cannot drift apart in what they hand
+    back. Takes the lock itself, so callers must not already hold it."""
+    token = secrets.token_urlsafe(24)
+    now = time.monotonic()
+    with _lock:
+        _sweep_locked(now)
+        _verifications[token] = _VerificationEntry(phone=phone, expires_at=now + _VERIFICATION_TTL_SECONDS)
     return token
 
 

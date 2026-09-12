@@ -1,11 +1,19 @@
 """LLM-driven structuring stage for broker REQUIREMENTS — the demand-side
 counterpart of property_structurer.py.
 
-It turns a batch of up to 10 free-form WhatsApp messages that the cheap
-string filter (Service/WhatsAppDataFetchingService/requirement_filter_service.py)
-already judged to be requirements into StructuredRequirement records, in a
-single prompt per batch, using the same GLM model and the same streamed
-transport/retry policy as the property stage (see glm_client.py).
+It turns a batch of up to 10 free-form WhatsApp messages already judged to
+be requirements into StructuredRequirement records, in a single prompt per
+batch, using the same GLM model and the same streamed transport/retry policy
+as the property stage (see glm_client.py).
+
+Two things feed that batch. Most messages come from the cheap string filter
+(Service/WhatsAppDataFetchingService/requirement_filter_service.py), which
+matches a demand by its wording. The rest are messages the PROPERTY stage
+read and re-routed here because they turned out to be demands phrased
+without any of those trigger words ("I want to look for 3bhk flat in
+vesu") — those arrive carrying `reclassified_as_requirement`, and the
+prompt is told so, because they have already been judged once and should
+not be bounced back out into nowhere.
 
 Deliberately much smaller than the property stage, because the product
 decision behind this feature is that a requirement needs far less machinery
@@ -46,28 +54,15 @@ from Agent.WhatsAppDataFetchingAgent.glm_requirement_schema import (
     GLMRequirementItem,
     GLMRequirementResponse,
 )
+from Agent.WhatsAppDataFetchingAgent.price_scales import (
+    SCALE_MULTIPLIERS as _SCALE_MULTIPLIERS,
+    SCALE_WORD_PATTERN as _SCALE_WORD_PATTERN,
+)
 from Middleware import step_logger
 from Model.WhatsAppDataFetchingModel.broker_requirement import StructuredRequirement
 from Model.WhatsAppDataFetchingModel.whatsapp_message import WhatsAppChatMessage
 
 _CODE_FENCE_RE = re.compile(r"^```(?:json)?\s*|\s*```$", re.IGNORECASE)
-
-_CRORE = 10_000_000
-_LAKH = 100_000
-_THOUSAND = 1_000
-
-_SCALE_MULTIPLIERS = {
-    "cr": _CRORE,
-    "crore": _CRORE,
-    "crores": _CRORE,
-    "l": _LAKH,
-    "lac": _LAKH,
-    "lacs": _LAKH,
-    "lakh": _LAKH,
-    "lakhs": _LAKH,
-    "k": _THOUSAND,
-    "thousand": _THOUSAND,
-}
 
 _BUDGET_CLEAN_RE = re.compile(r"[₹,]|rs\.?|inr", re.IGNORECASE)
 # "50L and above" / "under 50L" — one figure, but only one END. Used solely
@@ -75,7 +70,7 @@ _BUDGET_CLEAN_RE = re.compile(r"[₹,]|rs\.?|inr", re.IGNORECASE)
 _OPEN_UPPER_RE = re.compile(r"\+|above|onwards?|plus|minimum|min\b|upar|thi\s*upar|se\s*upar", re.IGNORECASE)
 _OPEN_LOWER_RE = re.compile(r"under|below|up\s*to|upto|within|maximum|max\b|sudhi", re.IGNORECASE)
 _BUDGET_NUMBER_RE = re.compile(
-    r"(\d+(?:\.\d+)?)\s*(cr|crore|crores|l|lac|lacs|lakh|lakhs|k|thousand)?", re.IGNORECASE
+    r"(\d+(?:\.\d+)?)\s*(" + _SCALE_WORD_PATTERN + r")?", re.IGNORECASE
 )
 
 # Same deterministic Rent/Sale safety net the property stage uses, and for
@@ -257,9 +252,17 @@ def _build_user_prompt(batch: List[WhatsAppChatMessage]) -> str:
     model copying the whole header into source_message_id, which matched no
     message and silently discarded the batch."""
     lines = [
-        "Every message below has already been flagged as looking like a REQUIREMENT by a keyword filter. That "
-        "filter is deliberately loose, so verify each one yourself in PART 1 — a message that is actually a "
-        "property being offered must come back with is_requirement false, not be forced into a requirement.",
+        "Every message below has already been flagged as looking like a REQUIREMENT before reaching you. Most "
+        "were flagged by a keyword filter, which is deliberately loose — so verify those yourself in PART 1: a "
+        "message that is actually a property being offered must come back with is_requirement false, not be "
+        "forced into a requirement.",
+        "",
+        "A message whose block carries a \"pre-classified: DEMAND\" line is different. That one has already "
+        "been read in full by the listing-extraction stage, which concluded it is someone ASKING for a "
+        "property rather than offering one, and re-routed it here on that basis. Treat it as a requirement "
+        "and extract it: set is_requirement true and fill in whatever it states. Only return is_requirement "
+        "false for such a message if its text plainly OFFERS a specific property (a property being advertised "
+        "with its price and contact), which would mean the earlier stage misread it.",
         "",
         "Messages: each one is delimited below. Everything after its \"text:\" line, up to the <<<END MESSAGE>>> "
         "marker, is that single message's raw text with its original line breaks intact — those lines/bullets "
@@ -274,6 +277,8 @@ def _build_user_prompt(batch: List[WhatsAppChatMessage]) -> str:
     for message in batch:
         lines.append(f"<<<MESSAGE id={message.message_id}>>>")
         lines.append(f"group: {message.chat_name}")
+        if message.reclassified_as_requirement:
+            lines.append("pre-classified: DEMAND (already read and judged by the listing-extraction stage)")
         lines.append("text:")
         lines.append(message.text.strip())
         lines.append("<<<END MESSAGE>>>")

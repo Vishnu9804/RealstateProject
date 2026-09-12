@@ -34,14 +34,24 @@ def request_code(body: OtpRequest) -> OtpRequestResponse:
     "unavailable" (no linked WhatsApp connection to send from). That is not
     an oversight: the browser needs to tell "we couldn't send you a code, so
     carry on without verifying" apart from "something broke", and only a
-    successful response with a status in it can say that."""
-    result = otp_service.request_otp(body.phone)
+    successful response with a status in it can say that.
+
+    It also, sometimes, sends no code at all and answers "verified" — when
+    the caller's own earlier verification already covers this number, or
+    when the number is one of our clients. Both are decided in
+    otp_service.request_otp; from here they are just another status, and
+    the token that comes back is the same one /confirm would have issued."""
+    result = otp_service.request_otp(body.phone, body.verification_token)
     if result.status == "invalid":
         raise HTTPException(status_code=400, detail="That doesn't look like a valid WhatsApp number.")
     return OtpRequestResponse(
         status=result.status,
         phone=result.phone,
         retry_after_seconds=result.retry_after_seconds,
+        verification_token=result.token,
+        # Only meaningful next to a token, and the browser only reads it
+        # then — it is the TTL it should expire its stored copy on.
+        expires_in_seconds=otp_service.verification_ttl_seconds() if result.token else 0,
     )
 
 

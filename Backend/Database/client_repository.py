@@ -95,6 +95,24 @@ def get_all_clients(limit: int) -> List[ClientRecord]:
     return [_to_pydantic(row) for row in rows]
 
 
+def client_exists(phone: str) -> bool:
+    """Whether a client row exists for this E.164 number — nothing more.
+
+    Deliberately NOT get_client_by_phone(...) is not None. This answers a
+    question asked from a PUBLIC endpoint (the landing site's number
+    confirmation, via Service/WhatsAppInquiryHandlingService/
+    known_client_cache.py), so it is the one client read that must stay as
+    close to free as a query can be on a database billed by compute-hour
+    and by the bytes it sends: selecting the primary key itself and nothing
+    else is answered from the PK index alone, never touching the heap, and
+    puts a handful of bytes on the wire instead of a whole client record —
+    name, email, requirements and all — that the caller would immediately
+    throw away.
+    """
+    with get_client_session() as session:
+        return session.execute(select(ClientRow.phone).where(ClientRow.phone == phone).limit(1)).first() is not None
+
+
 def get_client_count() -> int:
     with get_client_session() as session:
         return session.execute(select(func.count()).select_from(ClientRow)).scalar_one()

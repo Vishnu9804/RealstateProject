@@ -1,8 +1,8 @@
-import { useEffect, useState, type FocusEvent, type FormEvent } from "react";
+import { useEffect, useRef, useState, type FocusEvent, type FormEvent } from "react";
 import { landingApi } from "../api/landingApi";
 import { usePhoneVerification } from "../hooks/usePhoneVerification";
 import { isPlausiblePhone, normalizeWhatsApp } from "../lib/format";
-import { IconAlert, IconArrowRight, IconCheck } from "./Icons";
+import { IconAlert, IconArrowRight, IconCheck, IconEdit } from "./Icons";
 import PhoneVerifyDialog from "./PhoneVerifyDialog";
 
 /**
@@ -56,13 +56,21 @@ export default function LeadForm({
   // they confirm): this only drives the button's pulse animation, and
   // clears the instant that one play finishes.
   const [confirmPulse, setConfirmPulse] = useState(false);
+  // "Change number" was pressed — the input opens back up. Says nothing
+  // about whether the number is confirmed; see the flags below.
+  const [editingPhone, setEditingPhone] = useState(false);
 
+  const phoneRef = useRef<HTMLInputElement>(null);
   const verification = usePhoneVerification();
 
-  const phoneLocked = verification.isVerified(phone);
+  // Same three-way split as the requirements form, and for the same reason:
+  // "the field is editable" and "we know whose number this is" are
+  // different facts, and only the second one may gate a submission.
+  const phoneEstablished = verification.isVerified(phone);
+  const phoneLocked = phoneEstablished && !editingPhone;
   // See usePhoneVerification: "bypassed" means we had no way to send a code
   // at all, and this form goes back to behaving exactly as it always did.
-  const phoneSettled = phoneLocked || verification.bypassed;
+  const phoneSettled = phoneEstablished || verification.bypassed;
 
   // A number confirmed anywhere else on the site is already ours — this
   // form should never ask for it a second time.
@@ -80,7 +88,26 @@ export default function LeadForm({
       return;
     }
     setConfirmHint(false);
+    // Already proved, and the proof has not expired: nothing to send, and
+    // nothing to ask the server either. See the requirements form's
+    // beginConfirm for why this branch is worth having.
+    if (verification.isVerified(phone)) {
+      // Back to the canonical E.164 form the token was minted for, as a
+      // real confirmation would leave it.
+      if (verification.verified) setPhone(verification.verified.phone);
+      setEditingPhone(false);
+      return;
+    }
     verification.startVerification(phone.trim());
+  }
+
+  function beginEditPhone() {
+    setEditingPhone(true);
+    setConfirmHint(false);
+    window.setTimeout(() => {
+      phoneRef.current?.focus();
+      phoneRef.current?.select();
+    }, 0);
   }
 
   /** Moving on to the name with a plausible-but-unconfirmed number bounces
@@ -115,7 +142,7 @@ export default function LeadForm({
         // When this resolves server-side it REPLACES the number above, so
         // the lead can only ever be filed against a number this browser
         // proved it owns.
-        verification_token: phoneLocked ? verification.verified?.token ?? null : null,
+        verification_token: phoneEstablished ? verification.verified?.token ?? null : null,
       });
       if (result?.status === "duplicate") setAlreadySentMessage(result.message ?? null);
       setDone(true);
@@ -149,14 +176,17 @@ export default function LeadForm({
       {verification.pendingPhone !== null && (
         <PhoneVerifyDialog
           phone={verification.pendingPhone}
+          priorToken={verification.verified?.token}
           onVerified={(verifiedPhone, token, expiresInSeconds) => {
             setPhone(verifiedPhone);
             setConfirmHint(false);
+            setEditingPhone(false);
             verification.completeVerification(verifiedPhone, token, expiresInSeconds);
           }}
           onUnavailable={() => {
             verification.markUnavailable();
             setConfirmHint(false);
+            setEditingPhone(false);
           }}
           onClose={verification.cancelVerification}
         />
@@ -166,9 +196,13 @@ export default function LeadForm({
         <label className="field__label" htmlFor="lead-phone">
           WhatsApp number
         </label>
-        <div className={phoneLocked ? "field__row" : "field__row field__row--action"}>
+        {/* The slot next to the number is never empty: Confirm while it is
+            open, "Change number" once it is settled — so a confirmed number
+            never looks like one there is no way back from. */}
+        <div className={`field__row field__row--action${phoneLocked ? " field__row--change" : ""}`}>
           <input
             id="lead-phone"
+            ref={phoneRef}
             name="whatsapp"
             // "tel" rather than "number": it brings up the phone keypad on
             // mobile, and unlike a number input it never strips a leading "+"
@@ -184,7 +218,12 @@ export default function LeadForm({
             aria-describedby={phoneInvalid ? "lead-phone-error" : undefined}
             maxLength={24}
           />
-          {!phoneLocked && (
+          {phoneLocked ? (
+            <button type="button" className="btn btn--ghost field__action field__action--change" onClick={beginEditPhone}>
+              <IconEdit size={15} />
+              Change number
+            </button>
+          ) : (
             <button
               type="button"
               className={`btn field__action ${isPlausiblePhone(phone) ? "btn--primary" : "btn--ghost"}${
@@ -204,10 +243,16 @@ export default function LeadForm({
           <span className="field__error" id="lead-phone-error">
             That doesn't look complete — please include all 10 digits.
           </span>
+        ) : confirmHint ? (
+          <span className="field__error">
+            Almost there — tap Confirm and enter the 4-digit code we'll send to this number on WhatsApp.
+          </span>
         ) : (
-          confirmHint && (
-            <span className="field__error">
-              Almost there — tap Confirm and enter the 4-digit code we'll send to this number on WhatsApp.
+          editingPhone && (
+            <span className="field__hint">
+              {phoneEstablished
+                ? "This is still your confirmed number — tap Confirm to keep it, no new code needed."
+                : "Tap Confirm when you're done. If you go back to the number you already confirmed, we won't send another code."}
             </span>
           )
         )}

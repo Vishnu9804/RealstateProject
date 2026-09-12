@@ -1,28 +1,29 @@
 """Owns the data-fetching pipelines' message intake — Stage 0, before
 qualification and buffering, for BOTH of them: property listings and broker
 requirements. Connection lifecycle (pairing, multiple numbers, which
-groups/numbers are selected for which of the two) lives in
+groups/numbers are selected to feed this combined pipeline) lives in
 whatsapp_connection_manager.py; this module registers itself as that
 manager's intake handler (see `start_agent_in_background`) and gets called
-with every message either selection claims, told which one claimed it.
+with every message the single property/requirement selection claims.
 
 The routing rule
 ----------------
 Exactly one of three things happens to a claimed message, decided here in
-plain string matching before any LLM call:
+plain string matching before any LLM call — there is only ONE selection of
+chats (see whatsapp_connection_manager.py), so which of the two outcomes
+below a message gets is decided entirely by its own content, not by which
+list it was picked into:
 
-  1. It looks like a REQUIREMENT (requirement_filter_service) -> it is a
-     requirement message, full stop. It goes to the requirement buffer if
-     its chat is in the Requirement selection, and nowhere at all if it
-     isn't. Either way it is NEVER structured as a property: not buffered
-     for the property batch, not shown to the property prompt, not
-     area-matched. That hard split is the product
-     decision this whole feature rests on — "requirement" and "listing" are
-     different things and a message is one or the other, never both.
+  1. It looks like a REQUIREMENT (requirement_filter_service) -> it goes to
+     the requirement buffer. It is NEVER structured as a property: not
+     buffered for the property batch, not shown to the property prompt, not
+     area-matched. That hard split is the product decision this whole
+     feature rests on — "requirement" and "listing" are different things
+     and a message is one or the other, never both.
 
-  2. Otherwise, if its chat is in the Property selection and it passes the
-     broad property-relevance filter (area_filter_service) -> the property
-     buffer, exactly as before this feature existed.
+  2. Otherwise, if it passes the broad property-relevance filter
+     (area_filter_service) -> the property buffer, exactly as before this
+     feature existed.
 
   3. Otherwise it is dropped.
 
@@ -30,6 +31,17 @@ Because rule 1 outranks rule 2, requirement_filter_service is deliberately
 built for PRECISION rather than recall — a false positive there costs a real
 listing. See its own module docstring for the guards that buy that
 precision.
+
+The price of that precision is that a demand phrased without one of its
+trigger words ("I want to look for 3bhk flat in vesu") passes rule 1 and
+lands in the property pipeline. There is a second, LLM-driven chance to
+catch that: the property structuring stage classifies every message as an
+OFFER or a DEMAND (property_structurer's PART 1 is_requirement) and hands
+the demands back here via `enqueue_requirement_messages`, which puts them
+into the very same requirement buffer rule 1 feeds. So the hard split above
+still holds exactly — a message is a requirement or a listing, never both —
+it is just decided by meaning rather than by wording when the wording alone
+was not enough.
 
 The two buffers are separate instances of the same MessageBufferService with
 the same settings, so each pipeline gets its own independent counter and its
@@ -145,13 +157,10 @@ def get_qualified_messages(limit: int = 100) -> List[WhatsAppChatMessage]:
     return list(_qualified_messages[-limit:])
 
 
-def handle_intake_message(
-    message: WhatsAppChatMessage, property_selected: bool, requirement_selected: bool
-) -> None:
-    """Called by whatsapp_connection_manager for every message either the
-    Property or the Requirement selection claims, with the two flags saying
-    which one(s) did. See the module docstring for the three-way routing
-    rule this implements."""
+def handle_intake_message(message: WhatsAppChatMessage) -> None:
+    """Called by whatsapp_connection_manager for every message the
+    property/requirement selection claims. See the module docstring for the
+    three-way routing rule this implements."""
     _captured_messages.append(message)
     if len(_captured_messages) > _MAX_STORED_MESSAGES:
         del _captured_messages[: len(_captured_messages) - _MAX_STORED_MESSAGES]
@@ -159,13 +168,7 @@ def handle_intake_message(
 
     requirement_signal = requirement_filter_service.matched_signal(message.text)
     if requirement_signal is not None:
-        _handle_requirement_candidate(message, requirement_signal, requirement_selected)
-        return
-
-    if not property_selected:
-        step_logger.info(
-            "-> Filtered out: this chat is only being watched for requirements, and this message is not one"
-        )
+        _handle_requirement_candidate(message, requirement_signal)
         return
 
     if area_filter_service.is_qualified(message.text):
@@ -179,27 +182,39 @@ def handle_intake_message(
         step_logger.info("-> Filtered out: nothing property-related detected")
 
 
-def _handle_requirement_candidate(
-    message: WhatsAppChatMessage, requirement_signal: str, requirement_selected: bool
-) -> None:
-    """A message the requirement filter matched. It is a requirement, not a
-    property, either way — the only question left is whether this chat is
-    one the operator asked to collect requirements from.
+def enqueue_requirement_messages(messages: List[WhatsAppChatMessage]) -> None:
+    """Second, later entrance to the requirement buffer, for messages the
+    PROPERTY structuring stage read and found to be DEMANDS rather than
+    offers (see property_pipeline_service._forward_to_requirement_pipeline).
 
-    A message that is NOT (chat isn't in the Requirement selection) is
-    dropped rather than falling back to the property pipeline. That is the
-    point of the split: quietly filing "3 BHK chahiye in Vesu" as a listing
-    for sale would put a demand into the supply table, which is worse than
-    not capturing it at all. The log line names the exact word that decided
-    it, so a chat that should have been selected for Requirement is obvious
-    from the terminal rather than a mystery."""
-    if not requirement_selected:
-        step_logger.info(
-            f"-> Filtered out: reads as a requirement ({requirement_signal!r}), so it is not stored as a "
-            "property — and this chat is not selected under Requirement, so there is nowhere to send it. "
-            "Select this chat in the Connection page's Requirement section to start capturing these."
-        )
+    Rule 1 in the module docstring above catches a demand by its wording,
+    before any LLM call, and is deliberately built for precision — so a
+    demand phrased without one of its trigger words ("I want to look for
+    3bhk flat in vesu") passes straight through it into the property
+    pipeline. This is where the LLM's own reading of that message sends it
+    back to the right place. The buffer, its batch size and its window are
+    exactly the same ones rule 1 feeds; a re-routed message is simply a
+    later arrival into the same batch, so it costs no extra API call of its
+    own.
+
+    The direct call when no buffer exists is for the case where structuring
+    is driven without start_agent_in_background having run (a script, a
+    test): a re-routed message must not silently vanish just because the
+    intake layer was never started."""
+    if not messages:
         return
+    if _requirement_buffer is None:
+        requirement_pipeline_service.handle_batch_ready(list(messages))
+        return
+    for message in messages:
+        _requirement_buffer.add_message(message)
+
+
+def _handle_requirement_candidate(message: WhatsAppChatMessage, requirement_signal: str) -> None:
+    """A message the requirement filter matched. It is a requirement, not a
+    property — this chat is watched for both, and content alone decided
+    which one this message is. The log line names the exact word that
+    decided it, for easy debugging from the terminal."""
     step_logger.success(
         f"-> Qualified as a requirement ({requirement_signal!r}): forwarded to the requirement pipeline"
     )

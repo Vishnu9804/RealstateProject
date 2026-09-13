@@ -1,13 +1,14 @@
 """LLM-driven structuring stage for broker REQUIREMENTS — the demand-side
-counterpart of property_structurer.py.
+counterpart of Agent/WhatsAppDataFetchingAgent/property_structurer.py.
 
 It turns a batch of up to 10 free-form WhatsApp messages already judged to
 be requirements into StructuredRequirement records, in a single prompt per
 batch, using the same GLM model and the same streamed transport/retry policy
-as the property stage (see glm_client.py).
+as the property stage (see Agent/WhatsAppDataFetchingAgent/glm_client.py —
+reused, not copied).
 
 Two things feed that batch. Most messages come from the cheap string filter
-(Service/WhatsAppDataFetchingService/requirement_filter_service.py), which
+(Service/BrokerRequirementService/requirement_filter_service.py), which
 matches a demand by its wording. The rest are messages the PROPERTY stage
 read and re-routed here because they turned out to be demands phrased
 without any of those trigger words ("I want to look for 3bhk flat in
@@ -24,9 +25,11 @@ than a listing does:
     every area it names is copied as written. That removes the whole STEP A
     area-recall section (the single most expensive part of the property
     prompt) and its cache.
-  - NO duplicate detection and NO embeddings. Two brokers asking for the
-    same thing are two real requirements, not a duplicate to resolve.
+  - NO embeddings and NO semantic duplicate detection here. Exact re-posts
+    are dropped before this stage runs (see requirement_pipeline_service).
   - NO review queue. There is no Main/Outsider/Needs-review concept here.
+  - ONLY the fields something downstream uses (see GLMRequirementItem's
+    docstring). Every other stated detail goes into `description`.
 
 What IS kept, because both were hard-won on the property side:
   - One message can carry MANY requirements, and each becomes its own
@@ -35,6 +38,12 @@ What IS kept, because both were hard-won on the property side:
   - Rent vs Sale is decided reason-first, verdict-second, and defaults to
     "Sale" when the message carries no explicit rental signal — plus a
     deterministic safety net below for the single-requirement case.
+
+The two fields a requirement is FILTERED and MATCHED on by name — type and
+BHK — are then passed through requirement_normalization.py, so the Broker
+Requirements page's filters and the matching type gate see one predictable
+vocabulary, and a type/BHK the LLM left empty is recovered from words
+literally present in that requirement's own text.
 
 Never raises: a batch that still fails after retries is logged and skipped
 rather than crashing the caller.
@@ -48,18 +57,19 @@ from typing import List, Optional
 
 from pydantic import ValidationError
 
-from Agent.WhatsAppDataFetchingAgent import glm_client
-from Agent.WhatsAppDataFetchingAgent.glm_requirement_schema import (
+from Agent.BrokerRequirementAgent import requirement_normalization
+from Agent.BrokerRequirementAgent.glm_requirement_schema import (
     GLMRequirementExtraction,
     GLMRequirementItem,
     GLMRequirementResponse,
 )
+from Agent.WhatsAppDataFetchingAgent import glm_client
 from Agent.WhatsAppDataFetchingAgent.price_scales import (
     SCALE_MULTIPLIERS as _SCALE_MULTIPLIERS,
     SCALE_WORD_PATTERN as _SCALE_WORD_PATTERN,
 )
 from Middleware import step_logger
-from Model.WhatsAppDataFetchingModel.broker_requirement import StructuredRequirement
+from Model.BrokerRequirementModel.broker_requirement import StructuredRequirement
 from Model.WhatsAppDataFetchingModel.whatsapp_message import WhatsAppChatMessage
 
 _CODE_FENCE_RE = re.compile(r"^```(?:json)?\s*|\s*```$", re.IGNORECASE)
@@ -108,11 +118,13 @@ def structure_batch(batch: List[WhatsAppChatMessage]) -> List[StructuredRequirem
 
 
 def _build_system_prompt() -> str:
+    type_names = ", ".join(f'"{name}"' for name in requirement_normalization.REQUIREMENT_TYPES)
     return "\n".join(
         [
             "You extract structured REQUIREMENTS (property DEMANDS) from raw WhatsApp messages sent in Indian "
             "real-estate broker groups, mostly around Surat, Gujarat. Messages are written informally in "
-            "English, Hindi, Gujarati, or a mix, often transliterated into the Latin alphabet.",
+            "English, Hindi, Gujarati, or a mix, often transliterated into the Latin alphabet, often in CAPITALS, "
+            "with emojis and typos (\"ARJUNT\" = urgent, \"BUGGET\" = budget, \"ARIA\" = area).",
             "",
             "A REQUIREMENT is someone LOOKING FOR a property — to buy or to rent. It is the opposite of a "
             "listing: a listing OFFERS a property, a requirement ASKS for one. Typical requirement wording "
@@ -139,21 +151,30 @@ def _build_system_prompt() -> str:
             "=====================================================================",
             "PART 2 — COUNT THE REQUIREMENTS BEFORE EXTRACTING ANY OF THEM",
             "=====================================================================",
-            "One message very often carries SEVERAL separate requirements — a broker forwarding three clients' "
-            "needs in one text, one per line or bullet.",
+            "One message very often carries SEVERAL separate requirements — a broker forwarding several clients' "
+            "needs in one text, as numbered items (1️⃣ 2️⃣, 1. 2.), emoji/bullet blocks (🔶, •, *) or separate "
+            "paragraphs.",
             "",
             "STEP 0 (do this FIRST, before extracting any field): walk the message from top to bottom and write "
             'a SHORT snippet for every distinct requirement you meet into "requirement_lines". Filter nothing, '
-            "merge nothing, skip nothing at this step — just inventory them. A handful of words per entry is "
-            'enough to tell them apart (e.g. "3BHK Vesu 80L", "Shop VIP Road rent").',
+            "merge nothing, skip nothing at this step — just inventory them. A handful of words per entry, "
+            "including its property type word and BHK when it states them, is enough to tell them apart "
+            '(e.g. "2 BHK flat Pal Adajan 21k", "Bungalow Vesu 3cr", "Shop VIP Road rent").',
             "",
             'STEP 1: "requirements" must then contain EXACTLY ONE entry per snippet in "requirement_lines", in '
             "the same order, with the same count. No exceptions.",
             "",
-            "Two requirements are DISTINCT when they differ in what is being asked for — a different BHK, a "
-            "different property type, a different area, a different budget, or a different client. Do NOT split "
-            "one requirement's own details (its area list, its amenities, its floor preference) into several "
-            "entries.",
+            "Two requirements are DISTINCT when the message presents them as separate entries (separate numbered "
+            "items, separate bullet/emoji blocks, separate paragraphs each with its own budget or area), or when "
+            "they plainly belong to different clients. Several configurations offered as ALTERNATIVES inside ONE "
+            'entry that shares one area list and one budget — "1/2 BHK", "4bhk, 5bhk", "2 BHK or 3 BHK", '
+            '"2 BHK FULL FURNISHED 3 BHK FULL FURNISHED CHALE ROW HOUSE" — are ONE requirement: put every BHK in '
+            "bhk and every acceptable type in requirement_type. Do NOT split one requirement's own details (its "
+            "area list, its amenities, its conditions) into several entries.",
+            "",
+            'A header line ("REQUIREMENTS :-", "*URGENT RENTAL REQUIREMENTS*") is not a requirement of its own, '
+            "but what it says (rent, urgent) applies to every requirement under it. A CONTACT block at the end "
+            "of a multi-requirement message applies to EVERY requirement in it.",
             "",
             "=====================================================================",
             "PART 3 — AREAS ARE COPIED, NEVER JUDGED",
@@ -163,42 +184,81 @@ def _build_system_prompt() -> str:
             "in-service or out-of-service. There is no such judgement here.",
             "",
             "Copy every locality/area the requirement names into preferred_areas EXACTLY as written in the "
-            "message. Do not normalise the spelling, do not translate it, do not correct it, do not expand an "
-            "abbreviation, and never add an area the message did not name. If the requirement names no area at "
-            "all, return an empty list — do not infer one.",
+            "message, one entry per locality. Do not normalise the spelling, do not translate it, do not correct "
+            "it, do not expand an abbreviation, and never add an area the message did not name. If the "
+            "requirement names no area at all, return an empty list — do not infer one.",
+            "",
+            'Localities are often run together with only spaces, "•", "/", "," or "and" between them '
+            '("PAL ADAJAN JHANGIRPURA AND BHESAN ROAD📍"): split them into separate entries, keeping multi-word '
+            'names together ("BHESAN ROAD", "City Light", "New City Light", "GHOD DOD ROAD", "PARLE POINT"). A '
+            'word that only labels the list ("area", "aria", "location", "📍") is not a locality.',
+            "",
+            "=====================================================================",
+            "PROPERTY TYPE AND BHK",
+            "=====================================================================",
+            f"requirement_type is the KIND of property asked for, written with EXACTLY these names: {type_names}.",
+            '  - flat/apartment -> "Flat"; bungalow/bunglow/banglo -> "Bungalow"; row house/rowhouse -> '
+            '"Row House"; residential plot/open plot/NA plot/vaar plot -> "Plot"; shop/dukan -> "Shop"; '
+            'godown -> "Warehouse". A duplex/simplex flat is a "Flat".',
+            "  - Set it whenever THIS requirement's own text names a type: \"REQ FLAT FOR RENT\" -> \"Flat\"; "
+            '"Req for Bungalow in vesu" -> "Bungalow"; "500 vaar residential Plot" -> "Plot"; "2 BHK FLAT" -> '
+            '"Flat".',
+            '  - Several acceptable types -> comma-separated, main one first: "Flat, Row House". "X chale" / '
+            '"X chalse" / "X bhi chalega" / "X also ok" makes X an ALSO-acceptable alternative, not the only '
+            'option — "2 BHK FULL FURNISHED 3 BHK FULL FURNISHED CHALE ROW HOUSE" -> "Flat, Row House".',
+            "  - If the requirement names NO type at all, leave requirement_type null — never guess one from the "
+            'budget, the area or the BHK ("2 BHK Fully Furnished, Vesu" -> null).',
+            "",
+            'bhk holds ONLY bedroom configurations, as "N BHK" / "N RK", several joined with ", ": "2bhk" -> '
+            '"2 BHK"; "1/2 BHK" -> "1 BHK, 2 BHK"; "4bhk , 5bhk" -> "4 BHK, 5 BHK"; "3+ BHK" -> "3+ BHK". Never put '
+            "furnishing, type or any other word in bhk. Null if no BHK is stated.",
             "",
             "=====================================================================",
             "RENT VS SALE CLASSIFICATION",
             "=====================================================================",
             "For EACH requirement, decide whether the person wants to BUY (\"Sale\") or to RENT (\"Rent\").",
             "",
-            "Write listing_type_reason FIRST, quoting the actual wording in THIS message for THIS requirement, "
-            "and only then set listing_type from it.",
+            "Write listing_type_reason FIRST, quoting the actual wording in THIS message for THIS requirement "
+            "(or the header above it), and only then set listing_type from it.",
             "",
             'Explicit RENT signals include: "rent", "on rent", "rent pe", "rental", "lease", "to let", '
             '"bhade", "bhada", "kiraya", "monthly", a monthly amount like "15k/month".',
-            'Explicit BUY signals include: "buy", "purchase", "sale", "kharidvu", "kharidna", "levu", "lena".',
+            'Explicit BUY signals include: "buy", "purchase", "in purchase", "sale", "kharidvu", "kharidna", '
+            '"levu", "lena".',
             "",
             "If there is NO explicit rental signal for this requirement, set listing_type to \"Sale\" and write "
             '"no explicit signal" as the reason. Never invent a signal that is not in the message.',
             "",
-            "In a message carrying several requirements, judge each one on ITS OWN line — a rent word on one "
-            "line says nothing about a different line.",
+            "In a message carrying several requirements, judge each one on ITS OWN entry plus any header that "
+            "covers it — a rent word on one entry says nothing about a different entry.",
             "",
             "=====================================================================",
-            "BUDGET AND SIZE",
+            "BUDGET",
             "=====================================================================",
-            "A requirement has a BUDGET (a range the person is willing to pay), not a price, and a SIZE RANGE, "
-            "not an exact carpet area.",
+            "A requirement has a BUDGET (a range the person is willing to pay), not a price.",
             "",
             "  - A stated range fills both ends: \"40 to 50 lakh\" -> budget_min_inr 4000000, budget_max_inr "
-            "5000000.",
-            "  - A single figure fills BOTH ends with the same value: \"45 lakh\" -> 4500000 and 4500000.",
-            "  - A one-sided limit fills only that side: \"under 50L\" -> max only; \"50L and above\" -> min only.",
-            "  - The same three rules apply to carpet_area_min / carpet_area_max.",
-            "  - NEVER guess a budget or a size that is not written, and never estimate one from the BHK.",
-            "  - Copy the size number exactly as written for whichever unit is used, and never convert between "
-            "units. Set carpet_area_unit whenever either size is set.",
+            "5000000; \"₹27,000–₹30,000\" -> 27000 and 30000; \"1 lakh to 1.30 lakha\" -> 100000 and 130000.",
+            "  - A single figure fills BOTH ends with the same value: \"45 lakh\" -> 4500000 and 4500000; "
+            "\"60 k BUDGET\" -> 60000 and 60000.",
+            "  - A one-sided limit fills only that side: \"under 50L\", \"BUDGET 21 k MAX\", \"Rent: Up to "
+            "₹28,000\" -> max only; \"50L and above\" -> min only.",
+            "  - In a RENT requirement, bare figures with no scale word that are plainly monthly rents in "
+            "thousands mean thousands: \"BUGGET 26 28\" -> 26000 and 28000.",
+            "  - \"market rate\", \"as per market\" or \"negotiable\" with no figure -> every budget field null.",
+            "  - NEVER guess a budget that is not written, and never estimate one from the BHK.",
+            "",
+            "=====================================================================",
+            "EVERYTHING ELSE GOES INTO description",
+            "=====================================================================",
+            "description is a short factual summary of what this person is looking for, and it must ALSO carry "
+            "every other detail this requirement states that has no field of its own, in the message's own words: "
+            'furnishing ("fully furnished with electronics", "naked"), size ("500 vaar", "1200 sqft"), location '
+            'detail (a road, a landmark, "near X"), who it is for ("veg business family", "2 single male '
+            'bachelors, company job"), food preference ("pure veg"), possession time ("1-15 Sep"), urgency '
+            '("urgent"), "token ready", how the deal must come ("direct party", "1 vaya", "no vaya"), society age '
+            '("max 4-5 years old"), photos/videos wanted, parking, floor. Never drop one of these details and never '
+            "invent one.",
             "",
             "=====================================================================",
             "GENERAL RULES",
@@ -206,7 +266,10 @@ def _build_system_prompt() -> str:
             "  - Extract ONLY what the message actually says. Every field is optional; null is always better "
             "than a guess.",
             "  - contact_name / contact_phone come from the MESSAGE TEXT only — never from the sender's WhatsApp "
-            "profile, which is already known and is merged in separately.",
+            "profile, which is already known and is merged in separately. Several people listed -> names joined "
+            'with " / " and numbers joined with ", " in the same order ("Bhavya / Ishan", "7874981999, '
+            '7433081999"). A firm name goes in brackets after the person ("Amrutbhai Joshi (Rajeshwar '
+            'Properties)").',
             "  - Never copy the message id, the group name or any part of the prompt into a content field.",
             "",
             "=====================================================================",
@@ -223,10 +286,9 @@ def _build_system_prompt() -> str:
             '      "requirements": [',
             "        {",
             '          "requirement_type": null, "bhk": null, "preferred_areas": [], "society_name": null,',
-            '          "address": null, "carpet_area_min": null, "carpet_area_max": null,',
-            '          "carpet_area_unit": null, "budget_text": null, "budget_min_inr": null,',
-            '          "budget_max_inr": null, "furnishing": null, "listing_type_reason": "...",',
-            '          "listing_type": "Sale", "contact_name": null, "contact_phone": null, "description": null',
+            '          "budget_text": null, "budget_min_inr": null, "budget_max_inr": null,',
+            '          "listing_type_reason": "...", "listing_type": "Sale",',
+            '          "contact_name": null, "contact_phone": null, "description": null',
             "        }",
             "      ],",
             '      "skip_reason": null',
@@ -357,7 +419,11 @@ def _merge_with_message_data(
                 "structuring each separately."
             )
 
-        for item in extraction.requirements:
+        # A snippet is only trusted as "this requirement's own words" when
+        # the model kept its promise of one snippet per requirement — with a
+        # count mismatch there is no telling which snippet belongs to which.
+        snippets_align = len(extraction.requirement_lines) == len(extraction.requirements)
+        for index, item in enumerate(extraction.requirements):
             # Logged for every requirement, not just the Rent ones: this is
             # the only visibility into whether listing_type reflects genuine
             # per-requirement reasoning or a silently defaulted/omitted field
@@ -368,7 +434,10 @@ def _merge_with_message_data(
             )
             requirements.append(
                 _to_structured_requirement(
-                    item, message, single_requirement_message=len(extraction.requirements) == 1
+                    item,
+                    message,
+                    single_requirement_message=len(extraction.requirements) == 1,
+                    snippet=extraction.requirement_lines[index] if snippets_align else None,
                 )
             )
 
@@ -381,7 +450,10 @@ def _merge_with_message_data(
 
 
 def _to_structured_requirement(
-    item: GLMRequirementItem, message: WhatsAppChatMessage, single_requirement_message: bool
+    item: GLMRequirementItem,
+    message: WhatsAppChatMessage,
+    single_requirement_message: bool,
+    snippet: Optional[str] = None,
 ) -> StructuredRequirement:
     """Builds one StructuredRequirement from one extracted item, merged with
     the WhatsApp metadata shared by every requirement pulled from that same
@@ -398,18 +470,13 @@ def _to_structured_requirement(
         area_name=areas[0] if areas else None,
         preferred_areas=areas,
         society_name=item.society_name,
-        address=item.address,
-        carpet_area_min=item.carpet_area_min,
-        carpet_area_max=item.carpet_area_max,
-        carpet_area_unit=item.carpet_area_unit,
         budget_text=item.budget_text,
         budget_min_inr=item.budget_min_inr,
         budget_max_inr=item.budget_max_inr,
         listing_type=item.listing_type,
-        furnishing=item.furnishing,
         contact_name=item.contact_name,
         contact_phone=item.contact_phone,
-        description=item.description,
+        description=item.description.strip() if item.description and item.description.strip() else None,
         group_name=message.chat_name,
         chat_type=message.chat_type,
         sender_name=message.sender_name,
@@ -418,11 +485,34 @@ def _to_structured_requirement(
         message_text=message.text,
         message_timestamp=message.received_at,
     )
+    _normalize_filter_fields(requirement, single_requirement_message, snippet)
     _fill_missing_budget_amounts(requirement)
-    _normalize_ranges(requirement)
+    _normalize_budget_range(requirement)
     if single_requirement_message:
         _sanitize_listing_type(requirement)
     return requirement
+
+
+def _normalize_filter_fields(
+    requirement: StructuredRequirement, single_requirement_message: bool, snippet: Optional[str]
+) -> None:
+    """Puts type and BHK into requirement_normalization's vocabulary, and
+    recovers a type/BHK the model left empty from THIS requirement's own
+    words: its snippet and its description always, the whole message only
+    when the message holds just this one requirement (in a multi-requirement
+    message the text covers every requirement, so a word there could belong
+    to a different one — same reasoning as _sanitize_listing_type)."""
+    own_text = " ".join(part for part in (snippet, requirement.description) if part)
+    context = f"{own_text} {requirement.message_text}" if single_requirement_message else own_text
+
+    requirement.bhk = requirement_normalization.canonical_bhk(requirement.bhk) or requirement_normalization.infer_bhk(
+        f"{snippet or ''} {requirement.message_text if single_requirement_message else ''}"
+    )
+    requirement.requirement_type = requirement_normalization.canonical_requirement_type(
+        requirement.requirement_type
+    ) or requirement_normalization.infer_requirement_type(
+        f"{context} {requirement.bhk or ''}", has_bhk=bool(requirement.bhk)
+    )
 
 
 def _fill_missing_budget_amounts(requirement: StructuredRequirement) -> None:
@@ -489,7 +579,7 @@ def _parse_budget_amounts(text: str) -> List[float]:
     return resolved
 
 
-def _normalize_ranges(requirement: StructuredRequirement) -> None:
+def _normalize_budget_range(requirement: StructuredRequirement) -> None:
     """Guards the one thing a min/max pair can get wrong on its way out of a
     language model: the two ends arriving the wrong way round. Swapped
     rather than dropped — both numbers are real, only their order is
@@ -503,15 +593,6 @@ def _normalize_ranges(requirement: StructuredRequirement) -> None:
         requirement.budget_min_inr, requirement.budget_max_inr = (
             requirement.budget_max_inr,
             requirement.budget_min_inr,
-        )
-    if (
-        requirement.carpet_area_min is not None
-        and requirement.carpet_area_max is not None
-        and requirement.carpet_area_min > requirement.carpet_area_max
-    ):
-        requirement.carpet_area_min, requirement.carpet_area_max = (
-            requirement.carpet_area_max,
-            requirement.carpet_area_min,
         )
 
 

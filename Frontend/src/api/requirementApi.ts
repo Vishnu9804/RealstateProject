@@ -1,7 +1,7 @@
 import { apiClient } from "./client";
 import type { BrokerRequirementRecord } from "./types";
 
-/** Mirrors Backend/Controller/WhatsAppDataFetchingController/
+/** Mirrors Backend/Controller/BrokerRequirementController/
  *  broker_requirement_controller.py's RequirementUpdateRequest — everything
  *  the Edit dialog can change, all optional so a partial edit never blanks
  *  out the rest of the record. The WhatsApp metadata (sender, group,
@@ -14,15 +14,10 @@ export interface RequirementContentFields {
   area_name?: string | null;
   preferred_areas?: string[];
   society_name?: string | null;
-  address?: string | null;
-  carpet_area_min?: number | null;
-  carpet_area_max?: number | null;
-  carpet_area_unit?: string | null;
   budget_text?: string | null;
   budget_min_inr?: number | null;
   budget_max_inr?: number | null;
   listing_type?: "Sale" | "Rent";
-  furnishing?: string | null;
   contact_name?: string | null;
   contact_phone?: string | null;
   description?: string | null;

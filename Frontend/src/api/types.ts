@@ -560,17 +560,16 @@ export interface BrokerRequirementRecord {
   /** Every locality the requirement named, exactly as written. */
   preferred_areas: string[];
   society_name: string | null;
-  address: string | null;
-  carpet_area_min: number | null;
-  carpet_area_max: number | null;
-  carpet_area_unit: string | null;
+  /** The broker's own budget wording ("21k max"), shown on hover. */
   budget_text: string | null;
   budget_min_inr: number | null;
   budget_max_inr: number | null;
   listing_type: "Sale" | "Rent";
-  furnishing: string | null;
   contact_name: string | null;
   contact_phone: string | null;
+  /** A short summary plus every other stated detail that has no field of
+   *  its own — furnishing, size, location detail, who it is for, food,
+   *  possession, urgency, token ready, "vaya". */
   description: string | null;
   group_name: string;
   chat_type: "group" | "personal";

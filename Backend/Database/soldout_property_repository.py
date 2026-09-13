@@ -6,12 +6,13 @@ property_vector_store.py).
 
 WHY THE WHOLE MOVE IS ONE FUNCTION AND ONE TRANSACTION
 
-Marking a property sold out touches five tables: `soldout_properties` and
+Marking a property sold out touches six tables: `soldout_properties` and
 `properties` (the move itself), plus `client_property_matches`,
-`client_manual_properties` and `agent_assignments` (everything that pointed
-at the property and must not outlive it). Doing that through each feature's
-own repository would mean five `with get_session()` blocks — five connection
-checkouts, five BEGIN/COMMIT pairs against a serverless database billed by
+`broker_requirement_matches`, `client_manual_properties` and
+`agent_assignments` (everything that pointed at the property and must not
+outlive it). Doing that through each feature's own repository would mean six
+`with get_session()` blocks — six connection checkouts, six BEGIN/COMMIT
+pairs against a serverless database billed by
 compute-time — and, far worse, five independent transactions: a failure
 after the third would leave the property gone from `properties` while
 clients still carried cached matches pointing at it.
@@ -41,6 +42,7 @@ from sqlalchemy.orm import defer
 
 from Database.agent_assignment_models import AgentAssignmentRow
 from Database.agent_models import AgentRow
+from Database.broker_requirement_match_models import BrokerRequirementMatchRow
 from Database.client_property_match_models import ClientPropertyMatchRow
 from Database.manual_property_models import ManualPropertyRow
 from Database.models import PropertyRow, WhatsAppMessageRow
@@ -254,6 +256,13 @@ def move_property_to_soldout(record_id: str) -> MoveOutcome:
         #    already made are different things.
         session.execute(
             delete(ClientPropertyMatchRow).where(ClientPropertyMatchRow.property_record_id == canonical_record_id)
+        )
+        # The broker-requirement side's stored matches (Database/
+        # broker_requirement_match_repository.py), for the same reason.
+        session.execute(
+            delete(BrokerRequirementMatchRow).where(
+                BrokerRequirementMatchRow.property_record_id == canonical_record_id
+            )
         )
         session.execute(
             delete(ManualPropertyRow).where(ManualPropertyRow.property_record_id == canonical_record_id)

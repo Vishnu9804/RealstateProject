@@ -19,14 +19,10 @@ class RequirementMatchResult(BaseModel):
     the result has no business looking different — and the frontend cards,
     badges and bucket labels are shared as a direct consequence.
 
-    Two things it does NOT share with ClientMatchResult, both because
-    requirement matches are computed on demand rather than cached (see
-    requirement_matching_service's own docstring):
-
-      - `computed_at` is always "just now", never "whenever the nightly run
-        last looked at this";
-      - there is no counts-only variant, because nothing polls this for a
-        badge — it is only ever read when a human opens the dialog.
+    Like ClientMatchResult, these matches are STORED (see
+    requirement_matching_service's own docstring). `computed_at` is when the
+    stored scores were last brought up to date — every read catches up on
+    properties added or edited since, so it is normally very recent.
     """
 
     record_id: str

@@ -124,6 +124,28 @@ def property_type_gate(client_raw: Optional[str], property_raw: Optional[str]) -
     return max(_pair_compatibility(token, prop_token, is_primary=(i == 0)) for i, token in enumerate(client_tokens))
 
 
+_NON_RESIDENTIAL_WORDS_RE = re.compile(
+    r"\b(?:plots?|land|shops?|offices?|showrooms?|warehouses?|godowns?|commercial|industrial|factory|shed)\b"
+)
+
+
+def is_non_residential_type(raw: Optional[str]) -> bool:
+    """True when a property type is land or commercial — a kind of property
+    nobody asks for by bedroom count. Unknown/empty is NOT non-residential
+    (False): only a type that positively says land/commercial counts.
+
+    Used only by the broker-requirement side (Service/BrokerRequirementService/
+    requirement_matching_service.py), never by property_type_gate or anything
+    else the client-inquiry scoring runs, so client matching is unaffected."""
+    if not raw:
+        return False
+    token = canonical_type_token(raw)
+    family = _family_of(token)
+    if family is not None:
+        return family is _LAND or family is _COMMERCIAL
+    return _NON_RESIDENTIAL_WORDS_RE.search(token) is not None
+
+
 def _pair_compatibility(client_token: str, prop_token: str, is_primary: bool) -> float:
     if client_token == prop_token:
         # A secondary ("also open to villa") mention that happens to match

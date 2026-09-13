@@ -3,6 +3,7 @@ import { createPortal } from "react-dom";
 import { requirementApi, type RequirementContentFields } from "../api/requirementApi";
 import type { BrokerRequirementRecord } from "../api/types";
 import { friendlyError } from "../lib/apiError";
+import { REQUIREMENT_TYPE_OPTIONS } from "../lib/requirementFilters";
 import { useToast } from "./ui/Toast";
 import { Button, Segmented } from "./ui/Primitives";
 import { IconX } from "./ui/Icons";
@@ -28,15 +29,10 @@ interface FormState {
   bhk: string;
   preferred_areas: string;
   society_name: string;
-  address: string;
-  carpet_area_min: string;
-  carpet_area_max: string;
-  carpet_area_unit: string;
   budget_text: string;
   budget_min_inr: string;
   budget_max_inr: string;
   listing_type: "Sale" | "Rent";
-  furnishing: string;
   contact_name: string;
   contact_phone: string;
   description: string;
@@ -51,15 +47,10 @@ function toFormState(requirement: BrokerRequirementRecord): FormState {
     // "Vesu, Althan" is faster than managing chips for two of them.
     preferred_areas: requirement.preferred_areas.join(", "),
     society_name: requirement.society_name ?? "",
-    address: requirement.address ?? "",
-    carpet_area_min: requirement.carpet_area_min?.toString() ?? "",
-    carpet_area_max: requirement.carpet_area_max?.toString() ?? "",
-    carpet_area_unit: requirement.carpet_area_unit ?? "",
     budget_text: requirement.budget_text ?? "",
     budget_min_inr: requirement.budget_min_inr?.toString() ?? "",
     budget_max_inr: requirement.budget_max_inr?.toString() ?? "",
     listing_type: requirement.listing_type,
-    furnishing: requirement.furnishing ?? "",
     contact_name: requirement.contact_name ?? "",
     contact_phone: requirement.contact_phone ?? "",
     description: requirement.description ?? "",
@@ -84,15 +75,10 @@ function toPayload(form: FormState): RequirementContentFields {
     // stage sets it, so the two can never disagree after an edit.
     area_name: areas[0] ?? null,
     society_name: text(form.society_name),
-    address: text(form.address),
-    carpet_area_min: num(form.carpet_area_min),
-    carpet_area_max: num(form.carpet_area_max),
-    carpet_area_unit: text(form.carpet_area_unit),
     budget_text: text(form.budget_text),
     budget_min_inr: num(form.budget_min_inr),
     budget_max_inr: num(form.budget_max_inr),
     listing_type: form.listing_type,
-    furnishing: text(form.furnishing),
     contact_name: text(form.contact_name),
     contact_phone: text(form.contact_phone),
     description: text(form.description),
@@ -193,15 +179,21 @@ export default function RequirementFormDialog({
         <div className="detail-modal__body">
           <div className="stack stack-4">
             <div style={GRID_STYLE}>
-              <Field label="Property type wanted">
+              <Field label="Property type wanted" hint="Several accepted? Separate them with commas, main one first.">
                 <input
                   className="input"
+                  list="requirement-type-options"
                   value={form.requirement_type}
                   onChange={(e) => set("requirement_type", e.target.value)}
-                  placeholder="e.g. Flat, Shop, Land/Plot"
+                  placeholder="e.g. Flat, Bungalow, Plot"
                 />
+                <datalist id="requirement-type-options">
+                  {REQUIREMENT_TYPE_OPTIONS.map((option) => (
+                    <option key={option} value={option} />
+                  ))}
+                </datalist>
               </Field>
-              <Field label="BHK">
+              <Field label="BHK" hint="e.g. 2 BHK, or 4 BHK, 5 BHK">
                 <input className="input" value={form.bhk} onChange={(e) => set("bhk", e.target.value)} placeholder="e.g. 2 BHK" />
               </Field>
 
@@ -238,48 +230,6 @@ export default function RequirementFormDialog({
                 />
               </Field>
 
-              <Field label="Location detail" span>
-                <input
-                  className="input"
-                  value={form.address}
-                  onChange={(e) => set("address", e.target.value)}
-                  placeholder="Road, landmark, 'near …'"
-                />
-              </Field>
-
-              <Field label="Size from">
-                <input
-                  className="input"
-                  type="number"
-                  inputMode="decimal"
-                  value={form.carpet_area_min}
-                  onChange={(e) => set("carpet_area_min", e.target.value)}
-                  placeholder="e.g. 1000"
-                />
-              </Field>
-              <Field label="Size to">
-                <input
-                  className="input"
-                  type="number"
-                  inputMode="decimal"
-                  value={form.carpet_area_max}
-                  onChange={(e) => set("carpet_area_max", e.target.value)}
-                  placeholder="e.g. 1200"
-                />
-              </Field>
-              <Field label="Size unit">
-                <select
-                  className="select"
-                  value={form.carpet_area_unit}
-                  onChange={(e) => set("carpet_area_unit", e.target.value)}
-                >
-                  <option value="">—</option>
-                  <option value="sqft">sqft</option>
-                  <option value="vaar">vaar</option>
-                  <option value="vigha">vigha</option>
-                </select>
-              </Field>
-
               <Field label="Budget (as written)" hint="e.g. 45L, 80L-1cr, 15k/month">
                 <input
                   className="input"
@@ -309,15 +259,6 @@ export default function RequirementFormDialog({
                 />
               </Field>
 
-              <Field label="Furnishing">
-                <select className="select" value={form.furnishing} onChange={(e) => set("furnishing", e.target.value)}>
-                  <option value="">—</option>
-                  <option value="Furnished">Furnished</option>
-                  <option value="Semi-furnished">Semi-furnished</option>
-                  <option value="Unfurnished">Unfurnished</option>
-                </select>
-              </Field>
-
               <Field label="Contact name">
                 <input
                   className="input"
@@ -336,13 +277,16 @@ export default function RequirementFormDialog({
               </Field>
             </div>
 
-            <Field label="Description">
+            <Field
+              label="Description & other details"
+              hint="Furnishing, size, location detail, who it is for, food, possession, urgency, token ready, vaya — anything else the broker asked for."
+            >
               <textarea
                 className="textarea"
-                rows={3}
+                rows={4}
                 value={form.description}
                 onChange={(e) => set("description", e.target.value)}
-                placeholder="Any other details worth noting"
+                placeholder="e.g. Fully furnished, veg family, possession 1-15 Sep, 1 vaya"
               />
             </Field>
           </div>

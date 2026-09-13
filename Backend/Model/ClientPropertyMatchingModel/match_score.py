@@ -16,8 +16,7 @@ class MatchScore(BaseModel):
     Main/Outsider — see Service/ClientPropertyMatchingService/
     matching_service.py's _build_result.
 
-    Kept fully transparent (`field_scores`, `reason`), same rationale as
-    Model/WhatsAppDataFetchingModel/duplicate_check_result.py: the
+    Kept fully transparent (`field_scores`, `reason`): the
     thresholds and weights driving this are reasoned starting points, not
     proven constants, and calibrating them later is only possible if every
     decision can be inspected after the fact.

@@ -1,6 +1,6 @@
 """HTTP routes for broker requirements — the output of the requirement
 structuring stage, and what the Broker Requirements page reads. Thin by
-design; state lives in Service/WhatsAppDataFetchingService/
+design; state lives in Service/BrokerRequirementService/
 requirement_pipeline_service.py.
 
 There is deliberately no POST here. A property can be added by hand (a human
@@ -15,8 +15,8 @@ from typing import List, Literal, Optional
 from fastapi import APIRouter, HTTPException
 from pydantic import BaseModel
 
-from Model.WhatsAppDataFetchingModel.broker_requirement import BrokerRequirementRecord
-from Service.WhatsAppDataFetchingService import requirement_pipeline_service
+from Model.BrokerRequirementModel.broker_requirement import BrokerRequirementRecord
+from Service.BrokerRequirementService import requirement_pipeline_service
 
 router = APIRouter(prefix="/requirements", tags=["requirements"])
 
@@ -37,15 +37,10 @@ class RequirementUpdateRequest(BaseModel):
     area_name: Optional[str] = None
     preferred_areas: Optional[List[str]] = None
     society_name: Optional[str] = None
-    address: Optional[str] = None
-    carpet_area_min: Optional[float] = None
-    carpet_area_max: Optional[float] = None
-    carpet_area_unit: Optional[str] = None
     budget_text: Optional[str] = None
     budget_min_inr: Optional[float] = None
     budget_max_inr: Optional[float] = None
     listing_type: Optional[Literal["Sale", "Rent"]] = None
-    furnishing: Optional[str] = None
     contact_name: Optional[str] = None
     contact_phone: Optional[str] = None
     description: Optional[str] = None

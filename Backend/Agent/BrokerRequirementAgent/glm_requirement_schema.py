@@ -1,8 +1,35 @@
-from typing import List, Literal, Optional
+from typing import Any, List, Literal, Optional
 
 from pydantic import BaseModel, Field, field_validator
 
 from Agent.WhatsAppDataFetchingAgent.glm_schema_utils import coerce_bhk_field
+
+
+def _coerce_text_field(value: Any) -> Any:
+    """Same idea as glm_schema_utils.coerce_bhk_field, for the free-text
+    fields below: GLM sometimes answers a text field with a number or a list
+    ("requirement_type": ["Flat", "Row House"]). Left alone, that one slip
+    fails validation for the WHOLE batch response and silently discards
+    every requirement in it. A list is joined, a number is stringified, a
+    stray boolean is treated as "not stated"; anything else passes through
+    to pydantic unchanged."""
+    if isinstance(value, bool):
+        return None
+    if isinstance(value, (int, float)):
+        return str(value)
+    if isinstance(value, list):
+        joined = ", ".join(str(item).strip() for item in value if item is not None and str(item).strip())
+        return joined or None
+    return value
+
+
+def _coerce_list_field(value: Any) -> Any:
+    """A single area answered as a bare string instead of a one-item list."""
+    if value is None:
+        return []
+    if isinstance(value, str):
+        return [value] if value.strip() else []
+    return value
 
 
 class GLMRequirementItem(BaseModel):
@@ -12,52 +39,43 @@ class GLMRequirementItem(BaseModel):
     these, not to one. Mirrors GLMPropertyListing's shape and discipline
     (reason-before-verdict fields, "never guess" wording) on purpose: the
     same model does both jobs, and consistency between the two prompts is
-    what keeps its behaviour predictable."""
+    what keeps its behaviour predictable.
+
+    Deliberately only the fields something downstream actually USES —
+    matching (type, BHK, areas, budget, buy/rent, society), sharing (contact
+    name, budget, areas) or the budget fallback (budget_text). Every other
+    detail a broker writes (furnishing, size, road/landmark, who it is for,
+    food, possession, urgency, token, "vaya") is kept, in the broker's own
+    words, in `description`."""
 
     requirement_type: Optional[str] = Field(
         default=None,
-        description='The KIND of property being asked for, e.g. "Flat", "Penthouse", "Row House", "Shop", '
-        '"Office", "Land/Plot", "Bungalow", "Warehouse". "duplex", "simplex" and "triplex" describe the '
-        'internal layout, not the type, so a "duplex flat" is a "Flat". Null if the message does not say.',
+        description='The KIND of property asked for, using EXACTLY these names: "Flat", "Penthouse", "Bungalow", '
+        '"Villa", "Row House", "Duplex", "Plot", "Industrial Plot", "Land", "Shop", "Office", "Showroom", '
+        '"Warehouse", "Commercial Space". flat/apartment -> "Flat"; bungalow/bunglow/banglo -> "Bungalow"; '
+        'rowhouse -> "Row House"; residential/open/NA plot -> "Plot"; dukan -> "Shop"; godown -> "Warehouse". A '
+        '"duplex flat" is a "Flat". Several acceptable types -> comma-separated, main one first ("Flat, Row '
+        'House"). Null if this requirement names no type at all — never guess one.',
     )
     bhk: Optional[str] = Field(
-        default=None, description='Bedroom configuration asked for, as written, e.g. "2 BHK", "1 RK", "3-4 BHK".'
+        default=None,
+        description='ONLY the bedroom configuration(s) asked for, as "N BHK" / "N RK", several joined with ", ": '
+        '"2bhk" -> "2 BHK"; "1/2 BHK" -> "1 BHK, 2 BHK"; "4bhk , 5bhk" -> "4 BHK, 5 BHK"; "3+ BHK" -> "3+ BHK". '
+        "Never put furnishing, type or any other word here. Null if not stated.",
     )
     preferred_areas: List[str] = Field(
         default_factory=list,
-        description="Every locality/area named as acceptable for THIS requirement, copied EXACTLY as written in "
-        'the message, e.g. ["Vesu", "Althan", "Pal"]. Do NOT normalise, translate, correct or expand them, and '
-        "do NOT add areas the message never named. Empty list if no area is stated.",
+        description="Every locality/area named as acceptable for THIS requirement, one entry per locality, each "
+        'copied EXACTLY as written, e.g. ["Vesu", "Althan", "Pal"]. Localities run together with only spaces, '
+        '"•", "/" or "and" between them are still separate entries; multi-word names stay together ("Bhesan '
+        'Road", "City Light", "Ghod Dod Road", "Parle Point"). A label word ("area", "aria", "location") is not a '
+        "locality. Do NOT normalise, translate, correct or expand them, and do NOT add areas the message never "
+        "named. Empty list if no area is stated.",
     )
     society_name: Optional[str] = Field(
         default=None,
         description='A specific building/project/society/complex asked for by name, e.g. "Black Residency" — '
         "NOT a general locality (those go in preferred_areas). Null unless a named building is actually asked for.",
-    )
-    address: Optional[str] = Field(
-        default=None,
-        description="Any further location detail that is not a locality name on its own — a road, a landmark, "
-        '"near X", "on VIP Road". Null if none.',
-    )
-    carpet_area_min: Optional[float] = Field(
-        default=None,
-        description='The SMALLEST acceptable size as a plain number, only if stated. A range "1000-1200 sqft" '
-        '-> 1000.0; an open-ended "1500+ sqft" or "minimum 1500 sqft" -> 1500.0; an exact "1200 sqft" -> '
-        "1200.0 (set BOTH min and max to it). Copy the bare number for whichever unit is used — never convert "
-        "between units, never estimate it from the BHK, never guess when no size is stated.",
-    )
-    carpet_area_max: Optional[float] = Field(
-        default=None,
-        description='The LARGEST acceptable size, same rules as carpet_area_min. A range "1000-1200 sqft" -> '
-        '1200.0; an exact "1200 sqft" -> 1200.0; an open-ended "1500+ sqft" -> null (there is no upper '
-        'bound); "up to 1200 sqft" -> 1200.0 with carpet_area_min null.',
-    )
-    carpet_area_unit: Optional[str] = Field(
-        default=None,
-        description='The unit the size above was written in — REQUIRED whenever either size is set, null only '
-        'when both are null. Exactly one of: "sqft" (for "sqft", "sq ft", "sq.ft", "square feet"), "vaar" (for '
-        '"vaar", "gaj", "sq yard", "square yard"), "vigha" (for "vigha"). Never guess a unit that is not the '
-        "one actually written.",
     )
     budget_text: Optional[str] = Field(
         default=None,
@@ -76,11 +94,6 @@ class GLMRequirementItem(BaseModel):
         description='The UPPER end of the budget as a plain INR number, only if unambiguous ("40 to 50 lakh" -> '
         '5000000; a single "45 lakh" -> 4500000; "50L and above" -> null since only a floor is given). Never guess.',
     )
-    furnishing: Optional[str] = Field(
-        default=None,
-        description='Furnishing asked for, only if stated — exactly one of "Furnished", "Semi-furnished", '
-        '"Unfurnished". Null otherwise.',
-    )
     listing_type_reason: Optional[str] = Field(
         default=None,
         description="REQUIRED, written BEFORE listing_type (reason first, verdict second). Quote or paraphrase "
@@ -96,15 +109,26 @@ class GLMRequirementItem(BaseModel):
         'signal. Defaults to "Sale" (fail open) if the field is omitted.',
     )
     contact_name: Optional[str] = Field(
-        default=None, description="A person's name given IN THE MESSAGE TEXT as the contact for this requirement."
+        default=None,
+        description="The contact person's name given IN THE MESSAGE TEXT for this requirement. A contact block at "
+        "the end of a multi-requirement message belongs to every requirement in it. Several people -> names "
+        'joined with " / "; a firm name goes in brackets after the person, e.g. "Amrutbhai Joshi (Rajeshwar '
+        'Properties)".',
     )
     contact_phone: Optional[str] = Field(
-        default=None, description="A phone number given IN THE MESSAGE TEXT for this requirement."
+        default=None,
+        description='The phone number(s) given IN THE MESSAGE TEXT for this requirement, several joined with ", " '
+        "in the same order as the names.",
     )
     description: Optional[str] = Field(
         default=None,
-        description="A short, factual one/two-sentence summary of what this person is looking for, written from "
-        "the message content only.",
+        description="A short, factual summary of what this person is looking for, written from the message content "
+        "only, that ALSO carries every other detail this requirement states which has no field of its own, in "
+        'the message\'s own words: furnishing ("fully furnished", "naked"), size ("500 vaar", "1200 sqft"), '
+        'location detail (a road, landmark, "near X"), who it is for ("veg business family", "company '
+        'bachelor"), food preference ("pure veg"), possession time ("1-15 Sep"), urgency ("urgent"), "token '
+        'ready", how the deal must come ("direct party", "1 vaya"), society age, photos/videos wanted, parking, '
+        "floor. Never drop one of these details and never invent one.",
     )
 
     # See glm_schema_utils.coerce_bhk_field: GLM occasionally emits a bare
@@ -115,6 +139,10 @@ class GLMRequirementItem(BaseModel):
     # response (which is what a bare ValidationError otherwise did: see
     # requirement_structurer._parse_extractions).
     _coerce_bhk = field_validator("bhk", mode="before")(coerce_bhk_field)
+    _coerce_text = field_validator(
+        "requirement_type", "contact_name", "contact_phone", "description", mode="before"
+    )(_coerce_text_field)
+    _coerce_areas = field_validator("preferred_areas", mode="before")(_coerce_list_field)
 
 
 class GLMRequirementExtraction(BaseModel):
@@ -134,18 +162,18 @@ class GLMRequirementExtraction(BaseModel):
         description='REQUIRED whenever is_requirement is true, and written BEFORE "requirements" — the same '
         "reason-before-verdict discipline as listing_type_reason. One SHORT entry per distinct requirement: "
         "just enough of that requirement's own line to tell it apart from the others, a handful of words at "
-        'most (e.g. "3BHK Vesu 80L", "Shop VIP Road rent"). Walk the message top to bottom and note every '
-        "requirement line you meet BEFORE extracting any structured fields, filtering nothing and merging "
-        'nothing. "requirements" must then contain exactly one entry per item listed here, in the same order. '
-        "Empty list if is_requirement is false.",
+        "most, including its property type word and BHK when it states them (e.g. \"2 BHK flat Pal Adajan 21k\", "
+        '"Bungalow Vesu 3cr"). Walk the message top to bottom and note every requirement you meet BEFORE '
+        'extracting any structured fields, filtering nothing and merging nothing. "requirements" must then '
+        "contain exactly one entry per item listed here, in the same order. Empty list if is_requirement is false.",
     )
     requirements: List[GLMRequirementItem] = Field(
         default_factory=list,
         description="One entry per DISTINCT requirement in the message — exactly one per snippet in "
-        '"requirement_lines" above, in the same order, same count, no exceptions. Only include more than one '
-        "when the message genuinely carries separate requirements (different BHK, different area, different "
-        "budget, different client). Do not split one requirement's details across multiple entries. Empty list "
-        "if is_requirement is false.",
+        '"requirement_lines" above, in the same order, same count, no exceptions. Separate numbered/bulleted/'
+        "emoji blocks are separate requirements; alternatives inside ONE block that share one area list and one "
+        'budget ("1/2 BHK", "4bhk, 5bhk") are ONE requirement. Do not split one requirement\'s details across '
+        "multiple entries. Empty list if is_requirement is false.",
     )
     skip_reason: Optional[str] = Field(
         default=None,

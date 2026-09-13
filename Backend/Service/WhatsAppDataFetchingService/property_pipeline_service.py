@@ -154,8 +154,8 @@ def _forward_to_requirement_pipeline(messages: List[WhatsAppChatMessage]) -> Non
     is already collecting and share a batch with it — one or two re-routed
     messages must not each buy their own API call. Nothing new is written to
     the database on this path: a demand becomes a requirement row (no
-    embedding vector, no fingerprint lookup), which is strictly less database
-    work than the property row it would otherwise have become.
+    embedding vector), which is strictly less database work than the property
+    row it would otherwise have become.
 
     The import is local because whatsapp_service imports THIS module at
     module level — the same lazy-import pattern requirement_pipeline_service

@@ -87,6 +87,122 @@ def get_session() -> Iterator[Session]:
         session.close()
 
 
+# Columns `broker_requirements` carried that are no longer part of the model:
+# nothing matched, shared or computed on them (see StructuredRequirement's
+# docstring). Text columns with the label their value is kept under in
+# `description`; the size and the two flags are rendered separately below.
+_RETIRED_REQUIREMENT_TEXT_COLUMNS = (
+    ("furnishing", "Furnishing"),
+    ("address", "Location"),
+    ("occupant_profile", "For"),
+    ("food_preference", "Food"),
+    ("possession_timeline", "Possession"),
+    ("broker_chain", "Deal via"),
+)
+_RETIRED_REQUIREMENT_COLUMNS = (
+    "furnishing",
+    "carpet_area_min",
+    "carpet_area_max",
+    "carpet_area_unit",
+    "address",
+    "occupant_profile",
+    "food_preference",
+    "possession_timeline",
+    "broker_chain",
+    "is_urgent",
+    "token_ready",
+)
+
+
+def _retired_requirement_details_sql(present: set) -> str:
+    """One SQL text expression rendering every retired detail a row holds as
+    "Furnishing: Furnished | Size: 500 vaar | Urgent", built only from the
+    columns this database actually has (a database created before some of
+    them existed simply lacks those). concat_ws skips NULLs, so a row with
+    none of them renders as ''."""
+    parts = []
+    if "furnishing" in present:
+        parts.append("CASE WHEN btrim(COALESCE(furnishing, '')) <> '' THEN 'Furnishing: ' || btrim(furnishing) END")
+    if "carpet_area_min" in present or "carpet_area_max" in present:
+        low = "carpet_area_min" if "carpet_area_min" in present else "NULL::float8"
+        high = "carpet_area_max" if "carpet_area_max" in present else "NULL::float8"
+        unit = "carpet_area_unit" if "carpet_area_unit" in present else "NULL::varchar"
+        parts.append(
+            f"CASE WHEN {low} IS NOT NULL OR {high} IS NOT NULL THEN 'Size: ' || "
+            f"CASE WHEN {low} IS NOT NULL AND {high} IS NOT NULL AND {low} <> {high} "
+            f"THEN {low}::text || '-' || {high}::text ELSE COALESCE({low}, {high})::text END "
+            f"|| COALESCE(' ' || NULLIF(btrim({unit}), ''), '') END"
+        )
+    for column, label in _RETIRED_REQUIREMENT_TEXT_COLUMNS:
+        if column == "furnishing" or column not in present:
+            continue
+        parts.append(f"CASE WHEN btrim(COALESCE({column}, '')) <> '' THEN '{label}: ' || btrim({column}) END")
+    if "is_urgent" in present:
+        parts.append("CASE WHEN is_urgent THEN 'Urgent' END")
+    if "token_ready" in present:
+        parts.append("CASE WHEN token_ready THEN 'Token ready' END")
+    return f"concat_ws(' | ', {', '.join(parts)})" if parts else ""
+
+
+def _retire_extra_requirement_columns(engine) -> None:
+    """Moves every retired column's value into that row's `description`,
+    then drops the columns — see _RETIRED_REQUIREMENT_COLUMNS.
+
+    Runs entirely inside Postgres: one catalog query to see which of those
+    columns still exist, one UPDATE touching only rows that hold a value, and
+    the DROPs (catalog-only in Postgres — no table rewrite). No row crosses
+    the network. After the first run the catalog query finds nothing and the
+    rest is skipped, so every later startup costs that one tiny query.
+
+    One transaction, so the values are never dropped without having been
+    copied. And deliberately non-fatal: if it fails, it rolls back and logs,
+    and the app still starts — every retired column is nullable or has a
+    default, so the model simply not writing to them anymore is harmless,
+    and the move is retried on the next start."""
+    from sqlalchemy import text
+
+    from Middleware import step_logger
+
+    names = ", ".join(f"'{column}'" for column in _RETIRED_REQUIREMENT_COLUMNS)
+    try:
+        with engine.begin() as connection:
+            present = {
+                row[0]
+                for row in connection.execute(
+                    text(
+                        "SELECT column_name FROM information_schema.columns "
+                        "WHERE table_schema = current_schema() AND table_name = 'broker_requirements' "
+                        f"AND column_name IN ({names})"
+                    )
+                )
+            }
+            if not present:
+                return
+            moved = 0
+            details = _retired_requirement_details_sql(present)
+            if details:
+                moved = connection.execute(
+                    text(
+                        "UPDATE broker_requirements SET description = CASE "
+                        f"WHEN btrim(COALESCE(description, '')) = '' THEN {details} "
+                        f"ELSE btrim(description) || ' | ' || {details} END "
+                        f"WHERE {details} <> ''"
+                    )
+                ).rowcount
+            for column in _RETIRED_REQUIREMENT_COLUMNS:
+                if column in present:
+                    connection.execute(text(f"ALTER TABLE broker_requirements DROP COLUMN IF EXISTS {column}"))
+        step_logger.info(
+            f"Retired {len(present)} unused broker-requirement column(s); their values on {moved} requirement(s) "
+            "were kept in the description."
+        )
+    except Exception as exc:  # noqa: BLE001
+        step_logger.error(
+            f"Could not retire the unused broker-requirement columns (the app is unaffected; retried next start): "
+            f"{exc!r}"
+        )
+
+
 def init_db() -> None:
     """Enables the pgvector extension and creates any tables that don't
     already exist — for BOTH features that use this database: the
@@ -126,12 +242,18 @@ def init_db() -> None:
     from Database import landing_page_models  # noqa: F401
 
     # Same import-for-side-effect reasoning, for the broker-requirements
-    # table: defining BrokerRequirementRow is what registers
-    # `broker_requirements` on the Base above, and create_all can only
-    # create tables it has been told about. Nothing else on this startup
+    # tables: defining BrokerRequirementRow and
+    # BrokerRequirementOriginalMessageRow is what registers
+    # `broker_requirements` and `broker_requirement_original_messages` on the
+    # Base above, and create_all can only create tables it has been told about. Nothing else on this startup
     # path imports the requirement pipeline, so without this line that
     # table is silently never created.
     from Database import broker_requirement_models  # noqa: F401
+
+    # Same again for the stored broker-requirement matches — two brand-new
+    # tables (broker_requirement_matches, broker_requirement_match_runs),
+    # which create_all builds on its own, foreign keys and cascades included.
+    from Database import broker_requirement_match_models  # noqa: F401
 
     # Same import-for-side-effect reasoning, for the sold-out properties
     # table: defining SoldOutPropertyRow is what registers
@@ -420,6 +542,59 @@ def init_db() -> None:
                 """
             )
         )
+    with engine.begin() as connection:
+        # One-time move of the original WhatsApp message fields (group_name,
+        # chat_type, sender_name, sender_saved_name, sender_phone,
+        # message_text, message_timestamp) off `broker_requirements` and onto
+        # `broker_requirement_original_messages` (Database/
+        # broker_requirement_models.py's BrokerRequirementOriginalMessageRow)
+        # — exactly the move the block above already made for `properties`.
+        #
+        # Gated on message_text still existing on `broker_requirements`: the
+        # first run copies one message row per source_message_id, points the
+        # existing requirement rows at it via a real foreign key, then drops
+        # the now-redundant columns — all in this one transaction, so a
+        # failure part-way leaves the table exactly as it was. Every run
+        # after that finds message_text already gone and does nothing. On a
+        # brand new database create_all above already built both tables and
+        # the foreign key, so this is skipped there too.
+        requirements_still_have_message_columns = connection.execute(
+            text(
+                "SELECT 1 FROM information_schema.columns "
+                "WHERE table_schema = current_schema() "
+                "AND table_name = 'broker_requirements' AND column_name = 'message_text'"
+            )
+        ).first()
+        if requirements_still_have_message_columns:
+            connection.execute(
+                text(
+                    """
+                    INSERT INTO broker_requirement_original_messages
+                        (id, group_name, chat_type, sender_name, sender_saved_name,
+                         sender_phone, message_text, message_timestamp)
+                    SELECT DISTINCT ON (source_message_id)
+                        source_message_id, group_name, chat_type, sender_name, sender_saved_name,
+                        sender_phone, message_text, message_timestamp
+                    FROM broker_requirements
+                    ORDER BY source_message_id, id
+                    ON CONFLICT (id) DO NOTHING
+                    """
+                )
+            )
+            connection.execute(
+                text(
+                    "ALTER TABLE broker_requirements ADD CONSTRAINT broker_requirements_source_message_id_fkey "
+                    "FOREIGN KEY (source_message_id) REFERENCES broker_requirement_original_messages(id)"
+                )
+            )
+            connection.execute(text("ALTER TABLE broker_requirements DROP COLUMN group_name"))
+            connection.execute(text("ALTER TABLE broker_requirements DROP COLUMN chat_type"))
+            connection.execute(text("ALTER TABLE broker_requirements DROP COLUMN sender_name"))
+            connection.execute(text("ALTER TABLE broker_requirements DROP COLUMN sender_saved_name"))
+            connection.execute(text("ALTER TABLE broker_requirements DROP COLUMN sender_phone"))
+            connection.execute(text("ALTER TABLE broker_requirements DROP COLUMN message_text"))
+            connection.execute(text("ALTER TABLE broker_requirements DROP COLUMN message_timestamp"))
+    _retire_extra_requirement_columns(engine)
 
     # Fills text_fingerprint for message rows that predate that column —
     # deliberately in Python rather than as SQL above, so the stored value is
@@ -437,6 +612,38 @@ def init_db() -> None:
             f"Backfilled content fingerprints for {filled} stored WhatsApp message(s) — they can now be "
             "recognised by the pre-LLM exact-duplicate check."
         )
+
+    # The same backfill for the requirement pipeline's own message table —
+    # the rows the migration just above moved off broker_requirements start
+    # with no fingerprint. After the first run this is one indexed
+    # "WHERE text_fingerprint IS NULL" probe that returns nothing.
+    from Database import broker_requirement_repository
+
+    filled_requirement_messages = broker_requirement_repository.backfill_message_fingerprints()
+    if filled_requirement_messages:
+        step_logger.info(
+            f"Backfilled content fingerprints for {filled_requirement_messages} stored broker-requirement "
+            "message(s) — they can now be recognised by the requirement pipeline's pre-LLM exact-duplicate check."
+        )
+
+    # One-time clean-up of broker requirements stored before their type/BHK/
+    # furnishing were normalized (see broker_requirement_repository.
+    # normalize_existing_requirements). Gated by an app_settings flag rather
+    # than re-deriving "is anything left to fix" on every startup: that would
+    # re-read the rows every time, while the flag costs one primary-key lookup
+    # after the first run. The flag is written only after the clean-up
+    # committed, so a failed run is simply retried on the next start.
+    from Database import settings_repository
+
+    requirement_normalization_key = "broker_requirement_normalization_v1"
+    if not settings_repository.get_value(requirement_normalization_key):
+        normalized_requirements = broker_requirement_repository.normalize_existing_requirements()
+        settings_repository.set_value(requirement_normalization_key, {"done": True})
+        if normalized_requirements:
+            step_logger.info(
+                f"Normalized type/BHK/furnishing on {normalized_requirements} stored broker requirement(s) — they "
+                "now filter and match the same way new ones do."
+            )
 
     # Same reasoning again for landing-page leads: phone_e164 is produced by
     # Service/WhatsAppInquiryHandlingService/phone_utils.normalize_phone, and

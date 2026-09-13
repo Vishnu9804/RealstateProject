@@ -8,17 +8,24 @@ from pydantic import BaseModel, Field
 class StructuredRequirement(BaseModel):
     """A single broker REQUIREMENT (a demand — someone looking FOR a
     property), structured from a raw WhatsApp message by the LLM stage
-    (Agent/WhatsAppDataFetchingAgent/requirement_structurer.py) and merged
+    (Agent/BrokerRequirementAgent/requirement_structurer.py) and merged
     with the WhatsApp metadata that was already known for certain
     (sender/group/timestamp) rather than re-derived by the LLM.
 
     Deliberately a separate model from StructuredProperty, not a flag on
-    it: a requirement has no price (it has a BUDGET), no single carpet area
-    (it has a RANGE), and none of the property-side machinery — no
-    embedding, no duplicate detection, no Main/Outsider review status, no
-    landing page state — applies to it. See
-    Service/WhatsAppDataFetchingService/requirement_pipeline_service.py for
+    it: a requirement has no price (it has a BUDGET), and none of the
+    property-side machinery — no embedding, no Main/Outsider review status,
+    no landing page state — applies to it. See
+    Service/BrokerRequirementService/requirement_pipeline_service.py for
     the (deliberately much shorter) pipeline behind it.
+
+    Deliberately LEAN, too: every content field below is one something
+    downstream actually uses — requirement matching (type, BHK, areas,
+    budget, buy/rent, society, description), the WhatsApp shortlist message
+    (contact name, budget, areas) or the budget fallback (budget_text) — or
+    is the broker's own contact number. Every other detail a broker writes
+    (furnishing, size, road/landmark, who it is for, food, possession,
+    urgency, token, "vaya") is kept in `description`, in their words.
 
     Just like a property, a SINGLE WhatsApp message can carry more than one
     requirement, so `source_message_id` is not unique per record —
@@ -38,10 +45,15 @@ class StructuredRequirement(BaseModel):
     source_connection_id: Optional[str] = None
 
     # --- extracted by the LLM from the message text ---
-    # The KIND of property being asked for ("Flat", "Shop", "Office",
-    # "Land/Plot", "Bungalow", "Row House", "Warehouse"), mirroring
-    # StructuredProperty.property_type so the two read the same way in the UI.
+    # The KIND of property being asked for, written with the names in
+    # Agent/BrokerRequirementAgent/requirement_normalization.REQUIREMENT_TYPES
+    # ("Flat", "Bungalow", "Row House", "Plot", "Shop", ...) — the same words
+    # StructuredProperty.property_type uses, so the Type filter and the
+    # matching type gate read identically on both sides. Several acceptable
+    # types are comma-separated, main one first ("Flat, Row House").
     requirement_type: Optional[str] = None
+    # Only the configuration(s), "N BHK" / "N RK", comma-separated
+    # ("4 BHK, 5 BHK").
     bhk: Optional[str] = None
     # The primary locality asked for — the one the table's Area column
     # shows. A requirement commonly names several ("Vesu, Althan or Pal"),
@@ -53,20 +65,12 @@ class StructuredRequirement(BaseModel):
     preferred_areas: List[str] = Field(default_factory=list)
     # A specific building/project/society the requirement asks for by name.
     society_name: Optional[str] = None
-    # Any further location detail (road, landmark, "near X") that isn't a
-    # locality name on its own.
-    address: Optional[str] = None
 
-    # Wanted size, as a range: a requirement is usually "1000-1200 sqft" or
-    # "at least 1500 sqft", not one exact number. Either end can be None
-    # (an open-ended "1500+ sqft" sets only the min); both set to the same
-    # value is how an exact size is represented.
-    carpet_area_min: Optional[float] = None
-    carpet_area_max: Optional[float] = None
-    carpet_area_unit: Optional[str] = None  # "sqft" | "vaar" | "vigha"
-
-    # Budget, the requirement-side counterpart of a property's price. Same
-    # min/max reasoning as the carpet area above.
+    # Budget, the requirement-side counterpart of a property's price.
+    # Either end can be None (an open-ended "50L+" sets only the min); both
+    # set to the same value is how an exact budget is represented.
+    # budget_text is the broker's own wording, which is what the numbers are
+    # recovered from when the LLM omits them.
     budget_text: Optional[str] = None
     budget_min_inr: Optional[float] = None
     budget_max_inr: Optional[float] = None
@@ -77,9 +81,10 @@ class StructuredRequirement(BaseModel):
     # lands in the Rent bucket without an explicit signal earning it.
     listing_type: Literal["Sale", "Rent"] = "Sale"
 
-    furnishing: Optional[str] = None  # "Furnished" | "Semi-furnished" | "Unfurnished", as stated
     contact_name: Optional[str] = None
     contact_phone: Optional[str] = None
+    # A short summary plus every stated detail that has no field of its own
+    # (see the class docstring).
     description: Optional[str] = None
 
     # --- known for certain from WhatsApp itself, not from the LLM ---

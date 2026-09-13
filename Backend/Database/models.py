@@ -181,8 +181,8 @@ class PropertyRow(Base):
 
 class AppSettingRow(Base):
     """Generic key-value persistence backing the various *_settings
-    services (area keywords, 12h/24h display format, duplicate-detection
-    thresholds) — see Database/settings_repository.py."""
+    services (area keywords, 12h/24h display format, ...) — see
+    Database/settings_repository.py."""
 
     __tablename__ = "app_settings"
 

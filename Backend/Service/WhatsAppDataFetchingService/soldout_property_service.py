@@ -131,6 +131,7 @@ def _mark_sold_out_in_memory(record_id: str) -> Optional[SoldOutResult]:
     # should hard-depend on the other at module load (the same reasoning
     # agent_store.record_assignment documents for its own lead_store import).
     from Service.AgentManagementService import agent_store, manual_property_store
+    from Service.BrokerRequirementService import requirement_matching_service
     from Service.ClientPropertyMatchingService import matching_service
 
     prop = property_vector_store.get_property(record_id)
@@ -139,6 +140,7 @@ def _mark_sold_out_in_memory(record_id: str) -> Optional[SoldOutResult]:
 
     removed_assignments = agent_store.take_memory_assignments_for_property(record_id)
     matching_service.drop_property_from_memory_cache(record_id)
+    requirement_matching_service.drop_property_from_memory_cache(record_id)
     manual_property_store.drop_property_from_memory(record_id)
 
     fields = prop.model_dump(exclude=_DROPPED_PROPERTY_FIELDS)

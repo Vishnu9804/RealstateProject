@@ -6,11 +6,25 @@ import { useAppStatus } from "../state/StatusProvider";
 import { useDebounced, usePersistentState } from "../hooks/useUi";
 import { friendlyError } from "../lib/apiError";
 import { formatCompactInr, relativeTime } from "../lib/formatters";
+import {
+  compileFilters,
+  countActiveFilters,
+  describeFilter,
+  isFilterActive,
+  type ColumnFilter,
+  type FilterState,
+} from "../lib/propertyFilters";
+import {
+  REQUIREMENT_FILTER_DEF_BY_KEY,
+  REQUIREMENT_FILTER_DEFS,
+  requirementSourceLabel,
+} from "../lib/requirementFilters";
 import { useToast } from "../components/ui/Toast";
 import ConfirmDialog from "../components/ui/ConfirmDialog";
+import FilterPopover, { type SortControl } from "../components/ui/FilterPopover";
 import RequirementFormDialog from "../components/RequirementFormDialog";
 import RequirementMatchesDialog from "../components/RequirementMatchesDialog";
-import { Pager, compareNullable } from "./DashboardPage";
+import { FilterTrigger, Pager, compareNullable } from "./DashboardPage";
 import {
   Badge,
   Button,
@@ -36,7 +50,6 @@ import {
   IconPhone,
   IconPin,
   IconRefresh,
-  IconRuler,
   IconSearch,
   IconTag,
   IconTrash,
@@ -49,20 +62,25 @@ import {
  * chat selected under "Requirement monitoring" on the Connection page.
  *
  * Built to read exactly like the Properties page — same row cards, same
- * click-a-row-to-open-the-dialog, same action buttons — because it is the
- * same job from the other direction, and an operator switching between the
- * two should not have to learn a second set of habits. What it deliberately
- * does NOT carry over is everything that only makes sense for supply: there
- * is no Main/Outsider split, no Needs-review queue, no duplicate comparison,
- * no photos and no Add button (a requirement only exists because someone
- * asked for it in a monitored chat).
+ * click-a-row-to-open-the-dialog, same action buttons, and the same
+ * click-a-column-heading filter dialogs (lib/requirementFilters.ts, on the
+ * Properties page's own FilterPopover) — because it is the same job from the
+ * other direction, and an operator switching between the two should not have
+ * to learn a second set of habits. What it deliberately does NOT carry over
+ * is everything that only makes sense for supply: there is no Main/Outsider
+ * split, no Needs-review queue, no photos and no Add button (a requirement
+ * only exists because someone asked for it in a monitored chat).
+ *
+ * The columns are exactly the fields matching and sharing use. Everything
+ * else a broker wrote (furnishing, size, who it is for, urgency, ...) is in
+ * the requirement's description, shown in its detail dialog.
  */
 
 const FETCH_LIMIT = 500;
 const PAGE_SIZE = 20;
 
 type ViewMode = "table" | "cards";
-type SortKey = "time" | "budget" | "size" | "area";
+type SortKey = "time" | "budget" | "area";
 type SortDir = "asc" | "desc";
 
 interface Column {
@@ -70,19 +88,33 @@ interface Column {
   label: string;
   sort?: SortKey;
   numeric?: boolean;
+  /** Set when this column has a filter dialog — the sort, if any, then lives
+   *  inside that dialog, exactly as on the Properties page. */
+  filterKey?: string;
 }
 
 const COLUMNS: Column[] = [
-  { key: "type", label: "Wanted" },
-  { key: "bhk", label: "BHK" },
-  { key: "areas", label: "Areas", sort: "area" },
-  { key: "listingType", label: "Buy/Rent" },
-  { key: "size", label: "Size", sort: "size", numeric: true },
-  { key: "budget", label: "Budget", sort: "budget", numeric: true },
+  { key: "type", label: "Type", filterKey: "type" },
+  { key: "bhk", label: "BHK", filterKey: "bhk" },
+  { key: "areas", label: "Areas", sort: "area", filterKey: "areas" },
+  { key: "listingType", label: "Buy/Rent", filterKey: "listingType" },
+  { key: "budget", label: "Budget", sort: "budget", numeric: true, filterKey: "budget" },
   { key: "contact", label: "Contact" },
-  { key: "source", label: "Source" },
+  { key: "source", label: "Source", filterKey: "source" },
   { key: "time", label: "Received (IST)", sort: "time" },
 ];
+
+/** Filters that have no column of their own in the table — offered as an
+ *  explicit row of triggers instead, so they are never unreachable in table
+ *  view. (Every current filter has a column; this keeps it that way if one
+ *  is added without one.) */
+const COLUMN_FILTER_KEYS = new Set(COLUMNS.map((column) => column.filterKey).filter(Boolean));
+
+const SORT_LABELS: Record<SortKey, { asc: string; desc: string }> = {
+  time: { asc: "Oldest first", desc: "Newest first" },
+  budget: { asc: "Low → High", desc: "High → Low" },
+  area: { asc: "A → Z", desc: "Z → A" },
+};
 
 /* ------------------------------------------------------------ formatting */
 
@@ -106,14 +138,6 @@ function formatBudget(requirement: BrokerRequirementRecord): string {
   return requirement.budget_text ?? "—";
 }
 
-function formatSize(requirement: BrokerRequirementRecord): string {
-  const unit = requirement.carpet_area_unit ?? "sqft";
-  const range = formatRange(requirement.carpet_area_min, requirement.carpet_area_max, (value) =>
-    String(Math.round(value)),
-  );
-  return range ? `${range} ${unit}` : "—";
-}
-
 function areasLabel(requirement: BrokerRequirementRecord): string {
   if (requirement.preferred_areas.length > 0) return requirement.preferred_areas.join(", ");
   return requirement.area_name ?? "—";
@@ -122,10 +146,6 @@ function areasLabel(requirement: BrokerRequirementRecord): string {
 function requirementTitle(requirement: BrokerRequirementRecord): string {
   const parts = [requirement.bhk, requirement.requirement_type].filter(Boolean).join(" ");
   return parts || requirement.society_name || areasLabel(requirement) || "Requirement";
-}
-
-function sourceLabel(requirement: BrokerRequirementRecord): string {
-  return requirement.chat_type === "group" ? requirement.group_name : requirement.sender_saved_name || requirement.sender_name;
 }
 
 function sourceDetail(requirement: BrokerRequirementRecord): string {
@@ -143,8 +163,11 @@ export default function BrokerRequirementsPage() {
 
   const [search, setSearch] = useState("");
   const query = useDebounced(search, 180);
+  const [filters, setFilters] = useState<FilterState>({});
+  const activeFilterCount = countActiveFilters(filters);
+  const filtersActive = search.trim().length > 0 || activeFilterCount > 0;
+  const [openFilter, setOpenFilter] = useState<{ key: string; anchor: HTMLElement } | null>(null);
   const [view, setView] = usePersistentState<ViewMode>("requirements.view", "table");
-  const [listingFilter, setListingFilter] = useState<"all" | "Sale" | "Rent">("all");
   const [sortKey, setSortKey] = useState<SortKey>("time");
   const [sortDir, setSortDir] = useState<SortDir>("desc");
   const [page, setPage] = useState(1);
@@ -259,23 +282,28 @@ export default function BrokerRequirementsPage() {
     return set.size;
   }, [allRequirements]);
 
+  const passesFilters = useMemo(
+    () => compileFilters<BrokerRequirementRecord>(filters, REQUIREMENT_FILTER_DEFS),
+    [filters],
+  );
+
   const visibleRequirements = useMemo(() => {
     const needle = query.trim().toLowerCase();
     const filtered = allRequirements.filter((requirement) => {
-      if (listingFilter !== "all" && requirement.listing_type !== listingFilter) return false;
+      if (!passesFilters(requirement)) return false;
       if (!needle) return true;
       const haystack = [
         requirement.requirement_type,
         requirement.bhk,
         requirement.society_name,
-        requirement.address,
         areasLabel(requirement),
         requirement.budget_text,
-        requirement.furnishing,
         requirement.contact_name,
         requirement.contact_phone,
+        // Carries every stated detail without a field of its own, so
+        // searching "furnished" or "veg" still finds those requirements.
         requirement.description,
-        sourceLabel(requirement),
+        requirementSourceLabel(requirement),
         requirement.sender_name,
         requirement.sender_saved_name,
       ]
@@ -294,8 +322,6 @@ export default function BrokerRequirementsPage() {
           // otherwise every ceiling-only requirement sinks to the bottom
           // regardless of how big its ceiling is.
           return compareNullable(a.budget_min_inr ?? a.budget_max_inr, b.budget_min_inr ?? b.budget_max_inr, direction);
-        case "size":
-          return compareNullable(a.carpet_area_min ?? a.carpet_area_max, b.carpet_area_min ?? b.carpet_area_max, direction);
         case "area":
           return compareNullable(a.area_name, b.area_name, direction);
         case "time":
@@ -303,7 +329,7 @@ export default function BrokerRequirementsPage() {
           return compareNullable(a.message_timestamp, b.message_timestamp, direction);
       }
     });
-  }, [allRequirements, query, listingFilter, sortKey, sortDir]);
+  }, [allRequirements, query, passesFilters, sortKey, sortDir]);
 
   const pageCount = Math.max(1, Math.ceil(visibleRequirements.length / PAGE_SIZE));
   const pageItems = useMemo(
@@ -311,7 +337,7 @@ export default function BrokerRequirementsPage() {
     [visibleRequirements, page],
   );
 
-  useEffect(() => setPage(1), [query, listingFilter, sortKey, sortDir]);
+  useEffect(() => setPage(1), [query, filters, sortKey, sortDir]);
   useEffect(() => {
     if (page > pageCount) setPage(pageCount);
   }, [page, pageCount]);
@@ -324,13 +350,47 @@ export default function BrokerRequirementsPage() {
     listTopRef.current?.scrollIntoView({ behavior: "smooth", block: "start" });
   }, [page]);
 
+  const setColumnFilter = useCallback((key: string, next: ColumnFilter | undefined) => {
+    setFilters((prev) => {
+      const merged = { ...prev };
+      if (next === undefined) delete merged[key];
+      else merged[key] = next;
+      return merged;
+    });
+  }, []);
+
+  function applySort(key: SortKey, dir: SortDir) {
+    setSortKey(key);
+    setSortDir(dir);
+  }
+
   function toggleSort(key: SortKey) {
     if (sortKey === key) {
       setSortDir((dir) => (dir === "asc" ? "desc" : "asc"));
     } else {
-      setSortKey(key);
-      setSortDir(key === "area" ? "asc" : "desc");
+      applySort(key, key === "area" ? "asc" : "desc");
     }
+  }
+
+  function resetAll() {
+    setSearch("");
+    setFilters({});
+  }
+
+  /* The Buy/Rent capsule and the Buy/Rent column dialog are two views of one
+     filter, not two competing ones — the same pattern the Properties page
+     uses for its Sale/Rent capsule. */
+  const listingTypeFilter = filters.listingType;
+  const listingTypeSegment: "all" | "Sale" | "Rent" =
+    listingTypeFilter?.kind === "values" && listingTypeFilter.selected.length === 1
+      ? listingTypeFilter.selected[0].toLowerCase() === "rent"
+        ? "Rent"
+        : "Sale"
+      : "all";
+
+  function setListingTypeSegment(value: "all" | "Sale" | "Rent") {
+    if (value === "all") return setColumnFilter("listingType", undefined);
+    setColumnFilter("listingType", { kind: "values", selected: [value === "Rent" ? "Rent" : "Buy"] });
   }
 
   function applySaved(saved: BrokerRequirementRecord) {
@@ -356,6 +416,24 @@ export default function BrokerRequirementsPage() {
 
   const loading = requirements === null && error === null;
 
+  const sortControlFor = (column: Column): SortControl | undefined =>
+    column.sort
+      ? {
+          active: sortKey === column.sort,
+          dir: sortDir,
+          ascLabel: SORT_LABELS[column.sort].asc,
+          descLabel: SORT_LABELS[column.sort].desc,
+          onSort: (dir) => applySort(column.sort!, dir),
+        }
+      : undefined;
+
+  const openColumn = openFilter ? COLUMNS.find((column) => column.filterKey === openFilter.key) : undefined;
+  const openFilterDef = openFilter ? REQUIREMENT_FILTER_DEF_BY_KEY[openFilter.key] : undefined;
+  // In card view there are no column headings to click, so every filter
+  // gets a trigger; in table view only the ones without a column do.
+  const stripFilterDefs =
+    view === "cards" ? REQUIREMENT_FILTER_DEFS : REQUIREMENT_FILTER_DEFS.filter((def) => !COLUMN_FILTER_KEYS.has(def.key));
+
   return (
     <div className="stack stack-5">
       <header className="section-head">
@@ -365,7 +443,8 @@ export default function BrokerRequirementsPage() {
           <p className="section-head__sub">
             What brokers are <strong>looking for</strong>, structured from the chats selected under Requirement
             monitoring on the Connection page. A message that reads as a requirement never becomes a property, and one
-            message can produce several requirements — each gets its own row here.
+            message can produce several requirements — each gets its own row here. Click any column heading to filter
+            by the values seen so far.
           </p>
         </div>
         <div className="row-flex">
@@ -402,15 +481,15 @@ export default function BrokerRequirementsPage() {
             inputRef={searchRef}
             value={search}
             onChange={setSearch}
-            placeholder="Search area, BHK, budget, contact…  (press / )"
+            placeholder="Search area, BHK, budget, contact, details…  (press / )"
             ariaLabel="Search requirements"
           />
         </div>
 
         <Segmented<"all" | "Sale" | "Rent">
           ariaLabel="Buy or Rent"
-          value={listingFilter}
-          onChange={setListingFilter}
+          value={listingTypeSegment}
+          onChange={setListingTypeSegment}
           options={[
             { value: "all", label: "All" },
             { value: "Sale", label: "Buy" },
@@ -428,19 +507,48 @@ export default function BrokerRequirementsPage() {
           ]}
         />
 
-        {(search.trim() || listingFilter !== "all") && (
-          <Button
-            size="sm"
-            variant="ghost"
-            onClick={() => {
-              setSearch("");
-              setListingFilter("all");
-            }}
-          >
+        {filtersActive && (
+          <Button size="sm" variant="ghost" onClick={resetAll}>
             Reset all
           </Button>
         )}
       </div>
+
+      {/* Applied filters stay visible after the popover closes — a filter you
+          cannot see is a filter you forget you set. */}
+      {activeFilterCount > 0 && (
+        <div className="filter-strip">
+          {REQUIREMENT_FILTER_DEFS.filter((def) => isFilterActive(filters[def.key])).map((def) => (
+            <span key={def.key} className="chip chip--filter">
+              <strong>{def.label}:</strong> <span>{describeFilter(def, filters[def.key]!)}</span>
+              <button
+                type="button"
+                className="chip__x"
+                onClick={() => setColumnFilter(def.key, undefined)}
+                aria-label={`Remove the ${def.label} filter`}
+              >
+                <IconX size={12} />
+              </button>
+            </span>
+          ))}
+        </div>
+      )}
+
+      {allRequirements.length > 0 && stripFilterDefs.length > 0 && (
+        <div className="filter-strip">
+          <span className="faint small">{view === "cards" ? "Filter by" : "More filters"}</span>
+          {stripFilterDefs.map((def) => (
+            <FilterTrigger
+              key={def.key}
+              label={def.label}
+              filter={filters[def.key]}
+              expanded={openFilter?.key === def.key}
+              onOpen={(anchor) => setOpenFilter(openFilter?.key === def.key ? null : { key: def.key, anchor })}
+              className="btn btn--sm"
+            />
+          ))}
+        </div>
+      )}
 
       {error && (
         <Note tone="bad" icon={<IconAlert size={17} />}>
@@ -475,17 +583,8 @@ export default function BrokerRequirementsPage() {
           <EmptyState
             icon={<IconSearch size={36} />}
             title="No matches"
-            body={`None of the ${allRequirements.length} stored requirements match the current search and filter.`}
-            action={
-              <Button
-                onClick={() => {
-                  setSearch("");
-                  setListingFilter("all");
-                }}
-              >
-                Clear everything
-              </Button>
-            }
+            body={`None of the ${allRequirements.length} stored requirements match the current search and filters.`}
+            action={<Button onClick={resetAll}>Clear everything</Button>}
           />
         </Panel>
       )}
@@ -500,6 +599,9 @@ export default function BrokerRequirementsPage() {
               sortKey={sortKey}
               sortDir={sortDir}
               toggleSort={toggleSort}
+              filters={filters}
+              openFilterKey={openFilter?.key ?? null}
+              onOpenFilter={(key, anchor) => setOpenFilter(openFilter?.key === key ? null : { key, anchor })}
               freshIds={freshIds}
               onOpenDetail={(requirement) => setDetailId(requirement.record_id)}
               onMatch={setMatchesFor}
@@ -519,6 +621,18 @@ export default function BrokerRequirementsPage() {
           )}
           <Pager page={page} pageCount={pageCount} total={visibleRequirements.length} onChange={setPage} />
         </>
+      )}
+
+      {openFilter && openFilterDef && (
+        <FilterPopover<BrokerRequirementRecord>
+          def={openFilterDef}
+          anchorEl={openFilter.anchor}
+          properties={allRequirements}
+          filter={filters[openFilter.key]}
+          onChange={(next) => setColumnFilter(openFilter.key, next)}
+          onClose={() => setOpenFilter(null)}
+          sort={openColumn ? sortControlFor(openColumn) : undefined}
+        />
       )}
 
       {detailRequirement && (
@@ -557,7 +671,7 @@ export default function BrokerRequirementsPage() {
                 {deleteTarget.preferred_areas.length > 0 ? ` · ${areasLabel(deleteTarget)}` : ""}
               </p>
               <p className="faint small">
-                {formatBudget(deleteTarget)} · {formatSize(deleteTarget)} · {deleteTarget.listing_type === "Rent" ? "Rent" : "Buy"}
+                {formatBudget(deleteTarget)} · {deleteTarget.listing_type === "Rent" ? "Rent" : "Buy"}
               </p>
               <p style={{ marginTop: 12 }}>
                 This removes it from your database <strong>permanently</strong> — it cannot be undone.
@@ -639,6 +753,9 @@ function RequirementTable({
   sortKey,
   sortDir,
   toggleSort,
+  filters,
+  openFilterKey,
+  onOpenFilter,
   freshIds,
   onOpenDetail,
   onMatch,
@@ -648,6 +765,9 @@ function RequirementTable({
   sortKey: SortKey;
   sortDir: SortDir;
   toggleSort: (key: SortKey) => void;
+  filters: FilterState;
+  openFilterKey: string | null;
+  onOpenFilter: (key: string, anchor: HTMLElement) => void;
 }) {
   return (
     <div className="table-frame anim-rise">
@@ -663,7 +783,16 @@ function RequirementTable({
                     aria-sort={sorted ? (sortDir === "asc" ? "ascending" : "descending") : undefined}
                     style={column.numeric ? { textAlign: "right" } : undefined}
                   >
-                    {column.sort ? (
+                    {column.filterKey ? (
+                      // Filterable columns open their dialog on click; the
+                      // sort lives inside it, same as the Properties page.
+                      <FilterTrigger
+                        label={column.label}
+                        filter={filters[column.filterKey]}
+                        expanded={openFilterKey === column.filterKey}
+                        onOpen={(anchor) => onOpenFilter(column.filterKey!, anchor)}
+                      />
+                    ) : column.sort ? (
                       <button type="button" onClick={() => toggleSort(column.sort!)} title={`Sort by ${column.label}`}>
                         {column.label}
                         <IconChevron size={12} className="sort-caret" />
@@ -712,9 +841,6 @@ function RequirementTable({
                     {requirement.listing_type === "Rent" ? "Rent" : "Buy"}
                   </Badge>
                 </td>
-                <td className="cell-num" style={{ textAlign: "right" }}>
-                  {formatSize(requirement)}
-                </td>
                 <td
                   className="cell-num cell-strong"
                   style={{ textAlign: "right" }}
@@ -736,7 +862,7 @@ function RequirementTable({
                   <span className="faint small" style={{ display: "block" }}>
                     {requirement.chat_type === "group" ? "Group" : "Personal"}
                   </span>
-                  <Highlight text={sourceLabel(requirement)} query={query} />
+                  <Highlight text={requirementSourceLabel(requirement)} query={query} />
                 </td>
                 <td className="cell-num" style={{ whiteSpace: "nowrap" }}>
                   {requirement.formatted_timestamp}
@@ -798,18 +924,6 @@ function RequirementCards({ requirements, query, freshIds, onOpenDetail, onMatch
                 {requirement.requirement_type}
               </span>
             )}
-            {(requirement.carpet_area_min !== null || requirement.carpet_area_max !== null) && (
-              <span className="fact">
-                <IconRuler size={12} />
-                {formatSize(requirement)}
-              </span>
-            )}
-            {requirement.furnishing && (
-              <span className="fact">
-                <IconTag size={12} />
-                {requirement.furnishing}
-              </span>
-            )}
           </div>
 
           {requirement.contact_phone && (
@@ -825,7 +939,7 @@ function RequirementCards({ requirements, query, freshIds, onOpenDetail, onMatch
 
           <div className="pcard__foot">
             <span className="cell-truncate" title={sourceDetail(requirement)}>
-              <IconUsers size={11} /> {sourceLabel(requirement)} · {requirement.formatted_timestamp}
+              <IconUsers size={11} /> {requirementSourceLabel(requirement)} · {requirement.formatted_timestamp}
             </span>
             <div onClick={(event) => event.stopPropagation()}>
               <RowActions requirement={requirement} onMatch={onMatch} onEdit={onEdit} onDelete={onDelete} />
@@ -842,11 +956,12 @@ function RequirementCards({ requirements, query, freshIds, onOpenDetail, onMatch
 /**
  * The full-detail dialog opened by clicking any row or card. Everything the
  * table/card layouts show only a slice of is shown here at once, including
- * the original WhatsApp message — the point of a dedicated dialog is that
- * nothing about the requirement is left behind the click. The same Edit and
- * Delete actions available inline are repeated in the footer alongside
- * Cancel, so acting on a requirement never requires closing the dialog
- * first to reach them.
+ * the description (which carries every stated detail without a field of its
+ * own) and the original WhatsApp message — the point of a dedicated dialog
+ * is that nothing about the requirement is left behind the click. The same
+ * Edit and Delete actions available inline are repeated in the footer
+ * alongside Cancel, so acting on a requirement never requires closing the
+ * dialog first to reach them.
  */
 function RequirementDetailDialog({
   requirement,
@@ -872,8 +987,6 @@ function RequirementDetailDialog({
     return () => document.removeEventListener("keydown", onKeyDown);
   }, [onClose]);
 
-  const subtitle = [areasLabel(requirement), requirement.address].filter(Boolean).join(" · ");
-
   return createPortal(
     <div className="modal-scrim" onMouseDown={(event) => event.target === event.currentTarget && onClose()}>
       <div className="detail-modal anim-rise" role="dialog" aria-modal="true" aria-label="Requirement details">
@@ -883,21 +996,21 @@ function RequirementDetailDialog({
               Requirement · {requirement.listing_type === "Rent" ? "Rent" : "Buy"}
             </div>
             <h2 className="detail-modal__title cell-truncate">{requirementTitle(requirement)}</h2>
-            {subtitle && <div className="detail-modal__sub cell-truncate">{subtitle}</div>}
+            <div className="detail-modal__sub cell-truncate">{areasLabel(requirement)}</div>
             <div className="detail-modal__badges">
               <Badge tone={requirement.listing_type === "Rent" ? "info" : "ok"}>
                 {requirement.listing_type === "Rent" ? "Rent" : "Buy"}
               </Badge>
+              {requirement.requirement_type && (
+                <span className="fact">
+                  <IconTag size={12} />
+                  {requirement.requirement_type}
+                </span>
+              )}
               {requirement.bhk && (
                 <span className="fact">
                   <IconBuilding size={12} />
                   {requirement.bhk}
-                </span>
-              )}
-              {(requirement.carpet_area_min !== null || requirement.carpet_area_max !== null) && (
-                <span className="fact">
-                  <IconRuler size={12} />
-                  {formatSize(requirement)}
                 </span>
               )}
             </div>
@@ -920,11 +1033,6 @@ function RequirementDetailDialog({
             </div>
 
             <div className="detail__block">
-              <div className="detail__k">Size wanted</div>
-              <div className="detail__v">{formatSize(requirement)}</div>
-            </div>
-
-            <div className="detail__block">
               <div className="detail__k">Areas asked for</div>
               <div className="detail__v">{areasLabel(requirement)}</div>
               {requirement.society_name && (
@@ -932,11 +1040,6 @@ function RequirementDetailDialog({
                   Society: {requirement.society_name}
                 </div>
               )}
-            </div>
-
-            <div className="detail__block">
-              <div className="detail__k">Furnishing</div>
-              <div className="detail__v">{requirement.furnishing ?? "—"}</div>
             </div>
 
             <div className="detail__block">
@@ -964,7 +1067,7 @@ function RequirementDetailDialog({
 
             <div className="detail__block">
               <div className="detail__k">Source</div>
-              <div className="detail__v">{sourceLabel(requirement)}</div>
+              <div className="detail__v">{requirementSourceLabel(requirement)}</div>
               <div className="faint small" style={{ marginTop: 4 }}>
                 {requirement.chat_type === "group" ? "Group" : "Personal"} · {requirement.formatted_timestamp}
               </div>
@@ -973,7 +1076,7 @@ function RequirementDetailDialog({
 
           {requirement.description && (
             <div className="detail__block">
-              <div className="detail__k">Description</div>
+              <div className="detail__k">Description &amp; other details</div>
               <div className="detail__v">{requirement.description}</div>
             </div>
           )}

@@ -36,19 +36,30 @@ export interface SortControl {
   onSort: (dir: "asc" | "desc") => void;
 }
 
-interface Props {
-  def: ColumnFilterDef;
+/** Generic over the record type (defaulting to PropertyRecord), so the
+ *  Broker Requirements page opens this very same dialog over its own rows —
+ *  see lib/propertyFilters.ts. */
+interface Props<T> {
+  def: ColumnFilterDef<T>;
   anchorEl: HTMLElement;
   /** Every loaded record — the option list is "everything seen so far", not
    *  "everything currently visible". */
-  properties: PropertyRecord[];
+  properties: T[];
   filter: ColumnFilter | undefined;
   onChange: (next: ColumnFilter | undefined) => void;
   onClose: () => void;
   sort?: SortControl;
 }
 
-export default function FilterPopover({ def, anchorEl, properties, filter, onChange, onClose, sort }: Props) {
+export default function FilterPopover<T = PropertyRecord>({
+  def,
+  anchorEl,
+  properties,
+  filter,
+  onChange,
+  onClose,
+  sort,
+}: Props<T>) {
   const popoverRef = useRef<HTMLDivElement>(null);
   const [position, setPosition] = useState<{ left: number; top: number } | null>(null);
 
@@ -168,14 +179,14 @@ export default function FilterPopover({ def, anchorEl, properties, filter, onCha
 
 /* ------------------------------------------------------------ value picker */
 
-function ValueBody({
+function ValueBody<T>({
   def,
   properties,
   filter,
   onChange,
 }: {
-  def: ColumnFilterDef;
-  properties: PropertyRecord[];
+  def: ColumnFilterDef<T>;
+  properties: T[];
   filter: ColumnFilter | undefined;
   onChange: (next: ColumnFilter | undefined) => void;
 }) {
@@ -280,14 +291,14 @@ function ValueBody({
 
 /* ------------------------------------------------------------ range picker */
 
-function RangeBody({
+function RangeBody<T>({
   def,
   properties,
   filter,
   onChange,
 }: {
-  def: ColumnFilterDef;
-  properties: PropertyRecord[];
+  def: ColumnFilterDef<T>;
+  properties: T[];
   filter: ColumnFilter | undefined;
   onChange: (next: ColumnFilter | undefined) => void;
 }) {

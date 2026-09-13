@@ -159,7 +159,7 @@ def _is_matchable(prop: EmbeddedProperty) -> bool:
 def is_matchable(prop: EmbeddedProperty) -> bool:
     """Public alias for _is_matchable — the ONE definition of "can this
     property be matched at all", so the broker-requirement side
-    (Service/ClientPropertyMatchingService/requirement_matching_service.py)
+    (Service/BrokerRequirementService/requirement_matching_service.py)
     applies exactly the same rule rather than a second copy of it that
     could drift. Pure delegation: no behaviour of its own."""
     return _is_matchable(prop)

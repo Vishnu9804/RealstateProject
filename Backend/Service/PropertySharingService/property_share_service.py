@@ -37,7 +37,8 @@ from typing import Optional
 
 from Middleware import step_logger
 from Model.PropertySharingModel.share_result import ShareResult, ShareTarget
-from Service.WhatsAppDataFetchingService import requirement_store, whatsapp_connection_manager
+from Service.BrokerRequirementService import requirement_store
+from Service.WhatsAppDataFetchingService import whatsapp_connection_manager
 from Service.WhatsAppInquiryHandlingService import client_store, inquiry_connection_store, outbound_messenger
 from Service.WhatsAppInquiryHandlingService.phone_utils import normalize_phone
 

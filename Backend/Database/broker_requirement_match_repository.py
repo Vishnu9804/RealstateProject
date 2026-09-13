@@ -1,0 +1,196 @@
+"""Postgres implementation of the stored broker-requirement matches — the
+production backend behind Service/BrokerRequirementService/
+requirement_match_store.py once DATABASE_URL is set. Callers never call this
+module directly.
+
+Written for a serverless database billed by compute time and transfer:
+
+  - every function is ONE transaction;
+  - a read is ONE query (run row outer-joined to its match rows);
+  - a batch of new requirements is written with a fixed number of statements
+    no matter how many requirements or matches it holds (one id lookup, one
+    delete, one multi-row insert, one multi-row upsert);
+  - an incremental update is an upsert of only the re-scored rows plus a
+    delete of only the dropped ones — existing rows are never read back
+    first;
+  - the requirement's integer id is resolved inside Postgres from its
+    record_id, and requirement deletes need no code here at all — the
+    foreign keys cascade (see Database/broker_requirement_match_models.py).
+"""
+
+from __future__ import annotations
+
+from datetime import datetime
+from typing import Dict, List, Optional, Set, Tuple
+
+from sqlalchemy import delete, func, insert, select
+from sqlalchemy.dialects.postgresql import insert as pg_insert
+
+from Database.broker_requirement_match_models import BrokerRequirementMatchRow, BrokerRequirementMatchRunRow
+from Database.broker_requirement_models import BrokerRequirementRow
+from Database.session import get_session
+from Model.ClientPropertyMatchingModel.match_bucket import MatchBucket
+from Model.ClientPropertyMatchingModel.match_score import MatchScore
+
+_SCORE_COLUMNS = ("score", "bucket", "evidence_ratio", "is_partial_match", "property_category", "field_scores", "reason")
+
+
+def get_matches(record_id: str) -> Tuple[List[MatchScore], Optional[datetime], Optional[str]]:
+    """(stored scores, computed_at, requirement_fingerprint) for one
+    requirement — computed_at is None when it has never been scored. One
+    query: a scored requirement with no matches comes back as a single row
+    whose match half is NULL."""
+    stmt = (
+        select(
+            BrokerRequirementMatchRunRow.computed_at,
+            BrokerRequirementMatchRunRow.requirement_fingerprint,
+            BrokerRequirementMatchRow,
+        )
+        .select_from(BrokerRequirementMatchRunRow)
+        .outerjoin(
+            BrokerRequirementMatchRow,
+            BrokerRequirementMatchRow.requirement_id == BrokerRequirementMatchRunRow.requirement_id,
+        )
+        .where(BrokerRequirementMatchRunRow.requirement_id == _requirement_id_for(record_id))
+    )
+    with get_session() as session:
+        rows = session.execute(stmt).all()
+    if not rows:
+        return [], None, None
+    computed_at, fingerprint = rows[0][0], rows[0][1]
+    scores = [_to_score(match) for _, _, match in rows if match is not None]
+    return scores, computed_at, fingerprint
+
+
+def replace_matches(results: Dict[str, Tuple[List[MatchScore], str]], computed_at: datetime) -> int:
+    """Full replace for one or many requirements at once: record_id ->
+    (scores, requirement_fingerprint). Every previous match row for those
+    requirements is removed and the new set written, and each one's run row
+    is created or updated. Returns how many match rows were written.
+
+    A record_id with no requirement row (deleted meanwhile) is skipped."""
+    if not results:
+        return 0
+    with get_session() as session:
+        ids: Dict[str, int] = dict(
+            session.execute(
+                select(BrokerRequirementRow.record_id, func.min(BrokerRequirementRow.id))
+                .where(BrokerRequirementRow.record_id.in_(list(results)))
+                .group_by(BrokerRequirementRow.record_id)
+            ).all()
+        )
+        if not ids:
+            return 0
+        session.execute(
+            delete(BrokerRequirementMatchRow).where(BrokerRequirementMatchRow.requirement_id.in_(list(ids.values())))
+        )
+        rows = [
+            _row_values(ids[record_id], match)
+            for record_id, (scores, _) in results.items()
+            if record_id in ids
+            for match in scores
+        ]
+        if rows:
+            session.execute(insert(BrokerRequirementMatchRow), rows)
+        _upsert_runs(
+            session,
+            [
+                {"requirement_id": ids[record_id], "computed_at": computed_at, "requirement_fingerprint": fingerprint}
+                for record_id, (_, fingerprint) in results.items()
+                if record_id in ids
+            ],
+        )
+        return len(rows)
+
+
+def merge_matches(
+    record_id: str,
+    scores: List[MatchScore],
+    considered_record_ids: Set[str],
+    computed_at: datetime,
+    fingerprint: str,
+) -> None:
+    """Incremental update for one requirement: `scores` are the re-scored
+    properties that still match (inserted or overwritten), anything in
+    `considered_record_ids` that is not among them no longer matches and is
+    deleted, and every other stored row is left exactly as it was."""
+    with get_session() as session:
+        requirement_id = session.execute(
+            select(func.min(BrokerRequirementRow.id)).where(BrokerRequirementRow.record_id == record_id)
+        ).scalar()
+        if requirement_id is None:
+            return
+        if scores:
+            upsert = pg_insert(BrokerRequirementMatchRow).values(
+                [_row_values(requirement_id, match) for match in scores]
+            )
+            session.execute(
+                upsert.on_conflict_do_update(
+                    constraint="uq_broker_requirement_match",
+                    set_={column: getattr(upsert.excluded, column) for column in _SCORE_COLUMNS},
+                )
+            )
+        dropped = considered_record_ids - {match.record_id for match in scores}
+        if dropped:
+            session.execute(
+                delete(BrokerRequirementMatchRow).where(
+                    BrokerRequirementMatchRow.requirement_id == requirement_id,
+                    BrokerRequirementMatchRow.property_record_id.in_(list(dropped)),
+                )
+            )
+        _upsert_runs(
+            session,
+            [{"requirement_id": requirement_id, "computed_at": computed_at, "requirement_fingerprint": fingerprint}],
+        )
+
+
+def _requirement_id_for(record_id: str):
+    # min(): record_id is unique by construction but not enforced unique in
+    # the database (see broker_requirement_repository._find_row).
+    return (
+        select(func.min(BrokerRequirementRow.id))
+        .where(BrokerRequirementRow.record_id == record_id)
+        .scalar_subquery()
+    )
+
+
+def _upsert_runs(session, values: List[dict]) -> None:
+    if not values:
+        return
+    upsert = pg_insert(BrokerRequirementMatchRunRow).values(values)
+    session.execute(
+        upsert.on_conflict_do_update(
+            index_elements=[BrokerRequirementMatchRunRow.requirement_id],
+            set_={
+                "computed_at": upsert.excluded.computed_at,
+                "requirement_fingerprint": upsert.excluded.requirement_fingerprint,
+            },
+        )
+    )
+
+
+def _row_values(requirement_id: int, match: MatchScore) -> dict:
+    return {
+        "requirement_id": requirement_id,
+        "property_record_id": match.record_id,
+        "score": match.score,
+        "bucket": match.bucket.value,
+        "evidence_ratio": match.evidence_ratio,
+        "is_partial_match": match.is_partial_match,
+        "property_category": match.property_category,
+        "field_scores": match.field_scores,
+        "reason": match.reason,
+    }
+
+
+def _to_score(row: BrokerRequirementMatchRow) -> MatchScore:
+    return MatchScore(
+        record_id=row.property_record_id,
+        score=row.score,
+        bucket=MatchBucket(row.bucket),
+        evidence_ratio=row.evidence_ratio,
+        is_partial_match=row.is_partial_match,
+        property_category=row.property_category,
+        field_scores=row.field_scores,
+        reason=row.reason,
+    )

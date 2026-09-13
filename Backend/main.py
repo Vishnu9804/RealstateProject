@@ -76,10 +76,11 @@ if sys.platform == "win32":
     sys.stderr.reconfigure(encoding="utf-8", errors="replace")
 
 from Controller.AgentManagementController.agent_controller import router as agent_router
+from Controller.BrokerRequirementController.broker_requirement_controller import router as broker_requirement_router
+from Controller.BrokerRequirementController.requirement_matching_controller import router as requirement_matching_router
 from Controller.ClientPropertyMatchingController.matching_controller import router as matching_router
 from Controller.WhatsAppDataFetchingController.area_filter_controller import router as area_filter_router
 from Controller.WhatsAppDataFetchingController.area_knowledge_controller import router as area_knowledge_router
-from Controller.WhatsAppDataFetchingController.broker_requirement_controller import router as broker_requirement_router
 from Controller.WhatsAppDataFetchingController.display_settings_controller import router as display_settings_router
 from Controller.WhatsAppDataFetchingController.property_controller import router as property_router
 from Controller.WhatsAppDataFetchingController.soldout_property_controller import router as soldout_property_router
@@ -297,6 +298,7 @@ app.include_router(property_share_router, prefix="/api")
 app.include_router(inquiry_form_router, prefix="/api")
 app.include_router(phone_verification_router, prefix="/api")
 app.include_router(matching_router, prefix="/api")
+app.include_router(requirement_matching_router, prefix="/api")
 app.include_router(instagram_router, prefix="/api")
 app.include_router(landing_page_router, prefix="/api")
 app.include_router(agent_router, prefix="/api")

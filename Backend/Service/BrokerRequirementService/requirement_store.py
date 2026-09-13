@@ -9,19 +9,20 @@ property_vector_store.py:
   - DATABASE_URL set: delegates to Database/broker_requirement_repository.py.
 
 Deliberately NOT called a "vector store" like its property counterpart:
-there are no vectors here. Requirements are never embedded, never searched
-by similarity and never duplicate-checked — see
-requirement_pipeline_service.py's docstring for why that is a product
-decision, not an omission.
+there are no vectors here. Requirements are never embedded and never
+searched by similarity — the only duplicate question ever asked of this
+store is the exact-text fingerprint lookup the pipeline makes before its LLM
+stage (see find_message_ids_by_fingerprints).
 """
 
 from __future__ import annotations
 
-from typing import Any, Dict, List, Optional
+from typing import Any, Collection, Dict, List, Optional
 
 from Database import broker_requirement_repository
 from Database.session import is_database_configured
-from Model.WhatsAppDataFetchingModel.broker_requirement import StructuredRequirement
+from Model.BrokerRequirementModel.broker_requirement import StructuredRequirement
+from Service.WhatsAppDataFetchingService import message_fingerprint
 
 _MAX_STORED_REQUIREMENTS = 1000
 
@@ -31,17 +32,53 @@ _requirements: List[StructuredRequirement] = []
 # BrokerRequirementRow.updated_at, since StructuredRequirement itself carries
 # no updated timestamp. Only ever read by get_requirements_version below.
 _version_counter = 0
+# In-memory fallback's stand-in for the indexed
+# broker_requirement_original_messages.text_fingerprint column: message
+# content fingerprint -> the id of the message that produced requirements.
+# Deliberately NOT trimmed alongside _requirements — a fingerprint is ~64
+# bytes, and forgetting one would let an already-seen message back through
+# the pre-LLM duplicate check.
+_message_fingerprints: Dict[str, str] = {}
 
 
 def add_requirement(requirement: StructuredRequirement) -> None:
+    add_requirements([requirement])
+
+
+def add_requirements(requirements: List[StructuredRequirement]) -> None:
+    """Stores a whole batch at once — in database mode, one transaction for
+    the batch instead of one per requirement."""
+    if not requirements:
+        return
     if is_database_configured():
-        broker_requirement_repository.add_requirement(requirement)
+        broker_requirement_repository.add_requirements(requirements)
         return
     global _version_counter
     _version_counter += 1
-    _requirements.append(requirement)
+    for requirement in requirements:
+        _requirements.append(requirement)
+        if message_fingerprint.is_fingerprintable(requirement.message_text):
+            _message_fingerprints.setdefault(
+                message_fingerprint.fingerprint(requirement.message_text), requirement.source_message_id
+            )
     if len(_requirements) > _MAX_STORED_REQUIREMENTS:
         del _requirements[: len(_requirements) - _MAX_STORED_REQUIREMENTS]
+
+
+def find_message_ids_by_fingerprints(text_fingerprints: Collection[str]) -> Dict[str, str]:
+    """fingerprint -> id of the already-stored original message with that
+    exact (normalized) text, for every given fingerprint that has one — what
+    the pre-LLM exact-duplicate check asks (see
+    requirement_pipeline_service._drop_duplicate_messages). In database mode
+    this is a single indexed query for the whole batch that transfers no
+    message text at all."""
+    if is_database_configured():
+        return broker_requirement_repository.find_message_ids_by_fingerprints(text_fingerprints)
+    return {
+        text_fingerprint: _message_fingerprints[text_fingerprint]
+        for text_fingerprint in text_fingerprints
+        if text_fingerprint in _message_fingerprints
+    }
 
 
 def get_all_requirements(limit: int = 500) -> List[StructuredRequirement]:

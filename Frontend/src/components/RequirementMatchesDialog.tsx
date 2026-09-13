@@ -112,8 +112,12 @@ export default function RequirementMatchesDialog({
     (manual = false) => {
       if (manual) setRefreshing(true);
       setError(null);
-      matchingApi
-        .getRequirementMatches(requirement.record_id)
+      // An open reads the stored matches (brought current by the backend);
+      // Refresh asks for a full re-score, same as the client matches dialog.
+      (manual
+        ? matchingApi.recomputeRequirementMatches(requirement.record_id)
+        : matchingApi.getRequirementMatches(requirement.record_id)
+      )
         .then(setResult)
         .catch((err) => setError(friendlyError(err)))
         .finally(() => {

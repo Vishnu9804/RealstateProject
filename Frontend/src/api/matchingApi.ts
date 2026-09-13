@@ -21,15 +21,18 @@ export const matchingApi = {
   recompute: (phone: string): Promise<ClientMatchResult> =>
     apiClient.post(`/matching/clients/${encodeURIComponent(phone)}/recompute`),
 
-  /** The demand side: every stored property scored against ONE broker
-   *  requirement, through the same engine the client side uses. Computed on
-   *  demand rather than read from a cache, which is why there is no
-   *  recompute counterpart — every call IS a fresh score (see
-   *  Backend/Service/ClientPropertyMatchingService/
-   *  requirement_matching_service.py for why caching it would buy
-   *  nothing). */
+  /** The demand side: ONE broker requirement's stored matches, brought
+   *  current by the backend before they are returned (only properties added
+   *  or edited since it was last scored are scored — see
+   *  Backend/Service/BrokerRequirementService/requirement_matching_service.py).
+   *  Safe to call on every dialog open. */
   getRequirementMatches: (recordId: string): Promise<RequirementMatchResult> =>
     apiClient.get(`/matching/requirements/${encodeURIComponent(recordId)}`),
+
+  /** The requirement dialog's Refresh — a full re-score of this one
+   *  requirement, replacing its stored matches. */
+  recomputeRequirementMatches: (recordId: string): Promise<RequirementMatchResult> =>
+    apiClient.post(`/matching/requirements/${encodeURIComponent(recordId)}/recompute`),
 
   /** AgentManagement feature: every completed visit for this client,
    *  across every agent (even one since deleted), newest first — backs

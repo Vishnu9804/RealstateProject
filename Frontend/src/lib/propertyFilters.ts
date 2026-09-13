@@ -20,6 +20,11 @@ import { formatCarpetArea, formatCompactInr, parseCompactInr, parseSqft } from "
  * near-unique per record, so a value picker there would list hundreds of
  * one-hit options and a range is meaningless. The search box already covers
  * them properly.
+ *
+ * Generic over the record type (defaulting to PropertyRecord) so the Broker
+ * Requirements page filters with this exact machinery and the exact same
+ * popover — see lib/requirementFilters.ts. Every property-side caller keeps
+ * using it without a type argument and behaves exactly as before.
  */
 
 /** Sentinel for records where the column is empty — kept as an explicit,
@@ -34,20 +39,30 @@ const UNSAVED_CONTACT = "Unsaved";
 
 export type FilterKind = "values" | "range";
 
-export interface ColumnFilterDef {
+export interface ColumnFilterDef<T = PropertyRecord> {
   key: string;
   label: string;
   kind: FilterKind;
   /** `values` columns: the option a record belongs to. Not named `valueOf`:
    *  that inherits a conflicting signature from Object.prototype, which
    *  quietly breaks the type of every object literal declaring one. */
-  optionOf?: (property: PropertyRecord) => string | null;
+  optionOf?: (property: T) => string | null;
+  /** `values` columns whose record can belong to SEVERAL options at once
+   *  (a requirement naming three areas, or asking for "4 BHK, 5 BHK"). Takes
+   *  precedence over `optionOf`: the record counts once towards each of its
+   *  options, and passes the filter when any one of them is selected. */
+  optionsOf?: (property: T) => string[];
   /** `values` columns: secondary text shown under the option and included
    *  in its search — this is how a personal chat can be found by either the
    *  saved contact name or the sender's own WhatsApp name. */
-  detailOf?: (property: PropertyRecord) => string | null;
+  detailOf?: (property: T) => string | null;
   /** `range` columns: the quantity being bounded. */
-  numberOf?: (property: PropertyRecord) => number | null;
+  numberOf?: (property: T) => number | null;
+  /** `range` columns whose record holds a span rather than one number (a
+   *  requirement's budget "25k – 28k"). Takes precedence over `numberOf`: a
+   *  record passes when its span overlaps the bounds; either end may be
+   *  null (open). */
+  spanOf?: (property: T) => [number | null, number | null] | null;
   /** `range` columns: render / read a bound in the units people speak in. */
   format?: (value: number) => string;
   parse?: (raw: string) => number | null;
@@ -145,10 +160,28 @@ export const FILTER_DEF_BY_KEY: Record<string, ColumnFilterDef> = Object.fromEnt
 
 /* ------------------------------------------------------------- derivation */
 
-function bucketOf(property: PropertyRecord, def: ColumnFilterDef): string {
+function bucketOf<T>(property: T, def: ColumnFilterDef<T>): string {
   const raw = def.optionOf?.(property);
   const trimmed = raw?.trim();
   return trimmed ? trimmed : NO_VALUE;
+}
+
+/** Every option a record belongs to — exactly one for an `optionOf` column,
+ *  one per distinct (case-insensitive) value for an `optionsOf` column, and
+ *  the "Not set" bucket when there is nothing. */
+function bucketsOf<T>(property: T, def: ColumnFilterDef<T>): string[] {
+  if (!def.optionsOf) return [bucketOf(property, def)];
+  const seen = new Set<string>();
+  const values: string[] = [];
+  for (const raw of def.optionsOf(property)) {
+    const trimmed = raw?.trim();
+    if (!trimmed) continue;
+    const key = trimmed.toLowerCase();
+    if (seen.has(key)) continue;
+    seen.add(key);
+    values.push(trimmed);
+  }
+  return values.length > 0 ? values : [NO_VALUE];
 }
 
 /**
@@ -166,7 +199,7 @@ function bucketOf(property: PropertyRecord, def: ColumnFilterDef): string {
  * far, and cross-filtering it would hide the very option someone is trying
  * to add to their selection.
  */
-export function collectOptions(properties: PropertyRecord[], def: ColumnFilterDef): FilterOption[] {
+export function collectOptions<T>(properties: T[], def: ColumnFilterDef<T>): FilterOption[] {
   interface Bucket {
     key: string;
     spellings: Map<string, number>;
@@ -176,16 +209,17 @@ export function collectOptions(properties: PropertyRecord[], def: ColumnFilterDe
   const buckets = new Map<string, Bucket>();
 
   for (const property of properties) {
-    const raw = bucketOf(property, def);
-    const key = raw.toLowerCase();
-    let bucket = buckets.get(key);
-    if (!bucket) {
-      bucket = { key, spellings: new Map(), detail: null, count: 0 };
-      buckets.set(key, bucket);
+    for (const raw of bucketsOf(property, def)) {
+      const key = raw.toLowerCase();
+      let bucket = buckets.get(key);
+      if (!bucket) {
+        bucket = { key, spellings: new Map(), detail: null, count: 0 };
+        buckets.set(key, bucket);
+      }
+      bucket.count += 1;
+      bucket.spellings.set(raw, (bucket.spellings.get(raw) ?? 0) + 1);
+      if (bucket.detail === null && key !== NO_VALUE) bucket.detail = def.detailOf?.(property) ?? null;
     }
-    bucket.count += 1;
-    bucket.spellings.set(raw, (bucket.spellings.get(raw) ?? 0) + 1);
-    if (bucket.detail === null && key !== NO_VALUE) bucket.detail = def.detailOf?.(property) ?? null;
   }
 
   return [...buckets.values()]
@@ -230,17 +264,24 @@ export function toggleValue(selected: string[], value: string): string[] {
 
 /** The span the data actually covers, used to label the range inputs so the
  *  user knows what they are bounding before they type anything. */
-export function collectBounds(
-  properties: PropertyRecord[],
-  def: ColumnFilterDef,
-): { min: number; max: number } | null {
+export function collectBounds<T>(properties: T[], def: ColumnFilterDef<T>): { min: number; max: number } | null {
   let min = Number.POSITIVE_INFINITY;
   let max = Number.NEGATIVE_INFINITY;
-  for (const property of properties) {
-    const value = def.numberOf?.(property);
-    if (value === null || value === undefined) continue;
+  const include = (value: number | null | undefined) => {
+    if (value === null || value === undefined) return;
     if (value < min) min = value;
     if (value > max) max = value;
+  };
+  for (const property of properties) {
+    if (def.spanOf) {
+      const span = def.spanOf(property);
+      if (span) {
+        include(span[0]);
+        include(span[1]);
+      }
+    } else {
+      include(def.numberOf?.(property));
+    }
   }
   return Number.isFinite(min) && Number.isFinite(max) ? { min, max } : null;
 }
@@ -252,12 +293,18 @@ export function collectBounds(
  * for each of up to 500 rows: lower-casing the selections and turning them
  * into Sets inside the loop would redo that work tens of thousands of times
  * on every keystroke and poll.
+ *
+ * `defs` defaults to the property columns, so every property-side caller is
+ * unchanged; the Broker Requirements page passes its own.
  */
-export function compileFilters(state: FilterState): (property: PropertyRecord) => boolean {
-  const valueChecks: { def: ColumnFilterDef; allowed: Set<string> }[] = [];
-  const rangeChecks: { def: ColumnFilterDef; min: number | null; max: number | null }[] = [];
+export function compileFilters<T = PropertyRecord>(
+  state: FilterState,
+  defs: ColumnFilterDef<T>[] = FILTER_DEFS as unknown as ColumnFilterDef<T>[],
+): (property: T) => boolean {
+  const valueChecks: { def: ColumnFilterDef<T>; allowed: Set<string> }[] = [];
+  const rangeChecks: { def: ColumnFilterDef<T>; min: number | null; max: number | null }[] = [];
 
-  for (const def of FILTER_DEFS) {
+  for (const def of defs) {
     const filter = state[def.key];
     if (!filter) continue;
     if (filter.kind === "values") {
@@ -273,9 +320,19 @@ export function compileFilters(state: FilterState): (property: PropertyRecord) =
 
   return (property) => {
     for (const { def, allowed } of valueChecks) {
-      if (!allowed.has(bucketOf(property, def).toLowerCase())) return false;
+      if (!bucketsOf(property, def).some((value) => allowed.has(value.toLowerCase()))) return false;
     }
     for (const { def, min, max } of rangeChecks) {
+      if (def.spanOf) {
+        const span = def.spanOf(property);
+        // Same rule as a missing number below: a record with no span at all
+        // can't be checked against the bound, so it isn't inside it.
+        if (!span || (span[0] === null && span[1] === null)) return false;
+        const [low, high] = span;
+        if (max !== null && low !== null && low > max) return false;
+        if (min !== null && high !== null && high < min) return false;
+        continue;
+      }
       const value = def.numberOf?.(property) ?? null;
       // A record with no price simply isn't inside any price range. Letting
       // it through would quietly pad every filtered result with rows that
@@ -300,7 +357,7 @@ export function countActiveFilters(state: FilterState): number {
 /** Short human summary of one active filter, for the removable chips that
  *  keep applied filters visible after the popover closes — a filter you
  *  can't see is a filter you forget you set. */
-export function describeFilter(def: ColumnFilterDef, filter: ColumnFilter): string {
+export function describeFilter<T>(def: ColumnFilterDef<T>, filter: ColumnFilter): string {
   if (filter.kind === "values") {
     const labels = filter.selected.map((value) => (value === NO_VALUE ? "Not set" : value));
     if (labels.length <= 2) return labels.join(", ");

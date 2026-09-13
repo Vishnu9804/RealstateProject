@@ -66,11 +66,10 @@ from Config.settings import get_settings
 from Database.session import is_database_configured
 from Middleware import step_logger
 from Model.WhatsAppDataFetchingModel.whatsapp_message import WhatsAppChatMessage
+from Service.BrokerRequirementService import requirement_filter_service, requirement_pipeline_service
 from Service.WhatsAppDataFetchingService import (
     area_filter_service,
     property_pipeline_service,
-    requirement_filter_service,
-    requirement_pipeline_service,
     soldout_property_service,
     whatsapp_connection_manager,
 )

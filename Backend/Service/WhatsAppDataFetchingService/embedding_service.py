@@ -5,23 +5,24 @@ no per-call cost, and nothing sent over the network at inference time
 (only the one-off model download on first use).
 
 Critical design constraint, driving everything in this file: this is the
-ONLY place a property is ever embedded. The vector computed here is:
-  1. compared against existing property vectors for duplicate detection
-     (next step), and
-  2. the exact same vector later written into Postgres's `vector` column
-     (database step) — pgvector only stores and indexes vectors, it cannot
-     generate one itself, so whatever isn't computed here never gets
-     computed at all. There is no second embedding pass "at insert time";
-     the vector saved to the database is this one, byte-for-byte.
+ONLY place a property is ever embedded. The vector computed here is the
+exact same vector later written into Postgres's `vector` column (database
+step) — pgvector only stores and indexes vectors, it cannot generate one
+itself, so whatever isn't computed here never gets computed at all. There is
+no second embedding pass "at insert time"; the vector saved to the database
+is this one, byte-for-byte. Its only reader is client-property match scoring
+(Service/ClientPropertyMatchingService/scoring.py) — duplicates are no longer
+detected by vector similarity at all, but by an exact-text fingerprint before
+the LLM stage (see property_pipeline_service._drop_duplicate_messages).
 
-Using the same model for both an incoming property and everything already
-stored is also what makes the similarity search meaningful in the first
-place — vectors from two different embedding models are not comparable,
-even if they happen to share the same dimension count. EMBEDDING_MODEL_NAME
-and EMBEDDING_DIMENSIONS below are the two facts every later stage (the
-duplicate-check step, and the pgvector column definition after that) must
-stay in lock-step with — both steps import them from here rather than
-hardcoding a model name or a dimension count of their own.
+Using the same model for both a property and a client's requirement is also
+what makes that similarity score meaningful in the first place — vectors
+from two different embedding models are not comparable, even if they happen
+to share the same dimension count. EMBEDDING_MODEL_NAME and
+EMBEDDING_DIMENSIONS below are the two facts every later stage (match
+scoring, and the pgvector column definition) must stay in lock-step with —
+both import them from here rather than hardcoding a model name or a
+dimension count of their own.
 """
 
 from __future__ import annotations

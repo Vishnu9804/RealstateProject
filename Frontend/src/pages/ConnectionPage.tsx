@@ -8,6 +8,7 @@ import { useDebounced, usePersistentState, useUnsavedGuard } from "../hooks/useU
 import { friendlyError } from "../lib/apiError";
 import { useToast } from "../components/ui/Toast";
 import { useAppStatus } from "../state/StatusProvider";
+import { useAuth } from "../state/AuthProvider";
 import ConfirmDialog from "../components/ui/ConfirmDialog";
 import InstagramConnectionTab from "../components/InstagramConnectionTab";
 import {
@@ -396,8 +397,47 @@ function PendingQrPanel({
   onCancel: () => void;
   starting: boolean;
 }) {
+  // Cancel calls DELETE /onboard, which is admin-only server-side (see
+  // ConnectedNumbersPanel's own comment on the same reasoning) — hidden
+  // here so an employee who starts onboarding never hits a button that
+  // would fail with a 403.
+  const { isAdmin } = useAuth();
   const waitingForQr = pending?.status === "waiting_for_qr_scan";
   const inProgress = pending !== null;
+  const [qrUrl, setQrUrl] = useState<string | null>(null);
+  const qrUrlRef = useRef<string | null>(null);
+
+  const showQr = (url: string | null) => {
+    if (qrUrlRef.current) URL.revokeObjectURL(qrUrlRef.current);
+    qrUrlRef.current = url;
+    setQrUrl(url);
+  };
+
+  useEffect(() => () => {
+    if (qrUrlRef.current) URL.revokeObjectURL(qrUrlRef.current);
+  }, []);
+
+  useEffect(() => {
+    if (!waitingForQr) {
+      showQr(null);
+      return;
+    }
+    let cancelled = false;
+    whatsappApi
+      .getPendingQr()
+      .then((blob) => {
+        if (cancelled) return;
+        showQr(URL.createObjectURL(blob));
+        setQrLoadFailed(false);
+      })
+      .catch(() => {
+        if (!cancelled) setQrLoadFailed(true);
+      });
+    return () => {
+      cancelled = true;
+    };
+    // eslint-disable-next-line react-hooks/exhaustive-deps
+  }, [qrTick, waitingForQr]);
 
   return (
     <Panel tilt raised className="stack stack-4">
@@ -414,9 +454,11 @@ function PendingQrPanel({
           </p>
         </div>
         {inProgress ? (
-          <Button variant="ghost" onClick={onCancel}>
-            Cancel
-          </Button>
+          isAdmin && (
+            <Button variant="ghost" onClick={onCancel}>
+              Cancel
+            </Button>
+          )
         ) : (
           <Button variant="primary" icon={<IconPlus size={15} />} onClick={onStart} busy={starting}>
             Add a number
@@ -429,9 +471,9 @@ function PendingQrPanel({
           <div className="two-col">
             <div className="stack stack-4" style={{ alignItems: "center" }}>
               {waitingForQr ? (
-                !qrLoadFailed ? (
+                qrUrl && !qrLoadFailed ? (
                   <div className="qr">
-                    <img src={whatsappApi.getPendingQrUrl(qrTick)} alt="WhatsApp pairing QR code" onError={() => setQrLoadFailed(true)} />
+                    <img src={qrUrl} alt="WhatsApp pairing QR code" />
                     <span className="qr__corner qr__corner--tl" />
                     <span className="qr__corner qr__corner--tr" />
                     <span className="qr__corner qr__corner--bl" />
@@ -486,6 +528,14 @@ function ConnectedNumbersPanel({
   onUnlink: (connection: WhatsAppConnection) => void;
   unlinkBusyId: string | null;
 }) {
+  // Delete is admin-only — Backend/Controller/WhatsAppDataFetchingController/
+  // whatsapp_connections_controller.py's DELETE route requires it
+  // server-side regardless; hiding the button here is purely so an
+  // employee never sees one that would fail with a 403. Unlinking a
+  // WhatsApp number is exactly the kind of high-blast-radius change an
+  // untrustworthy employee could otherwise use to disrupt the whole intake
+  // pipeline, not just one record.
+  const { isAdmin } = useAuth();
   return (
     <Panel className="stack stack-3" delay={70}>
       <div className="row-between">
@@ -516,15 +566,17 @@ function ConnectedNumbersPanel({
                   </div>
                 )}
               </div>
-              <Button
-                size="sm"
-                variant="ghost"
-                icon={<IconTrash size={14} />}
-                busy={unlinkBusyId === connection.connection_id}
-                onClick={() => onUnlink(connection)}
-              >
-                Unlink
-              </Button>
+              {isAdmin && (
+                <Button
+                  size="sm"
+                  variant="ghost"
+                  icon={<IconTrash size={14} />}
+                  busy={unlinkBusyId === connection.connection_id}
+                  onClick={() => onUnlink(connection)}
+                >
+                  Unlink
+                </Button>
+              )}
             </div>
           ))}
         </div>

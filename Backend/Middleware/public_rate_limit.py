@@ -62,6 +62,13 @@ _LIMITS: Tuple[Tuple[str, int, int], ...] = (
     # address can work through, which is the part a per-number rule cannot
     # see.
     ("/api/whatsapp-inquiry/verify", 60, 600),
+    # Login. Reachable with no account at all (that's the whole point of a
+    # login form), so it's the one AuthManagement route that needs its own
+    # ceiling against password-guessing — every other /api/auth and /api/users
+    # route requires a valid token already and is therefore excluded from
+    # this list, same as the rest of the internal tool.
+    ("/api/auth/login", 20, 600),
+    ("/api/auth/recovery", 20, 600),
 )
 
 # Hard ceiling on how many addresses are tracked at once. Without it, a

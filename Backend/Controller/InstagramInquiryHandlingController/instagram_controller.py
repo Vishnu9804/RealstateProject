@@ -10,9 +10,10 @@ frontend polls /status to know which state it's in, same as it already
 polls the WhatsApp connection's status.
 """
 
-from fastapi import APIRouter
+from fastapi import APIRouter, Depends
 from pydantic import BaseModel
 
+from Service.AuthManagementService.auth_dependencies import require_admin
 from Service.InstagramInquiryHandlingService import instagram_connection_service
 
 router = APIRouter(prefix="/instagram", tags=["instagram"])
@@ -56,6 +57,6 @@ def start_over() -> dict:
     return instagram_connection_service.start_over()
 
 
-@router.post("/disconnect")
+@router.post("/disconnect", dependencies=[Depends(require_admin)])
 def disconnect() -> dict:
     return instagram_connection_service.disconnect()

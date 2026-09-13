@@ -283,6 +283,11 @@ def init_db() -> None:
     from Database.manual_property_models import ManualPropertyRow  # noqa: F401
     from Service.WhatsAppDataFetchingService.embedding_service import EMBEDDING_DIMENSIONS
 
+    # Same import-for-side-effect reasoning, for the AuthManagement feature's
+    # login accounts table — UserRow lives on this module's own Base (see
+    # Database/user_models.py's own docstring for why it isn't on ClientBase).
+    from Database import user_models  # noqa: F401
+
     engine = _get_engine()
     with engine.begin() as connection:
         connection.execute(text("CREATE EXTENSION IF NOT EXISTS vector"))
@@ -292,6 +297,7 @@ def init_db() -> None:
         connection.execute(
             text(f"ALTER TABLE clients ADD COLUMN IF NOT EXISTS requirement_embedding vector({EMBEDDING_DIMENSIONS})")
         )
+        connection.execute(text("ALTER TABLE users ADD COLUMN IF NOT EXISTS session_epoch INTEGER NOT NULL DEFAULT 0"))
     with engine.begin() as connection:
         connection.execute(text("ALTER TABLE properties ADD COLUMN IF NOT EXISTS price_per_unit_text VARCHAR"))
         connection.execute(

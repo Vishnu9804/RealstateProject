@@ -15,6 +15,7 @@ import type {
   MatchCounts,
 } from "../api/types";
 import { usePolling } from "../hooks/usePolling";
+import { useAuth } from "../state/AuthProvider";
 import { useDebounced } from "../hooks/useUi";
 import { friendlyError } from "../lib/apiError";
 import { formatCompactInr, relativeTime } from "../lib/formatters";
@@ -783,6 +784,11 @@ function ClientTable({
   onDelete: (client: InquiryClientRecord) => void;
   editBusyPhone: string | null;
 }) {
+  // Delete is admin-only — Backend/Controller/WhatsAppInquiryHandlingController/
+  // whatsapp_inquiry_controller.py's DELETE /clients/{phone} requires it
+  // server-side regardless; hiding the button here is purely so an
+  // employee never sees one that would fail with a 403.
+  const { isAdmin } = useAuth();
   return (
     <div className="table-frame anim-rise">
       <div className="table-scroll">
@@ -888,15 +894,17 @@ function ClientTable({
                       >
                         Edit
                       </Button>
-                      <Button
-                        size="sm"
-                        variant="ghost"
-                        icon={<IconTrash size={14} />}
-                        onClick={() => onDelete(client)}
-                        title="Delete this inquiry"
-                      >
-                        Delete
-                      </Button>
+                      {isAdmin && (
+                        <Button
+                          size="sm"
+                          variant="ghost"
+                          icon={<IconTrash size={14} />}
+                          onClick={() => onDelete(client)}
+                          title="Delete this inquiry"
+                        >
+                          Delete
+                        </Button>
+                      )}
                     </div>
                   </td>
                 </tr>

@@ -57,7 +57,7 @@ import sys
 import threading
 from contextlib import asynccontextmanager
 
-from fastapi import FastAPI
+from fastapi import Depends, FastAPI
 from fastapi.middleware.cors import CORSMiddleware
 from fastapi.middleware.gzip import GZipMiddleware
 
@@ -76,6 +76,8 @@ if sys.platform == "win32":
     sys.stderr.reconfigure(encoding="utf-8", errors="replace")
 
 from Controller.AgentManagementController.agent_controller import router as agent_router
+from Controller.AuthManagementController.auth_controller import router as auth_router
+from Controller.AuthManagementController.user_controller import router as user_management_router
 from Controller.BrokerRequirementController.broker_requirement_controller import router as broker_requirement_router
 from Controller.BrokerRequirementController.requirement_matching_controller import router as requirement_matching_router
 from Controller.ClientPropertyMatchingController.matching_controller import router as matching_router
@@ -98,6 +100,8 @@ from Middleware.logging_config import configure_logging
 from Middleware.public_rate_limit import PublicRateLimitMiddleware
 from Middleware import step_logger
 from Service.AgentManagementService import handoff_template_service
+from Service.AuthManagementService import user_store
+from Service.AuthManagementService.auth_dependencies import get_current_user
 from Service.PropertySharingService import property_share_template_service
 from Service.ClientPropertyMatchingService import scheduled_recompute_service
 from Service.WhatsAppDataFetchingService import area_filter_service, area_knowledge_service, display_settings_service, whatsapp_service
@@ -165,6 +169,12 @@ async def lifespan(_app: FastAPI):
         await _init_database()
     finally:
         heartbeat.cancel()
+
+    # One query: login accounts are served from memory afterwards (no per-request DB cost).
+    try:
+        await asyncio.to_thread(user_store.load_and_seed)
+    except Exception as exc:  # noqa: BLE001
+        step_logger.error(f"Could not load login accounts — nobody can sign in until this is fixed: {exc!r}")
 
     # Loaded AFTER the database step on purpose: it canonicalises the area
     # spellings in its file against the client's selected areas, which the
@@ -285,23 +295,43 @@ app.add_middleware(
 # pure upside for every route, not just the landing page's.
 app.add_middleware(GZipMiddleware, minimum_size=1024)
 
-app.include_router(whatsapp_router, prefix="/api")
-app.include_router(whatsapp_connections_router, prefix="/api")
-app.include_router(area_filter_router, prefix="/api")
-app.include_router(area_knowledge_router, prefix="/api")
-app.include_router(display_settings_router, prefix="/api")
-app.include_router(property_router, prefix="/api")
-app.include_router(soldout_property_router, prefix="/api")
-app.include_router(broker_requirement_router, prefix="/api")
-app.include_router(whatsapp_inquiry_router, prefix="/api")
-app.include_router(property_share_router, prefix="/api")
+# AuthManagement's own routers are the two exceptions to the blanket login
+# requirement just below: /api/auth (login must be reachable while logged
+# out; /api/auth/me and /api/auth/me/password check the token themselves,
+# per-route) and /api/users (every route already requires admin, declared on
+# user_controller.router itself).
+app.include_router(auth_router, prefix="/api")
+app.include_router(user_management_router, prefix="/api")
+
+# Every OTHER router below is the internal ops tool (Frontend/) — nothing an
+# anonymous visitor should ever be able to reach. `dependencies=
+# [Depends(get_current_user)]` requires a valid, logged-in session for every
+# route on that router, without touching a single route handler's own code.
+#
+# inquiry_form_router and phone_verification_router are NOT included in this
+# list: both are genuinely public (see their own module docstrings) — the
+# registration form and OTP verification a website visitor uses, with no
+# account of their own. Gating them would break the public site
+# (LandingPage/) entirely. landing_page_router is similarly public for most
+# of its routes, so it is gated per-route instead, inside
+# landing_page_controller.py itself, rather than here at the router level.
+app.include_router(whatsapp_router, prefix="/api", dependencies=[Depends(get_current_user)])
+app.include_router(whatsapp_connections_router, prefix="/api", dependencies=[Depends(get_current_user)])
+app.include_router(area_filter_router, prefix="/api", dependencies=[Depends(get_current_user)])
+app.include_router(area_knowledge_router, prefix="/api", dependencies=[Depends(get_current_user)])
+app.include_router(display_settings_router, prefix="/api", dependencies=[Depends(get_current_user)])
+app.include_router(property_router, prefix="/api", dependencies=[Depends(get_current_user)])
+app.include_router(soldout_property_router, prefix="/api", dependencies=[Depends(get_current_user)])
+app.include_router(broker_requirement_router, prefix="/api", dependencies=[Depends(get_current_user)])
+app.include_router(whatsapp_inquiry_router, prefix="/api", dependencies=[Depends(get_current_user)])
+app.include_router(property_share_router, prefix="/api", dependencies=[Depends(get_current_user)])
 app.include_router(inquiry_form_router, prefix="/api")
 app.include_router(phone_verification_router, prefix="/api")
-app.include_router(matching_router, prefix="/api")
-app.include_router(requirement_matching_router, prefix="/api")
-app.include_router(instagram_router, prefix="/api")
+app.include_router(matching_router, prefix="/api", dependencies=[Depends(get_current_user)])
+app.include_router(requirement_matching_router, prefix="/api", dependencies=[Depends(get_current_user)])
+app.include_router(instagram_router, prefix="/api", dependencies=[Depends(get_current_user)])
 app.include_router(landing_page_router, prefix="/api")
-app.include_router(agent_router, prefix="/api")
+app.include_router(agent_router, prefix="/api", dependencies=[Depends(get_current_user)])
 
 
 @app.get("/")

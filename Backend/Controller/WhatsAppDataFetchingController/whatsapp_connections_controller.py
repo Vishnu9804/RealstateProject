@@ -8,13 +8,14 @@ Thin by design — all logic lives in Service/WhatsAppDataFetchingService/
 whatsapp_connection_manager.py; this module only translates HTTP <-> Service.
 """
 
-from fastapi import APIRouter, HTTPException, Response
+from fastapi import APIRouter, Depends, HTTPException, Response
 
 from Model.WhatsAppDataFetchingModel.whatsapp_connection import (
     PropertyRequirementSelectionRequest,
     UpdateRolesRequest,
     WhatsAppConnectionView,
 )
+from Service.AuthManagementService.auth_dependencies import require_admin
 from Service.WhatsAppDataFetchingService import whatsapp_connection_manager
 
 router = APIRouter(prefix="/whatsapp/connections", tags=["whatsapp-connections"])
@@ -47,7 +48,7 @@ def start_onboarding() -> WhatsAppConnectionView:
     return whatsapp_connection_manager.start_onboarding()
 
 
-@router.delete("/onboard", status_code=204)
+@router.delete("/onboard", status_code=204, dependencies=[Depends(require_admin)])
 def cancel_onboarding() -> None:
     """Backs out of an in-progress onboarding before it's scanned. No-op if
     nothing is currently pending."""
@@ -85,7 +86,7 @@ def update_property_requirement_selection(
         raise HTTPException(status_code=409, detail=str(exc))
 
 
-@router.delete("/{connection_id}", status_code=204)
+@router.delete("/{connection_id}", status_code=204, dependencies=[Depends(require_admin)])
 def unlink_connection(connection_id: str) -> None:
     """Logs this number out and forgets it entirely — it stops appearing in
     the connected-numbers list, and re-adding the same number later means

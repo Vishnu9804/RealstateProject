@@ -12,10 +12,11 @@ one. Edit and Delete are the only writes.
 
 from typing import List, Literal, Optional
 
-from fastapi import APIRouter, HTTPException
+from fastapi import APIRouter, Depends, HTTPException
 from pydantic import BaseModel
 
 from Model.BrokerRequirementModel.broker_requirement import BrokerRequirementRecord
+from Service.AuthManagementService.auth_dependencies import require_admin
 from Service.BrokerRequirementService import requirement_pipeline_service
 
 router = APIRouter(prefix="/requirements", tags=["requirements"])
@@ -67,7 +68,7 @@ def update_requirement(record_id: str, body: RequirementUpdateRequest) -> Broker
     return updated
 
 
-@router.delete("/{record_id}", status_code=204)
+@router.delete("/{record_id}", status_code=204, dependencies=[Depends(require_admin)])
 def delete_requirement(record_id: str) -> None:
     deleted = requirement_pipeline_service.delete_requirement(record_id)
     if not deleted:

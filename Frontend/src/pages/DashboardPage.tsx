@@ -4,6 +4,7 @@ import { propertyApi } from "../api/propertyApi";
 import { soldoutPropertyApi } from "../api/soldoutPropertyApi";
 import type { PropertyRecord, SoldOutPropertyRecord } from "../api/types";
 import { useAppStatus } from "../state/StatusProvider";
+import { useAuth } from "../state/AuthProvider";
 import { useDebounced, usePersistentState } from "../hooks/useUi";
 import { friendlyError } from "../lib/apiError";
 import { formatCarpetArea, formatPrice, formatPricePerUnit, relativeTime } from "../lib/formatters";
@@ -1653,6 +1654,11 @@ function RowActions({
   onDelete: (property: PropertyRecord) => void;
   onEdit: (property: PropertyRecord) => void;
 }) {
+  // Delete is admin-only — Backend/Controller/WhatsAppDataFetchingController/
+  // property_controller.py's DELETE route requires it server-side
+  // regardless; hiding the button here is purely so an employee never sees
+  // one that would fail with a 403.
+  const { isAdmin } = useAuth();
   const isOutsider = property.review_status === "outsider";
   // The home it is already in is left out — offering "Move to Main" on a
   // property that is in Main is an option that does nothing.
@@ -1660,13 +1666,18 @@ function RowActions({
     isOutsider
       ? { key: "main", label: "Move to Main", onSelect: () => onMove(property, "accepted") }
       : { key: "outsider", label: "Move to Outsider", onSelect: () => onMove(property, "outsider") },
-    {
-      key: "soldout",
-      label: "Move to Sold out",
-      hint: "Removes it everywhere, cancels visits",
-      danger: true,
-      onSelect: () => onSoldOut(property),
-    },
+    // Sold out is irreversible, so it's admin-only like Delete (enforced server-side too).
+    ...(isAdmin
+      ? [
+          {
+            key: "soldout",
+            label: "Move to Sold out",
+            hint: "Removes it everywhere, cancels visits",
+            danger: true,
+            onSelect: () => onSoldOut(property),
+          },
+        ]
+      : []),
   ];
   return (
     <div className="row-actions">
@@ -1697,15 +1708,17 @@ function RowActions({
         </button>
       )}
       <MoveMenu targets={moveTargets} />
-      <button
-        type="button"
-        className="row-actions__btn row-actions__btn--danger"
-        title="Delete"
-        aria-label="Delete this property"
-        onClick={() => onDelete(property)}
-      >
-        <IconTrash size={15} />
-      </button>
+      {isAdmin && (
+        <button
+          type="button"
+          className="row-actions__btn row-actions__btn--danger"
+          title="Delete"
+          aria-label="Delete this property"
+          onClick={() => onDelete(property)}
+        >
+          <IconTrash size={15} />
+        </button>
+      )}
     </div>
   );
 }
@@ -1768,6 +1781,9 @@ export function PropertyDetailDialog({
    *  simply doesn't render there. */
   selectAction?: { selected: boolean; tone: "add" | "remove"; onToggle: () => void };
 }) {
+  // Delete is admin-only — see RowActions' own comment on the same check.
+  const { isAdmin } = useAuth();
+
   // The photo lightbox lives inside this same dialog rather than as a
   // sibling — Escape backs out of it first (one Escape, one step back) and
   // only closes the whole detail dialog once no photo is open.
@@ -2052,14 +2068,14 @@ export function PropertyDetailDialog({
                 <Button variant="ghost" icon={<IconMove size={14} />} onClick={() => onMove(property)}>
                   Move to {movesTo}
                 </Button>
-                {onSoldOut && (
+                {onSoldOut && isAdmin && (
                   <Button variant="ghost" icon={<IconTag size={14} />} onClick={() => onSoldOut(property)}>
                     Mark sold out
                   </Button>
                 )}
               </>
             )}
-            {!soldOutAt && (
+            {!soldOutAt && isAdmin && (
               <Button className="btn--danger" icon={<IconTrash size={14} />} onClick={() => onDelete(property)}>
                 Delete
               </Button>

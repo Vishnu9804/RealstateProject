@@ -15,7 +15,10 @@ const CHOICE_LABEL: Record<string, string> = {
   sms: "texted",
 };
 
+import { useAuth } from "../state/AuthProvider";
+
 export default function InstagramConnectionTab() {
+  const { isAdmin } = useAuth();
   const toast = useToast();
   const [status, setStatus] = useState<InstagramStatusResponse | null>(null);
   const [error, setError] = useState<string | null>(null);
@@ -165,11 +168,13 @@ export default function InstagramConnectionTab() {
             signs it out from Instagram's own app.
           </Note>
 
-          <div className="row-flex">
-            <Button className="btn--danger" icon={<IconPower size={15} />} onClick={() => setConfirmDisconnect(true)}>
-              Disconnect
-            </Button>
-          </div>
+          {isAdmin && (
+            <div className="row-flex">
+              <Button className="btn--danger" icon={<IconPower size={15} />} onClick={() => setConfirmDisconnect(true)}>
+                Disconnect
+              </Button>
+            </div>
+          )}
         </Panel>
       ) : stage === "awaiting_code" && status ? (
         <Panel raised className="stack stack-4" style={{ alignItems: "flex-start", maxWidth: 420 }}>

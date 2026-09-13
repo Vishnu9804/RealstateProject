@@ -658,3 +658,47 @@ export interface AreaKnowledgeOverview {
   areas: AreaKnowledgeArea[];
   events: AreaKnowledgeEvent[];
 }
+
+/**
+ * Mirrors Backend/Model/AuthManagementModel/user_record.py's UserSummary —
+ * never carries the password hash (that never leaves the backend). "admin"
+ * can do everything, including delete anything and manage employee
+ * accounts; "employee" can do everything EXCEPT delete and account
+ * management — see Service/AuthManagementService/auth_dependencies.py.
+ */
+export type UserRole = "admin" | "employee";
+
+export interface UserSummary {
+  user_id: string;
+  username: string;
+  role: UserRole;
+  /** Admin still signing in with ADMIN_PASSWORD from the server's .env. */
+  using_initial_password?: boolean;
+  created_at: string | null;
+  updated_at: string | null;
+}
+
+/** Mirrors Backend/Model/AuthManagementModel/user_record.py's LoginResult. */
+export interface LoginResult {
+  access_token: string;
+  token_type: string;
+  user: UserSummary;
+}
+
+export interface OwnerVerificationStatus {
+  method: "whatsapp" | "password";
+  available: boolean;
+  reason: "no_whatsapp_connection" | "invalid_owner_phone" | null;
+  phone_hint: string | null;
+}
+
+export interface VerificationCodeResult {
+  status: "sent" | "cooldown" | "unavailable" | "not_configured";
+  retry_after_seconds: number;
+  phone_hint: string | null;
+}
+
+export interface OwnerVerificationGrant {
+  verification_token: string;
+  expires_in_seconds: number;
+}

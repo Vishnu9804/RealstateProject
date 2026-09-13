@@ -11,13 +11,14 @@ declaration order, not by literal-vs-parameter specificity.
 
 from typing import List, Optional
 
-from fastapi import APIRouter, HTTPException
+from fastapi import APIRouter, Depends, HTTPException
 from pydantic import BaseModel, Field
 
 from Model.AgentManagementModel.agent_record import AgentRecord, AgentSummary, AssignedClientSummary
 from Model.AgentManagementModel.handoff_templates import HandoffTemplates
 from Model.AgentManagementModel.visit_record import VisitRecord
 from Service.AgentManagementService import agent_store, handoff_template_service
+from Service.AuthManagementService.auth_dependencies import require_admin
 
 router = APIRouter(prefix="/agents", tags=["agents"])
 
@@ -73,7 +74,7 @@ def update_agent(agent_id: str, body: AgentCreateRequest) -> AgentRecord:
     return updated
 
 
-@router.delete("/{agent_id}", status_code=204)
+@router.delete("/{agent_id}", status_code=204, dependencies=[Depends(require_admin)])
 def delete_agent(agent_id: str) -> None:
     deleted = agent_store.delete_agent(agent_id)
     if not deleted:

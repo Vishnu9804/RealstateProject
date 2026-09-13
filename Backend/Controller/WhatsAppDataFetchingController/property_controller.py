@@ -5,11 +5,12 @@ design; state lives in Service/WhatsAppDataFetchingService/property_pipeline_ser
 
 from typing import Any, List, Literal, Optional
 
-from fastapi import APIRouter, HTTPException, Request, Response
+from fastapi import APIRouter, Depends, HTTPException, Request, Response
 from pydantic import BaseModel, Field
 
 from Middleware import http_cache
 from Model.WhatsAppDataFetchingModel.property_record import PropertyRecord
+from Service.AuthManagementService.auth_dependencies import require_admin
 from Service.WhatsAppDataFetchingService import property_pipeline_service
 
 router = APIRouter(prefix="/properties", tags=["properties"])
@@ -155,7 +156,7 @@ def update_property(record_id: str, body: PropertyUpdateRequest) -> PropertyReco
     return updated
 
 
-@router.delete("/{record_id}", status_code=204)
+@router.delete("/{record_id}", status_code=204, dependencies=[Depends(require_admin)])
 def delete_property(record_id: str) -> None:
     deleted = property_pipeline_service.delete_property(record_id)
     if not deleted:

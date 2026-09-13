@@ -31,13 +31,11 @@ import {
   Note,
   Panel,
   SearchInput,
-  Segmented,
   SkeletonRows,
   Stat,
 } from "../components/ui/Primitives";
 import {
   IconAlert,
-  IconBuilding,
   IconCheck,
   IconClock,
   IconEdit,
@@ -89,8 +87,6 @@ export interface ClientPropertyCounts {
 const REFRESH_INTERVAL_MS = 8000;
 const FETCH_LIMIT = 500;
 
-type StatusFilter = "all" | "registered" | "pending_registration";
-
 export default function InquiryClientsPage() {
   const toast = useToast();
   const navigate = useNavigate();
@@ -104,7 +100,6 @@ export default function InquiryClientsPage() {
 
   const [search, setSearch] = useState("");
   const query = useDebounced(search, 180);
-  const [statusFilter, setStatusFilter] = useState<StatusFilter>("all");
   const [expandedPhone, setExpandedPhone] = useState<string | null>(null);
 
   const searchRef = useRef<HTMLInputElement>(null);
@@ -367,24 +362,10 @@ export default function InquiryClientsPage() {
   }, []);
 
   const allClients = useMemo(() => clients ?? [], [clients]);
-  const registeredCount = useMemo(
-    () => allClients.filter((c) => c.status === "registered").length,
-    [allClients],
-  );
-  const pendingCount = allClients.length - registeredCount;
 
   const visibleClients = useMemo(() => {
     const needle = query.trim().toLowerCase();
     return allClients.filter((client) => {
-      // "registered" is an exact match; "pending_registration" instead
-      // means "anything that ISN'T registered yet" — the backend can also
-      // hand back "website_lead" (a landing-site enquiry that folded into
-      // this table without ever completing WhatsApp registration — see
-      // Backend/Service/LandingPageService/landing_page_service.py's
-      // _sync_to_inquiries), and that belongs on this same Pending tab,
-      // not hidden from both filters.
-      if (statusFilter === "registered" && client.status !== "registered") return false;
-      if (statusFilter === "pending_registration" && client.status === "registered") return false;
       if (!needle) return true;
       const haystack = [
         client.name,
@@ -401,7 +382,7 @@ export default function InquiryClientsPage() {
         .toLowerCase();
       return haystack.includes(needle);
     });
-  }, [allClients, query, statusFilter]);
+  }, [allClients, query]);
 
   // AgentManagement feature: fetch (cheap, count-only — see
   // matchingApi.getMatchCounts) the match count for any client whose
@@ -473,10 +454,9 @@ export default function InquiryClientsPage() {
     [matchCounts],
   );
 
-  const filtersActive = query.trim().length > 0 || statusFilter !== "all";
+  const filtersActive = query.trim().length > 0;
   function resetAll() {
     setSearch("");
-    setStatusFilter("all");
   }
 
   const loading = clients === null && error === null;
@@ -542,27 +522,13 @@ export default function InquiryClientsPage() {
                 icon={<IconUsers size={13} />}
                 delay={0}
               />
-              <Stat
-                label="Registered"
-                value={registeredCount}
-                icon={<IconBuilding size={13} />}
-                tone="ok"
-                delay={60}
-              />
-              <Stat
-                label="Pending registration"
-                value={pendingCount}
-                icon={<IconClock size={13} />}
-                tone={pendingCount > 0 ? "warn" : undefined}
-                delay={120}
-              />
               {inquiryStatus && (
                 <Stat
                   label="Property inquiries seen"
                   value={inquiryStatus.property_inquiry_count}
                   icon={<IconMessage size={13} />}
                   tone="accent"
-                  delay={180}
+                  delay={60}
                 />
               )}
             </div>
@@ -578,20 +544,6 @@ export default function InquiryClientsPage() {
                 ariaLabel="Search clients"
               />
             </div>
-
-            <Segmented<StatusFilter>
-              ariaLabel="Filter by registration status"
-              value={statusFilter}
-              onChange={setStatusFilter}
-              options={[
-                { value: "all", label: "All" },
-                { value: "registered", label: "Registered" },
-                {
-                  value: "pending_registration",
-                  label: `Pending${pendingCount ? ` (${pendingCount})` : ""}`,
-                },
-              ]}
-            />
 
             {filtersActive && (
               <Button size="sm" variant="ghost" onClick={resetAll}>
@@ -634,7 +586,7 @@ export default function InquiryClientsPage() {
               <EmptyState
                 icon={<IconSearch size={36} />}
                 title="No matches"
-                body={`None of the ${allClients.length} clients match the current search and filters.`}
+                body={`None of the ${allClients.length} clients match the current search.`}
                 action={<Button onClick={resetAll}>Clear everything</Button>}
               />
             </Panel>
@@ -806,7 +758,6 @@ function ClientTable({
         <table className="table">
           <thead>
             <tr>
-              <th>Status</th>
               <th>Name</th>
               <th>Phone</th>
               <th>Purpose</th>
@@ -844,9 +795,6 @@ function ClientTable({
                     }
                   }}
                 >
-                  <td>
-                    <ClientStatusBadge client={client} />
-                  </td>
                   <td
                     className="cell-truncate cell-strong"
                     title={client.name ?? undefined}
@@ -959,9 +907,6 @@ function ClientDetailDialog({ client, onClose }: { client: InquiryClientRecord; 
             <div className="detail-modal__eyebrow">Client</div>
             <h2 className="detail-modal__title cell-truncate">{client.name ?? client.phone}</h2>
             <div className="detail-modal__sub cell-truncate">{client.phone}</div>
-            <div className="detail-modal__badges">
-              <ClientStatusBadge client={client} />
-            </div>
           </div>
           <button type="button" className="toast__close" onClick={onClose} aria-label="Close">
             <IconX size={15} />
@@ -1108,18 +1053,6 @@ function PipelineStatusBadge({ status }: { status: PipelineStatus }) {
   if (status.kind === "assigned") return <Badge tone="ok">Assigned</Badge>;
   if (status.kind === "matched") return <Badge tone="accent">Matched</Badge>;
   return <Badge tone="info">New</Badge>;
-}
-
-function ClientStatusBadge({ client }: { client: InquiryClientRecord }) {
-  const registered = client.status === "registered";
-  return (
-    <Badge
-      tone={registered ? "ok" : "warn"}
-      title={client.pending_action ?? undefined}
-    >
-      {registered ? "Registered" : "Pending"}
-    </Badge>
-  );
 }
 
 function formatBudgetRange(min: number | null, max: number | null): string {

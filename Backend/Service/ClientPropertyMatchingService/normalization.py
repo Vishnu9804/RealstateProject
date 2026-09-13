@@ -11,7 +11,7 @@ from __future__ import annotations
 
 import difflib
 import re
-from typing import List, Optional
+from typing import List, Optional, Tuple
 
 # --- property type -----------------------------------------------------
 
@@ -187,11 +187,60 @@ _BHK_NUM_RE = re.compile(r"(\d+(?:\.\d+)?)")
 _MIN_WORDS_RE = re.compile(r"\bmin(?:imum)?\b|\+|\babove\b|\bat ?least\b|\bor more\b")
 _STRICT_WORDS_RE = re.compile(r"\bexactly\b|\bonly\b|\bstrictly\b")
 
+# Comparison wording — "more than 3", "less than 3", "up to 3", "3 or less".
+# Before these existed, "more than 3 BHK" matched none of _MIN_WORDS_RE's
+# words and fell through to a plain "exact 3": the 3 BHKs landed in High and
+# the 4/5 BHKs the client actually asked for were pushed down to Low.
+#
+# Each pattern is tied to the number it qualifies (qualifier right before it,
+# or "or less"/"or more" right after it), so a stray word elsewhere in the
+# text — "3 BHK under construction" — never turns into a bound. They are
+# tried in this order, and every match is blanked out before the next
+# pattern runs, so "not more than 3" is read once as "at most 3" and never a
+# second time as "more than 3", and ">= 3" is never re-read as "> 3".
+#
+# The last flag marks wording _MIN_WORDS_RE already understood ("at least",
+# "minimum", "above", "or more", "+"). Those are collected too, so "at least
+# 2 but less than 5" keeps both ends, but on their own they never switch a
+# requirement over to the new range reading — every value that parsed before
+# this existed still parses, and scores, exactly as it did.
+_NUM = r"(\d+(?:\.\d+)?)"
+_UNIT = r"(?:\s*(?:bhk|b\.h\.k\.?|rk|bed(?:room)?s?))?"
+_MORE = r"(?:more|greater|bigger|larger|higher)"
+_LESS = r"(?:less|fewer|smaller|lower)"
+_BHK_BOUND_PATTERNS = (
+    (re.compile(r"\bnot?\s+" + _MORE + r"\s+than\s*" + _NUM), "upper", True, False),
+    (re.compile(r"\bnot?\s+" + _LESS + r"\s+than\s*" + _NUM), "lower", True, False),
+    (re.compile(r"\b" + _MORE + r"\s+than\s+or\s+equal\s+to\s*" + _NUM), "lower", True, False),
+    (re.compile(r"\b" + _LESS + r"\s+than\s+or\s+equal\s+to\s*" + _NUM), "upper", True, False),
+    (re.compile(r"(?:>=|≥)\s*" + _NUM), "lower", True, False),
+    (re.compile(r"(?:<=|≤)\s*" + _NUM), "upper", True, False),
+    (re.compile(r"\b" + _MORE + r"\s+than\s*" + _NUM), "lower", False, False),
+    (re.compile(r"\b" + _LESS + r"\s+than\s*" + _NUM), "upper", False, False),
+    (re.compile(r">\s*" + _NUM), "lower", False, False),
+    (re.compile(r"<\s*" + _NUM), "upper", False, False),
+    (re.compile(r"\b(?:below|under)\s*" + _NUM), "upper", False, False),
+    (re.compile(r"\b(?:up\s*to|at\s*most|max(?:imum)?(?:\s+of)?)\s*" + _NUM), "upper", True, False),
+    (re.compile(_NUM + _UNIT + r"\s*(?:or|and|&)\s*(?:less|fewer|below|under)\b"), "upper", True, False),
+    (re.compile(r"\b(?:at\s*least|min(?:imum)?(?:\s+of)?|above)\s*" + _NUM), "lower", True, True),
+    (
+        re.compile(_NUM + _UNIT + r"\s*(?:\+|(?:or|and|&)\s*(?:more|above)\b|min(?:imum)?\b|at\s*least\b)"),
+        "lower",
+        True,
+        True,
+    ),
+)
+
 
 class BhkIntent:
     """Parsed shape of a free-text BHK requirement.
 
     - "minimum": "minimum 3", "3+", "3 or more" -> N and anything above is fine.
+    - "range": any comparison wording — "more than 3" (4, 5, ... fine),
+      "less than 3", "up to 3", "3 or less", "more than 2 and less than 5".
+      `lower`/`upper` are the bounds (None = open on that side), and each
+      `*_inclusive` says whether the bound value itself is fine: "more than 3"
+      is lower=3 exclusive, "at least 3" would be lower=3 inclusive.
     - "set": "3 or 4", "2/3 BHK" -> any listed value is fine.
     - "exact": a bare number/phrase with no qualifier, e.g. "3 BHK" -> 3 is
       the target, with graceful decay for neighbours (see bhk_score).
@@ -200,11 +249,59 @@ class BhkIntent:
       against a plain "3 BHK", per the feature spec's distinction.
     """
 
-    __slots__ = ("kind", "values")
+    __slots__ = ("kind", "values", "lower", "lower_inclusive", "upper", "upper_inclusive")
 
-    def __init__(self, kind: str, values: List[float]):
+    def __init__(
+        self,
+        kind: str,
+        values: List[float],
+        lower: Optional[float] = None,
+        lower_inclusive: bool = True,
+        upper: Optional[float] = None,
+        upper_inclusive: bool = True,
+    ):
         self.kind = kind
         self.values = values
+        self.lower = lower
+        self.lower_inclusive = lower_inclusive
+        self.upper = upper
+        self.upper_inclusive = upper_inclusive
+
+
+def _parse_bhk_range(text: str) -> Optional[BhkIntent]:
+    """A "range" intent when the text uses comparison wording, else None (the
+    caller then parses it exactly as it always has — see _BHK_BOUND_PATTERNS)."""
+    lowers: List[Tuple[float, bool]] = []
+    uppers: List[Tuple[float, bool]] = []
+    has_comparison = False
+    remaining = text
+    for pattern, side, inclusive, already_understood in _BHK_BOUND_PATTERNS:
+        for match in pattern.finditer(remaining):
+            (lowers if side == "lower" else uppers).append((float(match.group(1)), inclusive))
+            has_comparison = has_comparison or not already_understood
+        remaining = pattern.sub(lambda match: " " * len(match.group(0)), remaining)
+
+    if not has_comparison:
+        return None
+
+    # Several bounds on one side ("at least 2, more than 3") — the tightest
+    # wins; at the same value an exclusive bound is the tighter one.
+    lower = max(lowers, key=lambda bound: (bound[0], not bound[1])) if lowers else None
+    upper = min(uppers, key=lambda bound: (bound[0], bound[1])) if uppers else None
+
+    if lower is not None and upper is not None:
+        impossible = lower[0] > upper[0] or (lower[0] == upper[0] and not (lower[1] and upper[1]))
+        if impossible:
+            return None  # "more than 5, less than 3" — not a range; don't guess one
+
+    return BhkIntent(
+        "range",
+        [],
+        lower=lower[0] if lower else None,
+        lower_inclusive=lower[1] if lower else True,
+        upper=upper[0] if upper else None,
+        upper_inclusive=upper[1] if upper else True,
+    )
 
 
 def parse_bhk_intent(raw: Optional[str]) -> Optional[BhkIntent]:
@@ -215,6 +312,9 @@ def parse_bhk_intent(raw: Optional[str]) -> Optional[BhkIntent]:
     if not numbers:
         return None
 
+    range_intent = _parse_bhk_range(text)
+    if range_intent is not None:
+        return range_intent
     if _MIN_WORDS_RE.search(text):
         return BhkIntent("minimum", [min(numbers)])
     if len(numbers) >= 2:
@@ -235,6 +335,10 @@ def bhk_score(client_raw: Optional[str], property_raw: Optional[str]) -> Optiona
         return None
     p = prop_numbers[0]
 
+    if intent.kind == "range":
+        distance = _range_distance(p, intent)
+        return 1.0 if distance == 0 else _decay(distance, steep=False)
+
     if intent.kind == "minimum":
         target = intent.values[0]
         return 1.0 if p >= target else _decay(target - p, steep=False)
@@ -250,6 +354,19 @@ def bhk_score(client_raw: Optional[str], property_raw: Optional[str]) -> Optiona
     target = intent.values[0]
     distance = abs(p - target)
     return 1.0 if distance == 0 else _decay(distance, steep=steep)
+
+
+def _range_distance(p: float, intent: BhkIntent) -> float:
+    """How far a property's BHK is from the nearest value the range accepts,
+    0 when it is inside. An exclusive bound adds one step: against "more
+    than 3", a 3 BHK is one away from the nearest acceptable 4 — the same
+    distance a 2 BHK is from "at least 3" — so the bound value itself is a
+    real but mild miss, never a match."""
+    if intent.lower is not None and (p < intent.lower or (p == intent.lower and not intent.lower_inclusive)):
+        return intent.lower - p + (0 if intent.lower_inclusive else 1)
+    if intent.upper is not None and (p > intent.upper or (p == intent.upper and not intent.upper_inclusive)):
+        return p - intent.upper + (0 if intent.upper_inclusive else 1)
+    return 0.0
 
 
 def _decay(distance: float, steep: bool) -> float:

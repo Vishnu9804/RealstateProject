@@ -769,7 +769,7 @@ export default function RequirementsForm({
               real behaviour, not decoration: "3+" opens up everything
               larger, "exactly 3" closes it down again. */}
           <span className="field__hint">
-            Write it however you think of it — “3 BHK”, “2 or 3 BHK”, “3+ BHK”, “exactly 3 BHK”, “1 RK”, “studio”.
+            Write it however you think of it — “3 BHK”, “2 or 3 BHK”, “3+ BHK”, “more than 3 BHK”, “exactly 3 BHK”, “1 RK”, “studio”.
           </span>
         </div>
 

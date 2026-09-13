@@ -341,6 +341,25 @@
 }
 .pill-accent:hover { transform: translateY(-1px); box-shadow: var(--elev-2); }
 
+/* The empty-state partner of .pill-accent on the Broker Requirements table
+   ("No matches" / "View matches"): reads as the same faint text the
+   Inquiries table shows, but stays clickable, because opening a
+   requirement's dialog is what scores properties that arrived since. */
+.pill-faint {
+  display: inline-flex;
+  align-items: center;
+  border: none;
+  padding: 5px 0;
+  background: none;
+  color: var(--ink-3);
+  font: inherit;
+  font-size: 12.5px;
+  white-space: nowrap;
+  cursor: pointer;
+  transition: color var(--t-fast) var(--ease-out);
+}
+.pill-faint:hover { color: var(--accent); text-decoration: underline; }
+
 .chip {
   display: inline-flex;
   align-items: center;

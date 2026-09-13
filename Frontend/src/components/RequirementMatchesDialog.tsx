@@ -1,4 +1,4 @@
-import { useCallback, useEffect, useMemo, useState } from "react";
+import { useCallback, useEffect, useMemo, useRef, useState } from "react";
 import { createPortal } from "react-dom";
 import { matchingApi } from "../api/matchingApi";
 import { propertyApi } from "../api/propertyApi";
@@ -11,9 +11,11 @@ import type {
 } from "../api/types";
 import { friendlyError } from "../lib/apiError";
 import { formatCarpetArea, formatPrice, relativeTime } from "../lib/formatters";
-import { getCachedPropertyList, setCachedPropertyList } from "../lib/propertyListCache";
+import { getCachedPropertyList, patchCachedProperty, setCachedPropertyList } from "../lib/propertyListCache";
 import type { SharePropertyLike } from "../lib/propertyShareTemplate";
+import { PropertyMatchDetailDialog, type DialogItem } from "./ClientMatchesDialog";
 import ShareRequirementPropertiesDialog from "./ShareRequirementPropertiesDialog";
+import { useToast } from "./ui/Toast";
 import { Badge, Button, EmptyState, Note, Segmented, SkeletonRows } from "./ui/Primitives";
 import {
   IconAlert,
@@ -21,6 +23,7 @@ import {
   IconCheck,
   IconClock,
   IconInbox,
+  IconMessage,
   IconPin,
   IconRefresh,
   IconRuler,
@@ -87,13 +90,48 @@ function categoryOf(record: { review_status: "accepted" | "outsider" }): Propert
   return record.review_status === "outsider" ? "outsider" : "main";
 }
 
+/** What a "move to X" writes — the same patch ClientMatchesDialog's own
+ *  move buttons send (filing a property into a drawer resolves its review
+ *  flag). */
+function categoryPatch(target: PropertyCategory): { review_status: "accepted" | "outsider"; needs_review: boolean } {
+  return { review_status: target === "outsider" ? "outsider" : "accepted", needs_review: false };
+}
+
+/** Rewrite the category fields on every copy of one property inside a
+ *  match result, leaving scores untouched — so a card whose full record
+ *  never loaded still moves drawers with everything else. */
+function patchMatchFields(result: RequirementMatchResult, updated: PropertyRecord): RequirementMatchResult {
+  const patch = (list: MatchedProperty[]) =>
+    list.map((match) =>
+      match.record_id === updated.record_id
+        ? {
+            ...match,
+            review_status: updated.review_status,
+            needs_review: updated.needs_review,
+            property_category: categoryOf(updated),
+          }
+        : match,
+    );
+  return { ...result, high: patch(result.high), medium: patch(result.medium), low: patch(result.low) };
+}
+
 export default function RequirementMatchesDialog({
   requirement,
   onClose,
+  onMatchesLoaded,
 }: {
   requirement: BrokerRequirementRecord;
   onClose: () => void;
+  /** Fired with how many properties this dialog lists every time a result
+   *  arrives (open and Refresh), so the page's Matches column can show the
+   *  number the catch-up just produced without a request of its own. */
+  onMatchesLoaded?: (recordId: string, total: number) => void;
 }) {
+  const toast = useToast();
+  // Held in a ref so a new function identity from the page never changes
+  // `load` below — which would re-run its effect and re-fetch in a loop.
+  const onMatchesLoadedRef = useRef(onMatchesLoaded);
+  onMatchesLoadedRef.current = onMatchesLoaded;
   const [result, setResult] = useState<RequirementMatchResult | null>(null);
   // Shares the Properties page's own list and cache, so a recently-opened
   // Properties page means the full records are already here. Purely
@@ -107,6 +145,11 @@ export default function RequirementMatchesDialog({
   const [category, setCategory] = useState<PropertyCategory>("main");
   const [selectedIds, setSelectedIds] = useState<Set<string>>(new Set());
   const [shareOpen, setShareOpen] = useState(false);
+  // The card whose full property details are open on top of this dialog —
+  // an id, not the item, so a refresh keeps it current and a property that
+  // drops out of the result closes it on its own.
+  const [openItemId, setOpenItemId] = useState<string | null>(null);
+  const [movingId, setMovingId] = useState<string | null>(null);
 
   const load = useCallback(
     (manual = false) => {
@@ -118,7 +161,13 @@ export default function RequirementMatchesDialog({
         ? matchingApi.recomputeRequirementMatches(requirement.record_id)
         : matchingApi.getRequirementMatches(requirement.record_id)
       )
-        .then(setResult)
+        .then((fresh) => {
+          setResult(fresh);
+          onMatchesLoadedRef.current?.(
+            requirement.record_id,
+            fresh.high.length + fresh.medium.length + fresh.low.length,
+          );
+        })
         .catch((err) => setError(friendlyError(err)))
         .finally(() => {
           setLoading(false);
@@ -141,15 +190,17 @@ export default function RequirementMatchesDialog({
     load();
   }, [load]);
 
+  // The share dialog or a property's detail view is the top-most layer
+  // while it is open and answers Escape / outside clicks itself.
+  const nestedOpen = shareOpen || openItemId !== null;
+
   useEffect(() => {
     const onKeyDown = (event: KeyboardEvent) => {
-      // The share dialog is the top-most layer while it is open and
-      // answers Escape itself.
-      if (event.key === "Escape" && !shareOpen) onClose();
+      if (event.key === "Escape" && !nestedOpen) onClose();
     };
     document.addEventListener("keydown", onKeyDown);
     return () => document.removeEventListener("keydown", onKeyDown);
-  }, [onClose, shareOpen]);
+  }, [onClose, nestedOpen]);
 
   const propertiesById = useMemo(() => {
     const map = new Map<string, PropertyRecord>();
@@ -219,6 +270,54 @@ export default function RequirementMatchesDialog({
     });
   }
 
+  /** The open card in the shape the client-inquiry property detail view
+   *  takes, so both dialogs show a property identically. Nothing here is
+   *  hand-picked, website-enquired or assigned, so those parts of that view
+   *  simply never appear. */
+  const openItem = useMemo<DialogItem | null>(() => {
+    const item = items.find((candidate) => candidate.recordId === openItemId);
+    if (!item) return null;
+    return {
+      recordId: item.recordId,
+      section: item.bucket,
+      category: item.category,
+      match: item.match,
+      property: item.property,
+      handoff: item.property ?? item.match,
+      fromWebsiteInquiry: false,
+    };
+  }, [items, openItemId]);
+
+  /** Move one property between Main and Outsider — the same action, patch
+   *  and local update ClientMatchesDialog's detail view performs. A drawer
+   *  change alters nothing about how well it fits, so nothing is re-scored. */
+  async function handleMove(recordId: string, target: PropertyCategory) {
+    setMovingId(recordId);
+    try {
+      const updated = await propertyApi.updateProperty(recordId, categoryPatch(target));
+      setProperties((previous) => {
+        if (previous === null) return [updated];
+        const index = previous.findIndex((p) => p.record_id === updated.record_id);
+        if (index === -1) return [...previous, updated];
+        const next = [...previous];
+        next[index] = updated;
+        return next;
+      });
+      patchCachedProperty(updated.record_id, updated);
+      setResult((previous) => (previous ? patchMatchFields(previous, updated) : previous));
+      setCategory(target);
+      toast.push({
+        tone: "ok",
+        title: `Moved to ${CATEGORY_LABEL[target]}`,
+        message: updated.society_name ?? updated.area_name ?? undefined,
+      });
+    } catch (err) {
+      toast.push({ tone: "bad", title: "Could not move property", message: friendlyError(err) });
+    } finally {
+      setMovingId(null);
+    }
+  }
+
   const total = items.length;
 
   return createPortal(
@@ -226,7 +325,7 @@ export default function RequirementMatchesDialog({
       <div
         className="modal-scrim"
         onMouseDown={(event) => {
-          if (event.target === event.currentTarget && !shareOpen) onClose();
+          if (event.target === event.currentTarget && !nestedOpen) onClose();
         }}
       >
         <div
@@ -271,6 +370,18 @@ export default function RequirementMatchesDialog({
               </button>
             </div>
           </div>
+
+          {/* Pinned above the tabs rather than inside the scrolling body, so
+              what the broker actually asked for stays readable against
+              every card below it. */}
+          {requirement.description?.trim() && (
+            <div className="matches-dialog__brief" role="note" aria-label="Requirement description">
+              <div className="matches-dialog__brief-k">
+                <IconMessage size={12} /> Requirement description
+              </div>
+              <div className="matches-dialog__brief-v">{requirement.description.trim()}</div>
+            </div>
+          )}
 
           <div className="matches-dialog__tabs">
             <Segmented<PropertyCategory>
@@ -339,6 +450,7 @@ export default function RequirementMatchesDialog({
                         item={item}
                         selected={selectedIds.has(item.recordId)}
                         onToggleSelect={() => toggleSelected(item.recordId)}
+                        onOpen={() => setOpenItemId(item.recordId)}
                       />
                     ))}
                   </div>
@@ -363,6 +475,21 @@ export default function RequirementMatchesDialog({
           </div>
         </div>
       </div>
+
+      {/* A requirement's shortlist has no agents and no hand-picked cards,
+          so the view is given no assigned agent and no Remove action. */}
+      {openItem && (
+        <PropertyMatchDetailDialog
+          item={openItem}
+          assignedAgent={null}
+          moving={movingId === openItem.recordId}
+          removing={false}
+          selected={selectedIds.has(openItem.recordId)}
+          onToggleSelect={() => toggleSelected(openItem.recordId)}
+          onMove={(target) => handleMove(openItem.recordId, target)}
+          onClose={() => setOpenItemId(null)}
+        />
+      )}
 
       {shareOpen && (
         <ShareRequirementPropertiesDialog
@@ -394,10 +521,14 @@ function RequirementMatchCard({
   item,
   selected,
   onToggleSelect,
+  onOpen,
 }: {
   item: MatchItem;
   selected: boolean;
   onToggleSelect: () => void;
+  /** Opens the property's full details, exactly as a card does in
+   *  ClientMatchesDialog — selecting is the corner checkbox's job alone. */
+  onOpen: () => void;
 }) {
   const source = item.property ?? item.match;
   const title = source.society_name || source.property_type || "Property";
@@ -408,12 +539,15 @@ function RequirementMatchCard({
       className={["match-card", selected && "match-card--selected"].filter(Boolean).join(" ")}
       role="button"
       tabIndex={0}
-      aria-pressed={selected}
-      onClick={onToggleSelect}
+      aria-label={`View details of ${title}`}
+      onClick={onOpen}
       onKeyDown={(event) => {
+        // Only the card's own keys — a key pressed on the checkbox inside
+        // must toggle it, not also open the details.
+        if (event.target !== event.currentTarget) return;
         if (event.key === "Enter" || event.key === " ") {
           event.preventDefault();
-          onToggleSelect();
+          onOpen();
         }
       }}
     >

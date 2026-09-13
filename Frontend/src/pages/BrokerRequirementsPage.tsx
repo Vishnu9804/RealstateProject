@@ -1,5 +1,6 @@
 import { useCallback, useEffect, useMemo, useRef, useState } from "react";
 import { createPortal } from "react-dom";
+import { matchingApi } from "../api/matchingApi";
 import { requirementApi } from "../api/requirementApi";
 import type { BrokerRequirementRecord } from "../api/types";
 import { useAppStatus } from "../state/StatusProvider";
@@ -102,6 +103,9 @@ const COLUMNS: Column[] = [
   { key: "contact", label: "Contact" },
   { key: "source", label: "Source", filterKey: "source" },
   { key: "time", label: "Received (IST)", sort: "time" },
+  // How many properties this requirement's matches dialog lists — the same
+  // "N properties" button the Inquiries table's Matches column uses.
+  { key: "matches", label: "Matches" },
 ];
 
 /** Filters that have no column of their own in the table — offered as an
@@ -192,6 +196,76 @@ export default function BrokerRequirementsPage() {
 
   const { status: appStatus } = useAppStatus();
 
+  // The Matches column: record_id -> how many properties that requirement's
+  // matches dialog lists. null until the first answer lands. Fetched only
+  // when the list itself is (re)loaded — one small aggregate query per load
+  // (see matchingApi.getRequirementMatchCounts), never on a timer — and
+  // patched per row from the dialog's own result, which costs no request.
+  const [matchCounts, setMatchCounts] = useState<Record<string, number> | null>(null);
+  const [countsFailed, setCountsFailed] = useState(false);
+  // True while the one delayed retry below is pending, so rows still being
+  // scored show a spinner rather than flicking through "View matches".
+  const [countsRetrying, setCountsRetrying] = useState(false);
+  const countsSeq = useRef(0);
+  const countsRetryTimer = useRef<number | null>(null);
+
+  const loadCounts = useCallback(async (recordIds: string[], allowRetry: boolean) => {
+    const seq = ++countsSeq.current;
+    if (countsRetryTimer.current !== null) {
+      window.clearTimeout(countsRetryTimer.current);
+      countsRetryTimer.current = null;
+    }
+    try {
+      const counts = await matchingApi.getRequirementMatchCounts(FETCH_LIMIT);
+      // A newer load has started since — its answer is the one to keep.
+      if (seq !== countsSeq.current) return;
+      setMatchCounts(counts);
+      setCountsFailed(false);
+      // A requirement that has just arrived is scored a moment AFTER it is
+      // stored, so the list can briefly be ahead of its counts. One delayed
+      // re-ask covers that; a requirement still missing afterwards simply
+      // offers "View matches", which scores it on open.
+      const missing = allowRetry && recordIds.some((id) => !(id in counts));
+      setCountsRetrying(missing);
+      if (missing) {
+        countsRetryTimer.current = window.setTimeout(() => {
+          countsRetryTimer.current = null;
+          void loadCounts(recordIds, false);
+        }, 6000);
+      }
+    } catch {
+      if (seq !== countsSeq.current) return;
+      setCountsFailed(true);
+      setCountsRetrying(false);
+    }
+  }, []);
+
+  useEffect(
+    () => () => {
+      if (countsRetryTimer.current !== null) window.clearTimeout(countsRetryTimer.current);
+    },
+    [],
+  );
+
+  /** The dialog's result is the freshest count there is (its open catches up
+   *  on properties added since the requirement was scored). Only patched in
+   *  once the column has loaded, so a partial map never replaces a spinner. */
+  const handleMatchesLoaded = useCallback((recordId: string, total: number) => {
+    setMatchCounts((prev) => (prev === null || prev[recordId] === total ? prev : { ...prev, [recordId]: total }));
+  }, []);
+
+  /** undefined = still loading, null = no count to show (never scored, or
+   *  the counts could not be read), a number = the count. */
+  const countFor = useCallback(
+    (recordId: string): number | null | undefined => {
+      if (matchCounts === null) return countsFailed ? null : undefined;
+      const count = matchCounts[recordId];
+      if (typeof count === "number") return count;
+      return countsRetrying ? undefined : null;
+    },
+    [matchCounts, countsFailed, countsRetrying],
+  );
+
   const load = useCallback(
     async (manual = false) => {
       setRefreshing(true);
@@ -200,6 +274,10 @@ export default function BrokerRequirementsPage() {
         setRequirements(data);
         setLastUpdated(new Date());
         setError(null);
+        void loadCounts(
+          data.map((r) => r.record_id),
+          true,
+        );
 
         const incoming = new Set(data.map((r) => r.record_id));
         if (seenIds.current) {
@@ -219,7 +297,7 @@ export default function BrokerRequirementsPage() {
         setRefreshing(false);
       }
     },
-    [toast],
+    [toast, loadCounts],
   );
 
   useEffect(() => {
@@ -603,6 +681,7 @@ export default function BrokerRequirementsPage() {
               openFilterKey={openFilter?.key ?? null}
               onOpenFilter={(key, anchor) => setOpenFilter(openFilter?.key === key ? null : { key, anchor })}
               freshIds={freshIds}
+              countFor={countFor}
               onOpenDetail={(requirement) => setDetailId(requirement.record_id)}
               onMatch={setMatchesFor}
               onEdit={setEditing}
@@ -613,6 +692,7 @@ export default function BrokerRequirementsPage() {
               requirements={pageItems}
               query={query}
               freshIds={freshIds}
+              countFor={countFor}
               onOpenDetail={(requirement) => setDetailId(requirement.record_id)}
               onMatch={setMatchesFor}
               onEdit={setEditing}
@@ -649,7 +729,11 @@ export default function BrokerRequirementsPage() {
           separate errand, and closing the shortlist should put the operator
           back exactly where they were rather than unwinding a stack. */}
       {matchesFor && (
-        <RequirementMatchesDialog requirement={matchesFor} onClose={() => setMatchesFor(null)} />
+        <RequirementMatchesDialog
+          requirement={matchesFor}
+          onClose={() => setMatchesFor(null)}
+          onMatchesLoaded={handleMatchesLoaded}
+        />
       )}
 
       {editing && (
@@ -690,39 +774,57 @@ interface ListProps {
   requirements: BrokerRequirementRecord[];
   query: string;
   freshIds: Set<string>;
+  /** See the page's own countFor: undefined = loading, null = no count. */
+  countFor: (recordId: string) => number | null | undefined;
   onOpenDetail: (requirement: BrokerRequirementRecord) => void;
   onMatch: (requirement: BrokerRequirementRecord) => void;
   onEdit: (requirement: BrokerRequirementRecord) => void;
   onDelete: (requirement: BrokerRequirementRecord) => void;
 }
 
-/** Match, Edit and Delete, in that order — Edit and Delete keep the
- *  Properties page's own arrangement so the two tables' action columns line
- *  up and muscle-memory carries across, and Match leads because it is the
- *  one thing an operator does with a requirement all day. Shared between the
- *  table cell and the card footer so the two layouts can never drift apart. */
+/** The Matches column, built like the Inquiries table's own MatchesCell:
+ *  the accent "N properties" pill opens this requirement's matches dialog.
+ *  Unlike there, the empty states stay clickable — opening the dialog is
+ *  what scores properties that arrived since the requirement was last
+ *  scored (and scores a never-scored one), so "No matches" must never be a
+ *  dead end. */
+function MatchesCell({ count, onOpen }: { count: number | null | undefined; onOpen: () => void }) {
+  if (count === undefined) return <span className="spinner" style={{ width: 12, height: 12, verticalAlign: "middle" }} />;
+  if (count === null || count === 0) {
+    return (
+      <button
+        type="button"
+        className="pill-faint"
+        onClick={onOpen}
+        title="Open to check this requirement against the latest properties"
+      >
+        {count === 0 ? "No matches" : "View matches"}
+      </button>
+    );
+  }
+  return (
+    <button type="button" className="pill-accent" onClick={onOpen}>
+      {count} {count === 1 ? "property" : "properties"}
+    </button>
+  );
+}
+
+/** Edit and Delete, in the Properties page's own arrangement so the two
+ *  tables' action columns line up and muscle-memory carries across. Matching
+ *  has its own Matches column (see MatchesCell above), exactly as on the
+ *  Inquiries table. Shared between the table cell and the card footer so the
+ *  two layouts can never drift apart. */
 function RowActions({
   requirement,
-  onMatch,
   onEdit,
   onDelete,
 }: {
   requirement: BrokerRequirementRecord;
-  onMatch: (requirement: BrokerRequirementRecord) => void;
   onEdit: (requirement: BrokerRequirementRecord) => void;
   onDelete: (requirement: BrokerRequirementRecord) => void;
 }) {
   return (
     <div className="row-actions">
-      <button
-        type="button"
-        className="row-actions__btn"
-        title="Match properties"
-        aria-label="Show properties matching this requirement"
-        onClick={() => onMatch(requirement)}
-      >
-        <IconBuilding size={15} />
-      </button>
       <button
         type="button"
         className="row-actions__btn"
@@ -757,6 +859,7 @@ function RequirementTable({
   openFilterKey,
   onOpenFilter,
   freshIds,
+  countFor,
   onOpenDetail,
   onMatch,
   onEdit,
@@ -867,8 +970,13 @@ function RequirementTable({
                 <td className="cell-num" style={{ whiteSpace: "nowrap" }}>
                   {requirement.formatted_timestamp}
                 </td>
+                {/* Owns its clicks and keys — the row itself opens the
+                    requirement's detail dialog, which is not what this means. */}
+                <td onClick={(event) => event.stopPropagation()} onKeyDown={(event) => event.stopPropagation()}>
+                  <MatchesCell count={countFor(requirement.record_id)} onOpen={() => onMatch(requirement)} />
+                </td>
                 <td onClick={(event) => event.stopPropagation()}>
-                  <RowActions requirement={requirement} onMatch={onMatch} onEdit={onEdit} onDelete={onDelete} />
+                  <RowActions requirement={requirement} onEdit={onEdit} onDelete={onDelete} />
                 </td>
               </tr>
             ))}
@@ -881,7 +989,16 @@ function RequirementTable({
 
 /* ----------------------------------------------------------------- cards */
 
-function RequirementCards({ requirements, query, freshIds, onOpenDetail, onMatch, onEdit, onDelete }: ListProps) {
+function RequirementCards({
+  requirements,
+  query,
+  freshIds,
+  countFor,
+  onOpenDetail,
+  onMatch,
+  onEdit,
+  onDelete,
+}: ListProps) {
   return (
     <div className="card-grid">
       {requirements.map((requirement, index) => (
@@ -926,6 +1043,18 @@ function RequirementCards({ requirements, query, freshIds, onOpenDetail, onMatch
             )}
           </div>
 
+          {/* Card view has no columns, so the Matches column's button lives
+              here. Owns its clicks and keys, like the table cell. */}
+          <div
+            className="row-flex"
+            style={{ gap: 8, alignSelf: "flex-start" }}
+            onClick={(event) => event.stopPropagation()}
+            onKeyDown={(event) => event.stopPropagation()}
+          >
+            <span className="faint small">Matches</span>
+            <MatchesCell count={countFor(requirement.record_id)} onOpen={() => onMatch(requirement)} />
+          </div>
+
           {requirement.contact_phone && (
             <div className="fact" style={{ alignSelf: "flex-start" }}>
               <IconPhone size={12} />
@@ -942,7 +1071,7 @@ function RequirementCards({ requirements, query, freshIds, onOpenDetail, onMatch
               <IconUsers size={11} /> {requirementSourceLabel(requirement)} · {requirement.formatted_timestamp}
             </span>
             <div onClick={(event) => event.stopPropagation()}>
-              <RowActions requirement={requirement} onMatch={onMatch} onEdit={onEdit} onDelete={onDelete} />
+              <RowActions requirement={requirement} onEdit={onEdit} onDelete={onDelete} />
             </div>
           </div>
         </Panel>

@@ -143,7 +143,7 @@ function categoryPatch(target: PropertyCategory): { review_status: "accepted" | 
  *  (when the operator manually added something the algorithm also
  *  matched) both at once, in which case the score is still shown but the
  *  card lives in the Manually added section. */
-interface DialogItem {
+export interface DialogItem {
   recordId: string;
   section: SectionKey;
   category: PropertyCategory;
@@ -1274,7 +1274,10 @@ export function CompletedPropertyCard({
    Detail dialog (one property, plus the move actions)
    ======================================================================== */
 
-function PropertyMatchDetailDialog({
+/** Exported so the Broker Requirements matches dialog
+ *  (RequirementMatchesDialog.tsx) opens a property with exactly this view
+ *  rather than a second copy of it that could drift. */
+export function PropertyMatchDetailDialog({
   item,
   assignedAgent,
   moving,

@@ -137,6 +137,28 @@ def get_matches_for_requirement(record_id: str) -> Optional[RequirementMatchResu
     return result
 
 
+def get_match_counts(limit: int = 500) -> Dict[str, int]:
+    """record_id -> how many properties its matches dialog lists, for the
+    Broker Requirements table's Matches column. A read only: nothing is
+    scored and nothing is written, so it is safe to ask whenever the list
+    loads. The live property set comes from the in-memory snapshot (no
+    query), and the counts are one aggregate query (see
+    broker_requirement_match_repository.get_match_counts).
+
+    Counted against the same matchable, still-existing properties
+    _build_result shows, so the number equals the dialog's own total for
+    what is stored. Properties that arrived after a requirement was last
+    scored are picked up when its dialog is opened (the catch-up in
+    get_matches_for_requirement), and the page then updates that one row's
+    count from the dialog's result. A never-scored requirement is absent."""
+    live_ids = {
+        prop.record_id
+        for prop in property_vector_store.get_all_properties(limit=_MAX_PROPERTIES_SCORED)
+        if matching_service.is_matchable(prop)
+    }
+    return requirement_match_store.get_match_counts(live_ids, limit)
+
+
 def recompute_for_requirement(record_id: str) -> Optional[RequirementMatchResult]:
     """Full re-score of one requirement, replacing whatever was stored —
     the dialog's Refresh, and what an edit to the requirement runs. None when

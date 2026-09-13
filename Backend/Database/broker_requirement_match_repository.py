@@ -21,9 +21,9 @@ Written for a serverless database billed by compute time and transfer:
 from __future__ import annotations
 
 from datetime import datetime
-from typing import Dict, List, Optional, Set, Tuple
+from typing import Collection, Dict, List, Optional, Set, Tuple
 
-from sqlalchemy import delete, func, insert, select
+from sqlalchemy import and_, delete, func, insert, select
 from sqlalchemy.dialects.postgresql import insert as pg_insert
 
 from Database.broker_requirement_match_models import BrokerRequirementMatchRow, BrokerRequirementMatchRunRow
@@ -60,6 +60,41 @@ def get_matches(record_id: str) -> Tuple[List[MatchScore], Optional[datetime], O
     computed_at, fingerprint = rows[0][0], rows[0][1]
     scores = [_to_score(match) for _, _, match in rows if match is not None]
     return scores, computed_at, fingerprint
+
+
+def get_match_counts(live_property_ids: Collection[str], limit: int) -> Dict[str, int]:
+    """record_id -> how many stored matches it has, for the `limit` newest
+    requirements (the same window the Broker Requirements list reads), in
+    ONE aggregate query that transfers only an id and a number per
+    requirement — never a score row.
+
+    Only matches whose property is in `live_property_ids` are counted, which
+    is exactly the set the matches dialog itself can show (a sold-out,
+    deleted or flagged property is skipped there too). A requirement that
+    has never been scored has no run row and is absent from the result, so
+    the caller can tell "scored, nothing fits" (0) apart from "not scored
+    yet" (missing)."""
+    recent = (
+        select(BrokerRequirementRow.id, BrokerRequirementRow.record_id)
+        .order_by(BrokerRequirementRow.id.desc())
+        .limit(limit)
+        .subquery()
+    )
+    stmt = (
+        select(recent.c.record_id, func.count(BrokerRequirementMatchRow.property_record_id.distinct()))
+        .select_from(recent)
+        .join(BrokerRequirementMatchRunRow, BrokerRequirementMatchRunRow.requirement_id == recent.c.id)
+        .outerjoin(
+            BrokerRequirementMatchRow,
+            and_(
+                BrokerRequirementMatchRow.requirement_id == recent.c.id,
+                BrokerRequirementMatchRow.property_record_id.in_(list(live_property_ids)),
+            ),
+        )
+        .group_by(recent.c.record_id)
+    )
+    with get_session() as session:
+        return {record_id: int(count) for record_id, count in session.execute(stmt).all()}
 
 
 def replace_matches(results: Dict[str, Tuple[List[MatchScore], str]], computed_at: datetime) -> int:

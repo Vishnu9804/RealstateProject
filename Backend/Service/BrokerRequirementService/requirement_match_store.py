@@ -36,6 +36,18 @@ def get_matches(record_id: str) -> Tuple[List[MatchScore], Optional[datetime], O
     return list(stored[0]), stored[1], stored[2]
 
 
+def get_match_counts(live_property_ids: Set[str], limit: int) -> Dict[str, int]:
+    """record_id -> stored match count, counting only properties in
+    `live_property_ids`; a never-scored requirement is absent (see
+    broker_requirement_match_repository.get_match_counts)."""
+    if is_database_configured():
+        return broker_requirement_match_repository.get_match_counts(live_property_ids, limit)
+    return {
+        record_id: len({score.record_id for score in scores if score.record_id in live_property_ids})
+        for record_id, (scores, _, _) in _matches.items()
+    }
+
+
 def replace_matches(results: Dict[str, Tuple[List[MatchScore], str]], computed_at: datetime) -> int:
     """record_id -> (scores, fingerprint), replacing whatever was stored.
     Returns how many match rows were written."""

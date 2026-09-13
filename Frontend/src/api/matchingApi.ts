@@ -29,6 +29,13 @@ export const matchingApi = {
   getRequirementMatches: (recordId: string): Promise<RequirementMatchResult> =>
     apiClient.get(`/matching/requirements/${encodeURIComponent(recordId)}`),
 
+  /** The Broker Requirements table's Matches column: record_id -> how many
+   *  properties that requirement's matches dialog lists, for the newest
+   *  `limit` requirements, from ONE aggregate query (no scoring, no writes).
+   *  A requirement that has never been scored is absent from the map. */
+  getRequirementMatchCounts: (limit = 500): Promise<Record<string, number>> =>
+    apiClient.get(`/matching/requirements/counts?limit=${limit}`),
+
   /** The requirement dialog's Refresh — a full re-score of this one
    *  requirement, replacing its stored matches. */
   recomputeRequirementMatches: (recordId: string): Promise<RequirementMatchResult> =>

@@ -791,6 +791,24 @@ def get_overview() -> Dict[str, Any]:
         }
 
 
+def get_files() -> Dict[str, Any]:
+    """Raw, verbatim content of the two on-disk knowledge base files — for
+    the Dashboard's "actual file content" panel. Read-only, and separate
+    from get_overview(): that endpoint is polled every 10s, while these
+    files can be a few hundred KB once the knowledge base has grown, so a
+    caller only pays for them when it actually wants to show the raw text."""
+    with _lock:
+        paths = (KNOWLEDGE_BASE_PATH, _STATS_PATH)
+    files = []
+    for path in paths:
+        try:
+            content = path.read_text(encoding="utf-8")
+        except Exception as exc:  # noqa: BLE001 - a missing/unreadable file is shown, not a 500
+            content = f"# Could not read this file: {exc!r}"
+        files.append({"name": path.name, "path": str(path), "content": content})
+    return {"files": files}
+
+
 def reset_stats() -> Dict[str, Any]:
     """Zeroes the analysis WITHOUT touching the knowledge base itself — the
     learned place strings stay, so the next run measures the hit rate of the

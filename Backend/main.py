@@ -90,6 +90,8 @@ from Controller.WhatsAppInquiryHandlingController.inquiry_form_controller import
 from Controller.WhatsAppInquiryHandlingController.phone_verification_controller import router as phone_verification_router
 from Controller.WhatsAppInquiryHandlingController.whatsapp_inquiry_controller import router as whatsapp_inquiry_router
 from Controller.InstagramInquiryHandlingController.instagram_controller import router as instagram_router
+from Controller.LLMUsageController.llm_usage_controller import router as llm_usage_router
+from Controller.NeonUsageController.neon_usage_controller import router as neon_usage_router
 from Controller.LandingPageController.landing_page_controller import router as landing_page_router
 from Controller.PropertySharingController.property_share_controller import router as property_share_router
 from Config.settings import get_settings
@@ -103,6 +105,8 @@ from Service.ClientPropertyMatchingService import scheduled_recompute_service
 from Service.WhatsAppDataFetchingService import area_filter_service, area_knowledge_service, display_settings_service, whatsapp_service
 from Service.WhatsAppInquiryHandlingService import inquiry_connection_store, whatsapp_inquiry_service
 from Service.InstagramInquiryHandlingService import instagram_connection_service, instagram_polling_service
+from Service.LLMUsageService import llm_usage_service
+from Service.NeonUsageService import neon_usage_service
 
 configure_logging()
 
@@ -160,6 +164,16 @@ async def _startup_heartbeat() -> None:
 
 @asynccontextmanager
 async def lifespan(_app: FastAPI):
+    # FIRST, before anything touches the database: the Neon usage history is
+    # a chronological list of wake-ups, and init_db()'s own queries are
+    # themselves the first wake-up of this run. Loading afterwards would
+    # append the older history behind the newer entries. Non-fatal, like the
+    # other file-backed stats below.
+    try:
+        await asyncio.to_thread(neon_usage_service.load_from_disk)
+    except Exception as exc:  # noqa: BLE001
+        step_logger.error(f"Could not load the Neon usage history (the app is unaffected): {exc!r}")
+
     heartbeat = asyncio.create_task(_startup_heartbeat())
     try:
         await _init_database()
@@ -178,6 +192,15 @@ async def lifespan(_app: FastAPI):
         await asyncio.to_thread(area_knowledge_service.load_from_disk)
     except Exception as exc:  # noqa: BLE001
         step_logger.error(f"Could not load the area knowledge base (the pipeline is unaffected): {exc!r}")
+
+    # Same reasoning as the area knowledge base just above: a plain file at
+    # the project root (see llm_usage_service's own docstring), loaded as a
+    # by-product, never a prerequisite — a usage file that fails to load
+    # must not stop the server.
+    try:
+        await asyncio.to_thread(llm_usage_service.load_from_disk)
+    except Exception as exc:  # noqa: BLE001
+        step_logger.error(f"Could not load the LLM usage stats (the pipeline is unaffected): {exc!r}")
 
     step_logger.step("FastAPI server is up. Launching WhatsApp connections in the background...")
     # whatsapp_service owns wiring the property-message handler AND starting
@@ -240,7 +263,17 @@ app = FastAPI(title="Real Estate WhatsApp Ingestion API", lifespan=lifespan)
 # request the public site makes is blocked by the browser before FastAPI
 # sees it — the same LAN-IP reasoning as above applies to it too, since the
 # site is worth opening on a phone.
-_cors_origins = ["http://localhost:5173", "http://127.0.0.1:5173", "http://localhost:5174", "http://127.0.0.1:5174"]
+#
+# Dashboard/ is a THIRD Vite app, on its own pinned port 5175 (see its
+# vite.config.ts), same reasoning again.
+_cors_origins = [
+    "http://localhost:5173",
+    "http://127.0.0.1:5173",
+    "http://localhost:5174",
+    "http://127.0.0.1:5174",
+    "http://localhost:5175",
+    "http://127.0.0.1:5175",
+]
 if get_settings().frontend_lan_origin:
     _cors_origins.append(get_settings().frontend_lan_origin)
     _cors_origins.append(get_settings().frontend_lan_origin.replace(":5173", ":5174"))
@@ -300,6 +333,8 @@ app.include_router(phone_verification_router, prefix="/api")
 app.include_router(matching_router, prefix="/api")
 app.include_router(requirement_matching_router, prefix="/api")
 app.include_router(instagram_router, prefix="/api")
+app.include_router(llm_usage_router, prefix="/api")
+app.include_router(neon_usage_router, prefix="/api")
 app.include_router(landing_page_router, prefix="/api")
 app.include_router(agent_router, prefix="/api")
 

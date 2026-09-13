@@ -32,12 +32,13 @@ from __future__ import annotations
 
 import json
 import time
-from typing import List, Optional
+from typing import List, Optional, Tuple
 
 import httpx
 
 from Config.settings import get_settings
 from Middleware import step_logger
+from Service.LLMUsageService import llm_usage_service
 
 _client: Optional[httpx.Client] = None
 
@@ -125,18 +126,27 @@ def build_request_body(system_prompt: str, user_prompt: str, max_tokens: int = 1
         "max_tokens": max_tokens,
         "thinking": {"type": "disabled"},
         "stream": True,
+        # Asks the API to include a final `usage` object in the stream (the
+        # standard OpenAI-compatible mechanism for a streamed response to
+        # still report token counts) — purely additive: an API that already
+        # sends usage without it is unaffected, and one that doesn't
+        # recognise the field simply ignores it like any other unrecognised
+        # JSON key. Feeds the Dashboard's LLM Cost tab; see _stream_completion.
+        "stream_options": {"include_usage": True},
     }
 
 
-def _stream_completion(client: httpx.Client, request_body: dict) -> str:
+def _stream_completion(client: httpx.Client, request_body: dict) -> Tuple[str, Optional[dict]]:
     """Sends one request and assembles the streamed reply into the same
-    single content string a non-streamed call would have returned. Raises
-    TransientCompletionError for an empty stream, an over-long stream, a
-    runaway character count, or a detected repetition loop — all retryable,
-    unlike a 4xx."""
+    single content string a non-streamed call would have returned, plus
+    whatever `usage` object the API included (None if it never sent one).
+    Raises TransientCompletionError for an empty stream, an over-long
+    stream, a runaway character count, or a detected repetition loop — all
+    retryable, unlike a 4xx."""
     started = time.monotonic()
     pieces: List[str] = []
     content_chars = 0
+    usage: Optional[dict] = None
     with client.stream("POST", "chat/completions", json=request_body) as response:
         if response.status_code >= 400:
             # The body of a streamed error response hasn't been read yet;
@@ -154,8 +164,21 @@ def _stream_completion(client: httpx.Client, request_body: dict) -> str:
             if payload == "[DONE]":
                 break
             try:
-                delta = json.loads(payload)["choices"][0]["delta"]
-            except (json.JSONDecodeError, KeyError, IndexError, TypeError):
+                frame = json.loads(payload)
+            except json.JSONDecodeError:
+                continue
+            if isinstance(frame, dict):
+                # The final frame of a stream carrying `stream_options:
+                # {"include_usage": true}` has empty `choices` and this
+                # `usage` object instead — captured here, BEFORE the
+                # choices/delta lookup below (which would otherwise skip
+                # straight past it), so it survives to the return statement.
+                frame_usage = frame.get("usage")
+                if isinstance(frame_usage, dict):
+                    usage = frame_usage
+            try:
+                delta = frame["choices"][0]["delta"]
+            except (KeyError, IndexError, TypeError):
                 # A keep-alive/usage-only frame, not a content chunk.
                 continue
             piece = delta.get("content")
@@ -176,19 +199,40 @@ def _stream_completion(client: httpx.Client, request_body: dict) -> str:
     content = "".join(pieces)
     if not content.strip():
         raise TransientCompletionError("the stream completed without any content")
-    return content
+    return content, usage
 
 
-def post_with_retries(request_body: dict, description: str) -> Optional[str]:
+def _record_usage(site: str, model: str, usage: Optional[dict]) -> None:
+    """Best-effort: feeds this call's token counts to the Dashboard's LLM
+    Cost tab. Never raises — a tracking failure must never cost a real
+    requirement. `usage` is None when the API didn't send one (the call
+    still counts, just with 0 tokens attributed — see the service's own
+    docstring on why)."""
+    try:
+        usage = usage or {}
+        input_tokens = int(usage.get("prompt_tokens") or usage.get("input_tokens") or 0)
+        output_tokens = int(usage.get("completion_tokens") or usage.get("output_tokens") or 0)
+        llm_usage_service.observe_call(site, model, input_tokens, output_tokens)
+    except Exception as exc:  # noqa: BLE001
+        step_logger.warn(f"Could not record LLM usage for a {site} GLM call: {exc!r}")
+
+
+def post_with_retries(request_body: dict, description: str, site: str) -> Optional[str]:
     """Sends `request_body` and returns the model's raw reply text, retrying
     up to _MAX_ATTEMPTS times on transient failures only. Returns None once
     every attempt has failed. `description` is used purely in log lines
-    (e.g. "a requirement batch of 4")."""
+    (e.g. "a requirement batch of 4"). `site` identifies the calling pipeline
+    stage for the LLM Cost dashboard (e.g. "requirement") — recorded once,
+    only on a successful completion; a failed/retried attempt records
+    nothing, since no usage is known for it."""
     client = _get_client()
+    model = request_body.get("model") or get_settings().zai_model
 
     for attempt in range(1, _MAX_ATTEMPTS + 1):
         try:
-            return _stream_completion(client, request_body)
+            content, usage = _stream_completion(client, request_body)
+            _record_usage(site, model, usage)
+            return content
         except httpx.HTTPStatusError as exc:
             status = exc.response.status_code
             transient = status == 429 or status >= 500

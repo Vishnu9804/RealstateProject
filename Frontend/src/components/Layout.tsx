@@ -6,7 +6,6 @@ import { ThemeToggle } from "./ui/Theme";
 import { Tip } from "./ui/Primitives";
 import {
   IconCommand,
-  IconDatabase,
   IconGrid,
   IconInbox,
   IconLink,
@@ -31,7 +30,6 @@ const NAV = [
   { to: "/inquiries", end: false, label: "Inquiries", icon: IconUsers },
   { to: "/agents", end: false, label: "Agents", icon: IconUserCheck },
   { to: "/settings", end: false, label: "Settings", icon: IconSliders },
-  { to: "/temporary", end: false, label: "Temporary", icon: IconDatabase },
 ];
 
 export default function Layout() {

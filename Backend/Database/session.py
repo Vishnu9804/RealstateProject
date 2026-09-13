@@ -66,6 +66,20 @@ def _get_engine():
             connect_args={"connect_timeout": 60},
         )
         _session_factory = sessionmaker(bind=_engine, expire_on_commit=False)
+        # Measures every statement locally (duration + the real byte size of
+        # what came back) so the Dashboard's Neon DB tab can say which
+        # operation spent the CU-hours and the Network Transfer. It never
+        # queries anything itself — see that service's docstring. Wrapped
+        # because monitoring must never be able to stop the database from
+        # working: if attaching fails, the app carries on unmeasured.
+        try:
+            from Service.NeonUsageService import neon_usage_service
+
+            neon_usage_service.attach_to_engine(_engine)
+        except Exception as exc:  # noqa: BLE001
+            from Middleware import step_logger
+
+            step_logger.error(f"Could not attach Neon usage tracking (the database is unaffected): {exc!r}")
     return _engine
 
 

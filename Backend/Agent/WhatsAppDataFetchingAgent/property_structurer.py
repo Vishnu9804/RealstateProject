@@ -32,7 +32,7 @@ import json
 import math
 import re
 import time
-from typing import List, Optional
+from typing import List, Optional, Tuple
 
 import httpx
 from pydantic import ValidationError
@@ -53,6 +53,7 @@ from Config.settings import get_settings
 from Middleware import step_logger
 from Model.WhatsAppDataFetchingModel.structured_property import StructuredProperty
 from Model.WhatsAppDataFetchingModel.whatsapp_message import WhatsAppChatMessage
+from Service.LLMUsageService import llm_usage_service
 from Service.WhatsAppDataFetchingService import area_filter_service
 
 _client: Optional[httpx.Client] = None
@@ -367,9 +368,13 @@ def _recover_missed_properties(
     return recovered
 
 
-def _stream_completion(client: httpx.Client, request_body: dict) -> str:
+def _stream_completion(client: httpx.Client, request_body: dict) -> Tuple[str, Optional[dict]]:
     """Sends one structuring request and assembles the streamed reply into
-    the same single content string a non-streamed call would have returned.
+    the same single content string a non-streamed call would have returned,
+    plus whatever `usage` object the API included in the stream (None if it
+    never sent one — see build_request_body's sibling in glm_client.py for
+    why one is now asked for; this stage's own request body below carries
+    the same `stream_options`).
 
     Streaming is here for timeout behaviour, not for progressive display:
     nothing downstream can use a partial JSON object, so the caller still
@@ -388,6 +393,7 @@ def _stream_completion(client: httpx.Client, request_body: dict) -> str:
     started = time.monotonic()
     pieces: List[str] = []
     content_chars = 0
+    usage: Optional[dict] = None
     with client.stream("POST", "chat/completions", json=request_body) as response:
         if response.status_code >= 400:
             # The body of a streamed error response hasn't been read yet;
@@ -407,8 +413,21 @@ def _stream_completion(client: httpx.Client, request_body: dict) -> str:
             if payload == "[DONE]":
                 break
             try:
-                delta = json.loads(payload)["choices"][0]["delta"]
-            except (json.JSONDecodeError, KeyError, IndexError, TypeError):
+                frame = json.loads(payload)
+            except json.JSONDecodeError:
+                continue
+            if isinstance(frame, dict):
+                # The final frame of a stream carrying `stream_options:
+                # {"include_usage": true}` has empty `choices` and this
+                # `usage` object instead — captured here, BEFORE the
+                # choices/delta lookup below (which would otherwise skip
+                # straight past it), so it survives to the return statement.
+                frame_usage = frame.get("usage")
+                if isinstance(frame_usage, dict):
+                    usage = frame_usage
+            try:
+                delta = frame["choices"][0]["delta"]
+            except (KeyError, IndexError, TypeError):
                 # A keep-alive/usage-only frame, not a content chunk.
                 continue
             piece = delta.get("content")
@@ -435,7 +454,22 @@ def _stream_completion(client: httpx.Client, request_body: dict) -> str:
     content = "".join(pieces)
     if not content.strip():
         raise _TransientCompletionError("the stream completed without any content")
-    return content
+    return content, usage
+
+
+def _record_usage(usage: Optional[dict]) -> None:
+    """Best-effort: feeds this call's token counts to the Dashboard's LLM
+    Cost tab (Service/LLMUsageService/llm_usage_service.py). Never raises —
+    a tracking failure must never cost a real property. `usage` is None
+    when the API didn't send one (the call still counts, just with 0 tokens
+    attributed — see that service's own docstring on why)."""
+    try:
+        usage = usage or {}
+        input_tokens = int(usage.get("prompt_tokens") or usage.get("input_tokens") or 0)
+        output_tokens = int(usage.get("completion_tokens") or usage.get("output_tokens") or 0)
+        llm_usage_service.observe_call("property", get_settings().zai_model, input_tokens, output_tokens)
+    except Exception as exc:  # noqa: BLE001
+        step_logger.warn(f"Could not record LLM usage for a property structuring call: {exc!r}")
 
 
 def _post_with_retries(
@@ -499,11 +533,20 @@ def _post_with_retries(
         # See _stream_completion: streamed purely so the read timeout
         # measures the gap between tokens instead of total generation time.
         "stream": True,
+        # Asks the API to include a final `usage` object in the stream —
+        # the standard OpenAI-compatible mechanism for a streamed response
+        # to still report token counts, feeding the Dashboard's LLM Cost
+        # tab. Purely additive: an API that already sends usage without it
+        # is unaffected, and one that doesn't recognise the field simply
+        # ignores it like any other unrecognised JSON key.
+        "stream_options": {"include_usage": True},
     }
 
     for attempt in range(1, _MAX_ATTEMPTS + 1):
         try:
-            return _stream_completion(client, request_body)
+            content, usage = _stream_completion(client, request_body)
+            _record_usage(usage)
+            return content
         except httpx.HTTPStatusError as exc:
             status = exc.response.status_code
             transient = status == 429 or status >= 500

@@ -89,3 +89,17 @@ class AreaKnowledgeOverview(BaseModel):
     by_status: List[AreaKnowledgeBreakdown] = []
     areas: List[AreaKnowledgeArea] = []
     events: List[AreaKnowledgeEvent] = []
+
+
+class AreaKnowledgeFile(BaseModel):
+    """One on-disk knowledge base file, exactly as it reads on disk — the
+    Dashboard's Surat Area Knowledge Base tab shows this verbatim so it is
+    reading the real file, not a reconstruction of it."""
+
+    name: str
+    path: str
+    content: str
+
+
+class AreaKnowledgeFilesResponse(BaseModel):
+    files: List[AreaKnowledgeFile] = []

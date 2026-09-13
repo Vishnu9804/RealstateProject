@@ -9,7 +9,6 @@ import LandingPagePage from "./pages/LandingPagePage";
 import InquiryClientsPage from "./pages/InquiryClientsPage";
 import SelectPropertyPage from "./pages/SelectPropertyPage";
 import SettingsPage from "./pages/SettingsPage";
-import TemporaryPage from "./pages/TemporaryPage";
 import { ThemeProvider } from "./components/ui/Theme";
 import { ToastProvider } from "./components/ui/Toast";
 import { StatusProvider } from "./state/StatusProvider";
@@ -51,7 +50,6 @@ export default function App() {
               <Route path="select-property" element={<SelectPropertyPage />} />
               <Route path="agents" element={<AgentsPage />} />
               <Route path="settings" element={<SettingsPage />} />
-              <Route path="temporary" element={<TemporaryPage />} />
             </Route>
           </Routes>
         </BrowserRouter>

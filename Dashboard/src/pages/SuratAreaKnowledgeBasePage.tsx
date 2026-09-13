@@ -1,13 +1,15 @@
-import { Fragment, useCallback, useMemo, useState } from "react";
+import { Fragment, useCallback, useEffect, useMemo, useState } from "react";
 import { areaKnowledgeApi } from "../api/areaKnowledgeApi";
-import type { AreaKnowledgeArea, AreaKnowledgeBreakdown, AreaKnowledgeOverview } from "../api/types";
+import type { AreaKnowledgeArea, AreaKnowledgeBreakdown, AreaKnowledgeFile, AreaKnowledgeOverview } from "../api/types";
 import { friendlyError } from "../lib/apiError";
-import { relativeTime } from "../lib/formatters";
+import { formatBytes, formatWhen } from "../lib/formatters";
 import { usePolling } from "../hooks/usePolling";
-import { useToast } from "../components/ui/Toast";
-import { Badge, Button, EmptyState, Note, Panel, SkeletonRows, Stat } from "../components/ui/Primitives";
+import { useToast } from "../components/Toast";
+import { Badge, Button, EmptyState, Note, Panel, SkeletonRows, Stat } from "../components/Primitives";
+import { CopyButton } from "../components/CopyButton";
 import {
   IconCheck,
+  IconCode,
   IconDatabase,
   IconInfo,
   IconLayers,
@@ -17,30 +19,25 @@ import {
   IconSparkle,
   IconTag,
   IconZap,
-} from "../components/ui/Icons";
+} from "../components/Icons";
 
 /**
- * TEMPORARY — the read-out for the internal area knowledge base.
+ * The read-out for the internal Surat area knowledge base.
  *
  * The knowledge base itself is grown entirely in the backend, as a
  * by-product of the property pipeline: every property the LLM structures is
  * shown to it once, and each place string on that property (its area, the
  * segments of its address, its society name) is either recognised (a HIT) or
  * added (a WRITE). See Backend/Service/WhatsAppDataFetchingService/
- * area_knowledge_service.py — the LLM stage is untouched and nothing here
- * feeds back into it.
+ * area_knowledge_service.py.
  *
- * This page exists to answer one question with evidence rather than a
- * feeling: is the knowledge base getting good enough that the LLM would not
- * need to re-derive this area knowledge on every single call? A hit rate
- * climbing towards 100% while writes flatten out is that answer.
- *
- * Everything on it is read-only except "Reset analysis", which zeroes the
- * counters and deliberately KEEPS the learned strings — so the next
- * measurement is of today's knowledge base against fresh traffic, not of an
- * empty one against everything.
+ * Everything here is read-only except "Reset analysis", which zeroes the
+ * counters and deliberately KEEPS the learned strings, so the next
+ * measurement is of today's knowledge base against fresh traffic — every
+ * call and request keeps running against the same knowledge base, only the
+ * counters start again from zero.
  */
-export default function TemporaryPage() {
+export default function SuratAreaKnowledgeBasePage() {
   const toast = useToast();
   const [data, setData] = useState<AreaKnowledgeOverview | null>(null);
   const [error, setError] = useState<string | null>(null);
@@ -85,11 +82,11 @@ export default function TemporaryPage() {
     <div className="stack stack-6">
       <header className="section-head">
         <div>
-          <div className="section-head__eyebrow">Experiment — Area knowledge</div>
-          <h1 className="page-title">Temporary</h1>
+          <div className="section-head__eyebrow">Surat · Area knowledge</div>
+          <h1 className="page-title">Surat Area Knowledge Base</h1>
           <p className="section-head__sub">
             Every property the LLM structures is shown once to an internal area knowledge base, which files that
-            property's place strings under its area. Nothing about the pipeline changed — this only watches it and
+            property's place strings under its area. Nothing about the pipeline changes — this only watches it and
             writes down what it saw. The numbers below say how often the knowledge base already knew a place (a{" "}
             <strong>hit</strong>) versus had to learn it (a <strong>write</strong>).
           </p>
@@ -205,7 +202,7 @@ export default function TemporaryPage() {
                 </div>
                 <h2>The measurement</h2>
               </div>
-              <Button size="sm" busy={resetting} onClick={() => void reset()} icon={<IconRefresh size={15} />}>
+              <Button size="sm" busy={resetting} onClick={() => void reset()} icon={<IconRefresh size={15} />} tone="accent">
                 {resetting ? "Resetting…" : "Reset analysis"}
               </Button>
             </div>
@@ -240,9 +237,7 @@ export default function TemporaryPage() {
             <hr className="rule" />
             <div className="muted" style={{ fontSize: 12, wordBreak: "break-all" }}>
               Knowledge base file: <code>{data.file_path}</code> — a plain Python dict you can open, read and edit by
-              hand. It sits outside <code>Backend/</code> on purpose: the dev server's auto-reload restarts on any{" "}
-              <code>.py</code> write inside <code>Backend/</code>, which would kill the live WhatsApp connections
-              every time a new place was learned.
+              hand. Its exact current contents are shown below.
             </div>
           </Panel>
 
@@ -267,15 +262,10 @@ export default function TemporaryPage() {
           <ActivityPanel overview={data} />
         </>
       )}
+
+      <FilesPanel />
     </div>
   );
-}
-
-function formatWhen(iso: string | null): string {
-  if (!iso) return "—";
-  const date = new Date(iso);
-  if (Number.isNaN(date.getTime())) return "—";
-  return relativeTime(date);
 }
 
 /* --------------------------------------------------------- breakdowns */
@@ -304,7 +294,7 @@ function BreakdownPanel({
           {note}
         </p>
       </div>
-      <div className="table-frame anim-rise">
+      <div className="table-frame">
         <div className="table-scroll">
           <table className="table">
             <thead>
@@ -351,9 +341,8 @@ function AreasPanel({ areas }: { areas: AreaKnowledgeArea[] }) {
         </h2>
         <p className="section-head__sub" style={{ marginTop: 6 }}>
           Exactly what is in the file right now. Click a row to see every string recorded under that area — one real
-          place often has several names (&ldquo;University Road&rdquo; and &ldquo;VNSGU Road&rdquo; are the same
-          road) and all of them are kept on purpose, because the point is to recognise whatever a broker actually
-          typed.
+          place often has several names and all of them are kept on purpose, because the point is to recognise
+          whatever a broker actually typed.
         </p>
       </div>
 
@@ -364,7 +353,7 @@ function AreasPanel({ areas }: { areas: AreaKnowledgeArea[] }) {
           body="The knowledge base fills itself the next time a batch of WhatsApp messages goes through the LLM. Nothing to do here — it is a by-product of the pipeline, not a setting."
         />
       ) : (
-        <div className="table-frame anim-rise">
+        <div className="table-frame">
           <div className="table-scroll">
             <table className="table">
               <thead>
@@ -432,7 +421,9 @@ function ActivityPanel({ overview }: { overview: AreaKnowledgeOverview }) {
         <div className="section-head__eyebrow" style={{ marginBottom: 6 }}>
           <IconZap size={12} /> Raw activity
         </div>
-        <h2>Last {overview.events.length} propert{overview.events.length === 1 ? "y" : "ies"}</h2>
+        <h2>
+          Last {overview.events.length} propert{overview.events.length === 1 ? "y" : "ies"}
+        </h2>
         <p className="section-head__sub" style={{ marginTop: 6 }}>
           One row per visit, newest first — so the totals above can be checked against what actually happened rather
           than taken on trust.
@@ -446,7 +437,7 @@ function ActivityPanel({ overview }: { overview: AreaKnowledgeOverview }) {
           body="Rows appear here as soon as the next batch of messages is structured by the LLM."
         />
       ) : (
-        <div className="table-frame anim-rise">
+        <div className="table-frame">
           <div className="table-scroll">
             <table className="table">
               <thead>
@@ -513,6 +504,93 @@ function ActivityPanel({ overview }: { overview: AreaKnowledgeOverview }) {
           </div>
         </div>
       )}
+    </Panel>
+  );
+}
+
+/* -------------------------------------------------------------- files */
+
+/**
+ * The actual, verbatim content of the two on-disk knowledge base files —
+ * KnowledgeBase/area_knowledge_base.py (the learned place strings) and
+ * KnowledgeBase/area_knowledge_stats.json (the persisted analysis). Fetched
+ * once on mount rather than polled: these can grow to a few hundred KB, and
+ * nothing here needs to update every 10 seconds the way the stats above do
+ * — hit Refresh to re-read them after the knowledge base has grown.
+ */
+function FilesPanel() {
+  const toast = useToast();
+  const [files, setFiles] = useState<AreaKnowledgeFile[] | null>(null);
+  const [error, setError] = useState<string | null>(null);
+  const [loading, setLoading] = useState(false);
+
+  const load = useCallback(async () => {
+    setLoading(true);
+    try {
+      const result = await areaKnowledgeApi.getFiles();
+      setFiles(result.files);
+      setError(null);
+    } catch (err) {
+      const message = friendlyError(err);
+      setError(message);
+      toast.push({ tone: "bad", title: "Could not load the knowledge base files", message });
+    } finally {
+      setLoading(false);
+    }
+  }, [toast]);
+
+  useEffect(() => {
+    void load();
+  }, [load]);
+
+  return (
+    <Panel className="stack stack-4">
+      <div className="row-between">
+        <div>
+          <div className="section-head__eyebrow" style={{ marginBottom: 6 }}>
+            <IconCode size={12} /> Raw files
+          </div>
+          <h2>Knowledge base files — exact content</h2>
+          <p className="section-head__sub" style={{ marginTop: 6 }}>
+            The real, unmodified content of both files on disk right now — not a reconstruction. Use a copy button to
+            grab either file's content in full.
+          </p>
+        </div>
+        <Button size="sm" busy={loading} onClick={() => void load()} icon={<IconRefresh size={15} />}>
+          {loading ? "Loading…" : "Reload files"}
+        </Button>
+      </div>
+
+      {error && (
+        <Note tone="warn" icon={<IconInfo size={17} />}>
+          {error}
+        </Note>
+      )}
+
+      {!files && !error && <SkeletonRows rows={2} />}
+
+      {files &&
+        files.map((file) => (
+          <div key={file.path} className="file-block">
+            <div className="file-block__header">
+              <div className="file-block__title">
+                <IconCode size={15} />
+                <span className="file-block__name">{file.name}</span>
+                <span className="muted file-block__meta">
+                  {formatBytes(new TextEncoder().encode(file.content).length)}
+                </span>
+              </div>
+              <CopyButton text={file.content} label="Copy content" />
+            </div>
+            <pre className="file-block__code">
+              <code>{file.content}</code>
+            </pre>
+            <div className="file-block__footer">
+              <span className="muted file-block__path">{file.path}</span>
+              <CopyButton text={file.content} label="Copy content" />
+            </div>
+          </div>
+        ))}
     </Panel>
   );
 }

@@ -56,19 +56,31 @@ import {
  *  with an agent and some are still sitting here waiting to be handed
  *  off — a half-finished round reads as done under a flat "Assigned". */
 type PipelineStatus =
+  | { kind: "loading" }
   | { kind: "partial"; assigned: number; remaining: number }
   | { kind: "assigned"; assigned: number }
+  | { kind: "remaining"; remaining: number }
+  | { kind: "completed" }
   | { kind: "matched" }
   | { kind: "new" };
 
-function pipelineStatus(client: InquiryClientRecord, counts: ClientPropertyCounts | null): PipelineStatus {
-  if (counts !== null && counts.assigned > 0) {
-    const remaining = Math.max(counts.total - counts.assigned, 0);
+/** Read off the live counts alone — never client.assigned_agent_id, which
+ *  is only a "was ever handed off" flag the backend never clears: it kept
+ *  this badge on "Assigned" after every visit was completed, and flashed
+ *  "Assigned" right after a hand-off while the counts were still catching
+ *  up. `remaining` is always the Matches total minus what is out with an
+ *  agent right now, so the badge and the Matches pill never disagree. */
+function pipelineStatus(counts: ClientPropertyCounts | null): PipelineStatus {
+  if (counts === null) return { kind: "loading" };
+  const remaining = Math.max(counts.total - counts.assigned, 0);
+  if (counts.assigned > 0) {
     if (remaining > 0) return { kind: "partial", assigned: counts.assigned, remaining };
     return { kind: "assigned", assigned: counts.assigned };
   }
-  if (client.assigned_agent_id) return { kind: "assigned", assigned: counts?.assigned ?? 0 };
-  if (counts !== null && counts.total > 0) return { kind: "matched" };
+  // Nothing out with an agent now, but visits have happened — whatever is
+  // left in Matches is what still waits to be handed off.
+  if (counts.completed > 0) return remaining > 0 ? { kind: "remaining", remaining } : { kind: "completed" };
+  if (counts.total > 0) return { kind: "matched" };
   return { kind: "new" };
 }
 
@@ -717,7 +729,26 @@ export default function InquiryClientsPage() {
           clientName={allClients.find((c) => c.phone === matchesPhone)?.name ?? null}
           initialView={matchesInitialView}
           onClose={() => setMatchesPhone(null)}
-          onChanged={() => invalidateCounts(matchesPhone)}
+          onChanged={(hint) => {
+            // A hand-off only moves `assigned` (total and completed stay
+            // put), and the dialog already knows by how much — so the
+            // Status badge reads "4 assigned · 11 remaining" the moment the
+            // hand-off lands, with no extra request. invalidateCounts just
+            // below still re-reads the server's figure, which replaces this.
+            const newlyAssigned = hint?.newlyAssigned ?? 0;
+            if (newlyAssigned > 0) {
+              const phone = matchesPhone;
+              setMatchCounts((prev) => {
+                const current = prev[phone];
+                if (!current) return prev;
+                return {
+                  ...prev,
+                  [phone]: { ...current, assigned: Math.min(current.assigned + newlyAssigned, current.total) },
+                };
+              });
+            }
+            invalidateCounts(matchesPhone);
+          }}
         />
       )}
     </div>
@@ -840,7 +871,7 @@ function ClientTable({
                     />
                   </td>
                   <td className="cell-pipeline">
-                    <PipelineStatusBadge status={pipelineStatus(client, countsFor(client.phone))} />
+                    <PipelineStatusBadge status={pipelineStatus(countsFor(client.phone))} />
                   </td>
                   {/* Owns its own clicks — the row itself opens the client
                       detail dialog, which is not what either of these
@@ -1044,6 +1075,9 @@ function CompletedCell({ counts, onOpen }: { counts: ClientPropertyCounts | null
 }
 
 function PipelineStatusBadge({ status }: { status: PipelineStatus }) {
+  // Same "still loading" spinner the Matches/Completed cells show.
+  if (status.kind === "loading")
+    return <span className="spinner" style={{ width: 12, height: 12, verticalAlign: "middle" }} />;
   if (status.kind === "partial")
     return (
       <Badge tone="warn" title="Some of this client's properties are still waiting to be handed off">
@@ -1051,6 +1085,13 @@ function PipelineStatusBadge({ status }: { status: PipelineStatus }) {
       </Badge>
     );
   if (status.kind === "assigned") return <Badge tone="ok">Assigned</Badge>;
+  if (status.kind === "remaining")
+    return (
+      <Badge tone="warn" title="Nothing is out with an agent right now — these properties are still waiting to be handed off">
+        {status.remaining} remaining
+      </Badge>
+    );
+  if (status.kind === "completed") return <Badge tone="ok">All visited</Badge>;
   if (status.kind === "matched") return <Badge tone="accent">Matched</Badge>;
   return <Badge tone="info">New</Badge>;
 }

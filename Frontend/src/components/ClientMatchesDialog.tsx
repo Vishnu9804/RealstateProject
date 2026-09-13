@@ -76,6 +76,15 @@ export type PropertyCategory = "main" | "outsider";
  *  view", which is precisely what's true while this reads "completed". */
 export type DialogView = PropertyCategory | "completed";
 
+/** What onChanged can tell its caller about the change it reports, so the
+ *  caller can show the new figure straight away instead of waiting for its
+ *  own re-read. Only a hand-off passes one: `newlyAssigned` is how many
+ *  still-outstanding properties it put out with an agent that weren't
+ *  already. */
+export interface CountsChangeHint {
+  newlyAssigned: number;
+}
+
 const CATEGORY_LABEL: Record<PropertyCategory, string> = {
   main: "Main",
   outsider: "Outsider",
@@ -196,8 +205,9 @@ export default function ClientMatchesDialog({
   onClose: () => void;
   /** Fired after anything that changes this client's property counts, so
    *  the Inquiries table's Matches/Status/Completed cells can refresh
-   *  themselves. */
-  onChanged?: () => void;
+   *  themselves. `hint` is only passed by a hand-off — see
+   *  CountsChangeHint. */
+  onChanged?: (hint?: CountsChangeHint) => void;
 }) {
   const navigate = useNavigate();
   const toast = useToast();
@@ -1019,10 +1029,21 @@ export default function ClientMatchesDialog({
           onClose={() => setAssignFlow(null)}
           onPickDifferentAgent={() => setAssignFlow({ step: "pick" })}
           onSent={(updated) => {
+            // Outstanding properties this hand-off put out with an agent
+            // for the first time — re-sending one that was already
+            // assigned doesn't raise the count, same as the server's own
+            // set-based MatchCounts.assigned.
+            const outstandingIds = new Set(items.map((item) => item.recordId));
+            const sentIds = new Set(
+              assignFlow.assignments.flatMap((assignment) => assignment.properties.map((p) => p.record_id)),
+            );
+            const newlyAssigned = [...sentIds].filter(
+              (id) => outstandingIds.has(id) && !assignedAgentByProperty.has(id),
+            ).length;
             setClient(updated);
             setSelectedIds(new Set());
             setAssignFlow(null);
-            onChanged?.();
+            onChanged?.({ newlyAssigned });
             // Re-read the agents so every just-assigned property turns
             // green here immediately rather than on some later poll.
             void load();

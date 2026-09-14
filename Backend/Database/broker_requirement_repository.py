@@ -234,6 +234,16 @@ def get_all_requirements(limit: int) -> List[StructuredRequirement]:
     return [_to_pydantic(row) for row in rows]
 
 
+def get_requirements_by_record_ids(record_ids: Collection[str]) -> List[StructuredRequirement]:
+    """Only the named requirements, in one query — the daily match catch-up
+    loads just the ones that have new properties to compare, never the list."""
+    if not record_ids:
+        return []
+    stmt = select(BrokerRequirementRow).where(BrokerRequirementRow.record_id.in_(list(record_ids)))
+    with get_session() as session:
+        return [_to_pydantic(row) for row in session.execute(stmt).unique().scalars().all()]
+
+
 def get_requirement(record_id: str) -> Optional[StructuredRequirement]:
     with get_session() as session:
         row = _find_row(session, record_id)

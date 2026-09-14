@@ -78,8 +78,8 @@ def upsert_client(
 
     # Client-Property Matching feature: auto-recompute whenever a
     # requirement field actually changed — not on every save (a
-    # pending_action toggle or a name/email-only edit re-saves the whole
-    # record too, and shouldn't trigger a pointless rescore). Lazy import
+    # name/email-only edit re-saves the whole record too, and shouldn't
+    # trigger a pointless rescore). Lazy import
     # + broad except so a matching failure can never break the inquiry
     # pipeline that just successfully saved this client's data; this is
     # the only place whatsappInquiryHandling depends on the matching

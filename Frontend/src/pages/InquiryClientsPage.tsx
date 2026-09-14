@@ -38,7 +38,6 @@ import {
 import {
   IconAlert,
   IconCheck,
-  IconClock,
   IconEdit,
   IconInbox,
   IconMessage,
@@ -971,13 +970,6 @@ function ClientDetailDialog({ client, onClose }: { client: InquiryClientRecord; 
 function ClientDetail({ client }: { client: InquiryClientRecord }) {
   return (
     <div className="detail">
-      {client.pending_action && (
-        <Note tone="info" icon={<IconClock size={16} />}>
-          Waiting on this client:{" "}
-          <strong>{client.pending_action.replace(/_/g, " ")}</strong>
-        </Note>
-      )}
-
       <div className="detail__grid">
         <div className="detail__block">
           <div className="detail__k">Contact</div>

@@ -148,7 +148,6 @@ export interface InquiryFormSubmission {
 export interface InquiryClientRecord {
   phone: string;
   status: string;
-  pending_action: string | null;
   name: string | null;
   email: string | null;
   purpose: string | null;

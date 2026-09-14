@@ -463,6 +463,14 @@ def init_db() -> None:
         # database that never had it.
         connection.execute(text("ALTER TABLE properties DROP COLUMN IF EXISTS field_embeddings"))
     with engine.begin() as connection:
+        # Retiring the WhatsApp "welcome back — update your requirements?"
+        # yes/no flow (Service/WhatsAppInquiryHandlingService/
+        # inquiry_pipeline_service.py no longer has it: an existing client's
+        # messages are now ignored outright, so nothing ever sets this
+        # column). IF EXISTS, so this is a no-op after the first run and on
+        # a database that never had it.
+        connection.execute(text("ALTER TABLE clients DROP COLUMN IF EXISTS pending_action"))
+    with engine.begin() as connection:
         # AgentManagement feature: which agent (if any) is handling this
         # client's site visit, and whether the WhatsApp hand-off messages
         # were ever sent for them.

@@ -298,10 +298,10 @@ def _sync_to_inquiries(lead: LandingLeadRecord, prop: Optional[EmbeddedProperty]
         # "website_lead", NEVER "registered" or "pending_registration" --
         # inquiry_pipeline_service.handle_batch_ready reads "does a
         # ClientRecord exist" as "has this phone been through the REAL
-        # WhatsApp registration flow", and routes a returning client to a
-        # completely different message (its own _greet_existing_client)
-        # than a first-time one (_start_new_client's welcome + link). A
-        # landing-site enquiry must not silently flip that switch for
+        # WhatsApp registration flow", and a returning client's WhatsApp
+        # messages are ignored outright, unlike a first-time one
+        # (_start_new_client's welcome + link). A landing-site enquiry must
+        # not silently flip that switch for
         # someone who has never actually texted the WhatsApp number --
         # inquiry_pipeline_service.py and inquiry_form_service.py both
         # special-case "website_lead" as "no real registration yet" for
@@ -310,7 +310,6 @@ def _sync_to_inquiries(lead: LandingLeadRecord, prop: Optional[EmbeddedProperty]
         # sparse) never gets demoted by this -- that status only ever
         # moves one way.
         status="registered" if existing is not None and existing.status == "registered" else "website_lead",
-        pending_action=existing.pending_action if existing is not None else None,
         # Carried across explicitly, not left to default to 0: a website
         # enquiry is NOT a requirements-form submission, so it must neither
         # spend one of this client's updates nor hand them a fresh

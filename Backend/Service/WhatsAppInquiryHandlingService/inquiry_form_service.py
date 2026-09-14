@@ -249,7 +249,6 @@ def submit_public_form(submission: FormSubmissionRequest) -> Optional[FormSubmis
 _PREFILL_EXCLUDE = {
     "phone",
     "status",
-    "pending_action",
     "requirement_submission_count",
     "assigned_agent_id",
     "handoff_sent_at",
@@ -388,7 +387,6 @@ def _submit_whatsapp(phone: str, submission: FormSubmissionRequest) -> FormSubmi
     record = ClientRecord(
         phone=phone,
         status="registered",
-        pending_action=None,
         requirement_submission_count=submission_number,
         **_extract_requirement_fields(submission),
     )
@@ -472,7 +470,6 @@ def _submit_instagram(ig_user_id: str, submission: FormSubmissionRequest) -> For
         client_record = ClientRecord(
             phone=normalized_phone,
             status="registered",
-            pending_action=None,
             requirement_submission_count=submission_number,
             **requirement_fields,
         )

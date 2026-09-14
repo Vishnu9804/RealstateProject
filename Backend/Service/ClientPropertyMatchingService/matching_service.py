@@ -253,9 +253,9 @@ def has_requirements(client: ClientRecord) -> bool:
 def requirement_fields_changed(previous: Optional[ClientRecord], current: ClientRecord) -> bool:
     """Whether any REQUIREMENT field differs between the two records —
     deliberately narrower than "the record changed at all", so a
-    pending_action toggle or a name/email-only edit doesn't trigger a
-    pointless recompute. See client_store.upsert_client, the single choke
-    point every client write goes through."""
+    name/email-only edit doesn't trigger a pointless recompute. See
+    client_store.upsert_client, the single choke point every client write
+    goes through."""
     if previous is None:
         return any(getattr(current, name) is not None for name in _REQUIREMENT_FIELDS)
     return any(getattr(previous, name) != getattr(current, name) for name in _REQUIREMENT_FIELDS)

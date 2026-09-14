@@ -42,23 +42,14 @@ class ClientRow(ClientBase):
 
     # "pending_registration" (welcome message + form link sent, no
     # submission yet) or "registered" (has submitted the form at least
-    # once). Drives the 3-way branch in inquiry_pipeline_service.py: a
+    # once). Drives the branch in inquiry_pipeline_service.py: a
     # brand-new number gets the welcome message exactly once — a second
     # qualifying message from the same number while still
     # pending_registration must NOT re-trigger it (duplicate-message
-    # prevention), and only a "registered" client gets the
-    # existing-data/update flow instead of the welcome flow.
+    # prevention) — and a "registered" client's messages are ignored
+    # outright (see handle_batch_ready's module docstring), never
+    # re-triggering the welcome flow.
     status: Mapped[str] = mapped_column(String, nullable=False, default="pending_registration")
-
-    # Set while we're waiting on a specific yes/no reply from this client —
-    # currently only "awaiting_update_confirmation", set by
-    # inquiry_pipeline_service._greet_existing_client(). When set, the next
-    # incoming batch from this phone is interpreted directly as yes/no
-    # (see _handle_update_confirmation_reply) instead of being re-classified
-    # by the LLM — deterministic and far more reliable than an LLM guess for
-    # a closed question we just asked ourselves, and cheaper (requirement
-    # #4: don't send unnecessary context to the LLM).
-    pending_action: Mapped[Optional[str]] = mapped_column(String, nullable=True)
 
     # --- client info ---
     name: Mapped[Optional[str]] = mapped_column(String, nullable=True)

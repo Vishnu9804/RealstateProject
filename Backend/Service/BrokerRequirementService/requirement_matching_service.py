@@ -45,8 +45,15 @@ not anyone has opened it — the basis for match counts or alerts later.
     catch-up actually had something to look at — reopening an unchanged
     requirement is one read and no write.
 
-Because every read catches up first, stored matches are never shown stale,
-and there is no nightly job adding background database work.
+  - Every day at 6 AM IST (rescore_all_requirements, run by
+    ClientPropertyMatchingService/scheduled_recompute_service after the
+    client pass) every requirement is caught up the same incremental way,
+    whether or not anyone opens it — so the Matches column and stored rows
+    include the night's new properties. Properties a requirement was already
+    scored against are never re-scored; a night with no new or edited
+    property does one tiny read and no write.
+
+Because every read catches up first, stored matches are never shown stale.
 
 Deleting a requirement removes its stored matches through the foreign key's
 ON DELETE CASCADE; marking a property sold out removes that property's rows
@@ -84,6 +91,9 @@ from Service.WhatsAppDataFetchingService import embedding_service, property_vect
 # matching_service's own comment on it. Read from there rather than
 # re-declared, so the two can never be tuned apart.
 _MAX_PROPERTIES_SCORED = matching_service._MAX_PROPERTIES_SCORED
+# How many of the newest requirements the 6 AM catch-up covers — the most
+# the Broker Requirements page can list (its controller caps limit at 1000).
+_DAILY_REQUIREMENTS_WINDOW = 1000
 
 # record_id -> (the exact text that was embedded, the resulting vector).
 # Keyed on the TEXT, not just the id, so an edited requirement re-embeds
@@ -197,6 +207,70 @@ def score_new_requirements(requirements: List[StructuredRequirement]) -> int:
         )
         results[requirement.record_id] = (scores, _fingerprint(pseudo_client))
     return requirement_match_store.replace_matches(results, run_started_at)
+
+
+def rescore_all_requirements() -> Tuple[int, int, int]:
+    """The 6 AM catch-up: every requirement (newest _DAILY_REQUIREMENTS_WINDOW)
+    scored against ONLY the properties added or edited since it was last
+    scored. Returns (requirements rescored, already up to date, match rows
+    written).
+
+    Database cost, in order:
+      1. one query for every requirement's watermark (id + timestamp + hash,
+         see broker_requirement_match_repository.get_run_index);
+      2. the changed-property lists come from the in-memory snapshot — no
+         query — memoised per watermark, since most requirements share one;
+      3. only if something changed: one query loading just those requirements;
+      4. one transaction writing all of their results (plus a full-replace
+         transaction in the rare case a requirement was never scored or its
+         text changed without a re-score).
+    A requirement with nothing new is not loaded and not written."""
+    # Taken BEFORE any property list is read — see
+    # BrokerRequirementMatchRunRow.computed_at.
+    run_started_at = _now()
+    runs = requirement_match_store.get_run_index(_DAILY_REQUIREMENTS_WINDOW)
+    changed_by_watermark: Dict[Optional[datetime], List[EmbeddedProperty]] = {}
+    pending: Dict[str, Tuple[Optional[datetime], Optional[str], List[EmbeddedProperty]]] = {}
+    for record_id, (computed_at, fingerprint) in runs.items():
+        if computed_at not in changed_by_watermark:
+            changed_by_watermark[computed_at] = property_vector_store.get_properties_changed_since(
+                computed_at, limit=_MAX_PROPERTIES_SCORED
+            )
+        if changed_by_watermark[computed_at]:
+            pending[record_id] = (computed_at, fingerprint, changed_by_watermark[computed_at])
+    if not pending:
+        return 0, len(runs), 0
+
+    all_properties: Optional[List[EmbeddedProperty]] = None
+    full: Dict[str, Tuple[List[MatchScore], str]] = {}
+    incremental: Dict[str, Tuple[List[MatchScore], set, str]] = {}
+    for requirement in requirement_store.get_requirements_by_record_ids(list(pending)):
+        computed_at, stored_fingerprint, changed = pending[requirement.record_id]
+        try:
+            pseudo_client = _as_pseudo_client(requirement)
+            fingerprint = _fingerprint(pseudo_client)
+            has_requirements = matching_service.has_requirements(pseudo_client)
+            if computed_at is None or stored_fingerprint != fingerprint:
+                # Never scored, or its text changed since: nothing stored can
+                # be trusted, so this one alone gets a full re-score.
+                if all_properties is None:
+                    all_properties = property_vector_store.get_all_properties(limit=_MAX_PROPERTIES_SCORED)
+                scores = _score(requirement, pseudo_client, all_properties) if has_requirements else []
+                full[requirement.record_id] = (scores, fingerprint)
+            else:
+                scores = _score(requirement, pseudo_client, changed) if has_requirements else []
+                incremental[requirement.record_id] = (scores, {prop.record_id for prop in changed}, fingerprint)
+        except Exception as exc:  # noqa: BLE001
+            # One bad requirement must not skip the rest. Not written, so its
+            # watermark stays put and the next run retries it from there.
+            step_logger.error(
+                f"[Daily Matching] Rescore failed for requirement {requirement.record_id} "
+                f"({type(exc).__name__}): {exc!r}"
+            )
+
+    written = requirement_match_store.replace_matches(full, run_started_at) if full else 0
+    written += requirement_match_store.merge_matches_bulk(incremental, run_started_at)
+    return len(full) + len(incremental), len(runs) - len(pending), written
 
 
 def forget_requirement(record_id: str) -> None:

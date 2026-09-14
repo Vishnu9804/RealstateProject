@@ -1,0 +1,31 @@
+# Dependencies
+node_modules/
+
+# Build output
+dist/
+dist-ssr/
+build/
+
+# Vite
+.vite/
+*.tsbuildinfo
+
+# Env files
+.env
+.env.local
+*.local
+
+# Python
+__pycache__/
+*.pyc
+venv/
+.pytest_cache/
+
+# Editor
+.vscode/*
+!.vscode/extensions.json
+.idea/
+
+# OS
+.DS_Store
+Thumbs.db

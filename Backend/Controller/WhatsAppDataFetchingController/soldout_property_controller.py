@@ -6,10 +6,11 @@ soldout_property_service.py.
 
 from typing import Any, List, Optional
 
-from fastapi import APIRouter, HTTPException, Request, Response
+from fastapi import APIRouter, Depends, HTTPException, Request, Response
 from pydantic import BaseModel
 
 from Middleware import http_cache
+from Service.AuthManagementService.auth_dependencies import require_admin
 from Model.WhatsAppDataFetchingModel.soldout_property import SoldOutPropertyRecord
 from Service.WhatsAppDataFetchingService import soldout_property_service, soldout_property_store
 
@@ -75,7 +76,8 @@ def _images_etag(record_id: str) -> Optional[str]:
     return None if entry is None else http_cache.build_etag("soldout-images", record_id, entry.sold_out_at)
 
 
-@router.post("/{record_id}", response_model=SoldOutActionResult, status_code=201)
+# Admin-only: the move is irreversible (the property leaves the database and visits are cancelled).
+@router.post("/{record_id}", response_model=SoldOutActionResult, status_code=201, dependencies=[Depends(require_admin)])
 def mark_property_sold_out(record_id: str) -> SoldOutActionResult:
     """The Properties page's "Move to → Sold out" action.
 

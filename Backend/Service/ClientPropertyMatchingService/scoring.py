@@ -59,32 +59,132 @@ PARTIAL_EVIDENCE_CUTOFF = 0.6
 _OVER_BUDGET_ANCHORS: Tuple[Tuple[float, float], ...] = ((0.0, 1.0), (0.05, 0.85), (0.15, 0.55), (0.30, 0.25), (0.60, 0.05))
 _UNDER_BUDGET_ANCHORS: Tuple[Tuple[float, float], ...] = ((0.0, 1.0), (0.15, 0.85), (0.40, 0.65), (1.0, 0.5))
 
+# Size — the optional per-type size a client can give on the requirements
+# form ("Flat: 1200 sqft", "Bungalow: 200 vaar"). Scored only when the
+# client gave one that could be read, and weighted below everything else:
+# most people only have a rough idea, so a size miss nudges a property down
+# the list rather than knocking it out. Its curve is gentler than the
+# budget's for the same reason, and never reaches zero.
+_SIZE_WEIGHT = 0.08
+_SIZE_ANCHORS: Tuple[Tuple[float, float], ...] = ((0.0, 1.0), (0.10, 0.85), (0.25, 0.6), (0.50, 0.35), (1.0, 0.2))
+
+SizeRange = Tuple[Optional[float], Optional[float]]
+
 
 def score_property(client: ClientRecord, prop: EmbeddedProperty, client_vector: List[float]) -> Optional[MatchScore]:
     """Returns None (not a MatchScore) when the final score falls below
     LOW_CUTOFF — the caller (matching_service.py) filters these out, so a
     property scoring under 80% never reaches the dashboard at all, in any
-    bucket."""
-    purpose_factor = _purpose_gate(client.purpose, prop.listing_type)
-    type_factor = normalization.property_type_gate(client.property_type, prop.property_type)
-    critical_gate = purpose_factor * type_factor
+    bucket.
 
-    field_scores: Dict[str, Optional[float]] = {
+    client.property_type is read whole ("first type is the main one"),
+    which is what a broker requirement means by a comma list. A client's
+    own multi-select goes through score_client_property instead."""
+    return _score(
+        prop,
+        _purpose_gate(client.purpose, prop.listing_type),
+        normalization.property_type_gate(client.property_type, prop.property_type),
+        _soft_field_scores(client, prop, client_vector),
+    )
+
+
+def client_type_plan(client: ClientRecord) -> List[Tuple[str, Optional[SizeRange]]]:
+    """Each property type the client picked, with the size range they gave
+    for it (None when they gave none, or nothing readable). Worked out ONCE
+    per client and handed to score_client_property for every property,
+    rather than re-parsing the same text thousands of times per recompute."""
+    return [
+        (group, normalization.parse_size_requirement(normalization.size_for(client.property_sizes, group), group))
+        for group in normalization.split_type_groups(client.property_type)
+    ]
+
+
+def score_client_property(
+    client: ClientRecord,
+    prop: EmbeddedProperty,
+    client_vector: List[float],
+    plan: List[Tuple[str, Optional[SizeRange]]],
+) -> Optional[MatchScore]:
+    """score_property for an inquiry client, who may have picked several
+    property types ("Flat, Bungalow") and a size for each.
+
+    Every type is an equal preference, so the property is scored against
+    each one on its own — that type's gate and that type's size, everything
+    else shared — and keeps its best result, tagged with the type it was
+    for (`matched_type`, only when there is more than one to choose
+    between). A tie goes to the type naming this property exactly, then to
+    the one picked first.
+
+    A client with one type and no readable size (every client stored
+    before this existed) takes score_property itself, so their scores are
+    exactly what they always were."""
+    if len(plan) <= 1 and not (plan and plan[0][1]):
+        return score_property(client, prop, client_vector)
+
+    purpose_factor = _purpose_gate(client.purpose, prop.listing_type)
+    soft = _soft_field_scores(client, prop, client_vector)
+    prop_token = normalization.canonical_type_token(prop.property_type) if prop.property_type else ""
+    area_sqft = normalization.property_area_sqft(prop.carpet_area_sqft, prop.carpet_area_unit)
+
+    best: Optional[MatchScore] = None
+    best_key = None
+    for index, (group, wanted) in enumerate(plan):
+        score = _score(
+            prop,
+            purpose_factor,
+            normalization.property_type_gate(group, prop.property_type),
+            soft,
+            size=_size_score(wanted, area_sqft) if wanted else None,
+            size_stated=wanted is not None,
+        )
+        if score is None:
+            continue
+        key = (score.score, prop_token in normalization.split_client_property_types(group), -index)
+        if best_key is None or key > best_key:
+            best, best_key = score, key
+            if len(plan) > 1:
+                score.matched_type = group
+    return best
+
+
+def _soft_field_scores(client: ClientRecord, prop: EmbeddedProperty, client_vector: List[float]) -> Dict[str, Optional[float]]:
+    return {
         "budget": _budget_score(client.budget_min_inr, client.budget_max_inr, prop.price_amount_inr),
         "location": _location_score(client.preferred_areas, prop.area_name, prop.address),
         "bhk": normalization.bhk_score(client.bhk, prop.bhk),
         "semantic": _semantic_score(client_vector, prop.embedding),
     }
 
-    comparable_weight = sum(_SOFT_WEIGHTS[name] for name, score in field_scores.items() if score is not None)
-    total_weight = sum(_SOFT_WEIGHTS.values())
+
+def _score(
+    prop: EmbeddedProperty,
+    purpose_factor: float,
+    type_factor: float,
+    soft: Dict[str, Optional[float]],
+    size: Optional[float] = None,
+    size_stated: bool = False,
+) -> Optional[MatchScore]:
+    critical_gate = purpose_factor * type_factor
+
+    field_scores: Dict[str, Optional[float]] = dict(soft)
+    weights = _SOFT_WEIGHTS
+    if size_stated:
+        field_scores["size"] = size
+        # Weighed only when this property has an area to compare. Plenty of
+        # listings don't, and an optional preference the client was unsure
+        # of anyway must not flag all of those as "Partial data".
+        if size is not None:
+            weights = {**_SOFT_WEIGHTS, "size": _SIZE_WEIGHT}
+
+    comparable_weight = sum(weights[name] for name, score in field_scores.items() if score is not None)
+    total_weight = sum(weights.values())
     evidence_ratio = comparable_weight / total_weight if total_weight else 0.0
 
     if comparable_weight == 0:
         soft_score = 0.5  # nothing comparable at all — neutral, not zero
     else:
         soft_score = (
-            sum(_SOFT_WEIGHTS[name] * score for name, score in field_scores.items() if score is not None)
+            sum(weights[name] * score for name, score in field_scores.items() if score is not None)
             / comparable_weight
         )
 
@@ -110,7 +210,7 @@ def score_property(client: ClientRecord, prop: EmbeddedProperty, client_vector: 
         is_partial_match=evidence_ratio < PARTIAL_EVIDENCE_CUTOFF,
         property_category=_category_of(prop),
         field_scores=field_scores,
-        reason=_build_reason(purpose_factor, type_factor, evidence_ratio),
+        reason=_build_reason(purpose_factor, type_factor, evidence_ratio, size),
     )
 
 
@@ -120,7 +220,9 @@ def _category_of(prop: EmbeddedProperty) -> str:
     return "main" if prop.review_status == "accepted" else "outsider"
 
 
-def _build_reason(purpose_factor: float, type_factor: float, evidence_ratio: float) -> str:
+def _build_reason(
+    purpose_factor: float, type_factor: float, evidence_ratio: float, size: Optional[float] = None
+) -> str:
     notes: List[str] = []
     if purpose_factor < 0.5:
         notes.append("purpose (buy/rent) does not match")
@@ -128,6 +230,8 @@ def _build_reason(purpose_factor: float, type_factor: float, evidence_ratio: flo
         notes.append("property type is a poor fit")
     elif type_factor < 0.9:
         notes.append("property type is a partial fit")
+    if size is not None and size < 0.6:
+        notes.append("size is outside the preferred range")
     if evidence_ratio < PARTIAL_EVIDENCE_CUTOFF:
         notes.append("limited data available for a full comparison")
     return "; ".join(notes) if notes else "Matches on the fields that were compared."
@@ -185,6 +289,20 @@ def _location_score(preferred_areas: Optional[str], property_area: Optional[str]
     # but modest signal (the feature spec's "everything else matches but
     # area is different -> low score" case), not a hard exclusion.
     return 0.35
+
+
+def _size_score(wanted: SizeRange, area_sqft: Optional[float]) -> Optional[float]:
+    """1.0 inside the wanted range, easing down (never to zero) the further
+    outside it the property is — see _SIZE_ANCHORS. None when the property
+    has no usable area, so it is neither a match nor a miss."""
+    if area_sqft is None:
+        return None
+    low, high = wanted
+    if low is not None and area_sqft < low:
+        return _interpolate((low - area_sqft) / low, _SIZE_ANCHORS)
+    if high is not None and area_sqft > high:
+        return _interpolate((area_sqft - high) / high, _SIZE_ANCHORS)
+    return 1.0
 
 
 def _semantic_score(client_vector: Optional[List[float]], property_vector: Optional[List[float]]) -> Optional[float]:

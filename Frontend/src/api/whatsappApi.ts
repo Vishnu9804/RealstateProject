@@ -1,4 +1,4 @@
-import { API_BASE_URL, apiClient } from "./client";
+import { apiClient } from "./client";
 import type { ConnectionRole, WhatsAppConnection, WhatsAppStatusResponse } from "./types";
 
 export const whatsappApi = {
@@ -6,14 +6,9 @@ export const whatsappApi = {
 
   getConnections: (): Promise<WhatsAppConnection[]> => apiClient.get("/whatsapp/connections"),
 
-  /**
-   * Not a JSON endpoint — the backend returns a raw PNG (or 404 if nothing
-   * is being onboarded right now). Returns a URL for an <img> tag rather
-   * than fetching it here; `cacheBustToken` should change on every poll
-   * tick so the browser doesn't serve a stale cached image once WhatsApp
-   * rotates to a new QR code.
-   */
-  getPendingQrUrl: (cacheBustToken: number | string): string => `${API_BASE_URL}/whatsapp/connections/qr?t=${cacheBustToken}`,
+  /** Raw PNG of the pairing QR (404 until one exists). Fetched with the session
+   *  token — a plain <img src> can't send it, and the route requires sign-in. */
+  getPendingQr: (): Promise<Blob> => apiClient.getBlob("/whatsapp/connections/qr"),
 
   /** Starts linking a new number — call when the operator taps "Add a
    *  number". Safe to call again while one is already in progress. */

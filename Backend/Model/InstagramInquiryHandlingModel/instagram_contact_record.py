@@ -1,5 +1,5 @@
 from datetime import datetime
-from typing import Optional
+from typing import Dict, Optional
 
 from pydantic import BaseModel
 
@@ -28,6 +28,7 @@ class InstagramContactRecord(BaseModel):
     budget_max_inr: Optional[float] = None
     preferred_areas: Optional[str] = None
     additional_requirements: Optional[str] = None
+    property_sizes: Optional[Dict[str, str]] = None
 
     # Mirrors ClientRecord.requirement_submission_count, for the
     # Instagram-only submission path -- same quota, same guard.

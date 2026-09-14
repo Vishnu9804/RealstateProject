@@ -12,18 +12,36 @@ from __future__ import annotations
 from typing import Optional
 
 from Model.WhatsAppInquiryHandlingModel.client_record import ClientRecord
+from Service.ClientPropertyMatchingService import normalization
 
 
 def build_requirement_text(client: ClientRecord) -> str:
     parts = [
         client.purpose,
-        client.property_type,
+        _property_type_text(client),
         client.bhk,
         _budget_text(client.budget_min_inr, client.budget_max_inr),
         client.preferred_areas,
         client.additional_requirements,
     ]
     return " | ".join(part for part in parts if part)
+
+
+def _property_type_text(client: ClientRecord) -> Optional[str]:
+    """property_type exactly as stored — unless the client gave a size for
+    any of their types, in which case each size is written beside its type
+    ("Flat 1200 sqft, Bungalow 200 vaar") so the vector carries it too.
+
+    Only a client with sizes gets different text. Every other client, and
+    every broker requirement (whose change-detection fingerprint is a hash
+    of this text — see requirement_matching_service._fingerprint), produces
+    byte-for-byte the text it always did."""
+    if not client.property_sizes or not client.property_type:
+        return client.property_type
+    return ", ".join(
+        f"{group} {size}" if (size := normalization.size_for(client.property_sizes, group)) else group
+        for group in normalization.split_type_groups(client.property_type)
+    )
 
 
 def _budget_text(budget_min: Optional[float], budget_max: Optional[float]) -> str:

@@ -6,12 +6,13 @@ this module only translates HTTP <-> Service.
 from datetime import datetime, timezone
 from typing import Dict, List, Optional
 
-from fastapi import APIRouter, HTTPException
+from fastapi import APIRouter, Depends, HTTPException
 from pydantic import BaseModel
 
 from Model.WhatsAppInquiryHandlingModel.client_record import ClientRecord
 from Model.WhatsAppInquiryHandlingModel.inquiry_message import InquiryChatMessage
 from Service.AgentManagementService import agent_store, manual_property_store
+from Service.AuthManagementService.auth_dependencies import require_admin
 from Service.LandingPageService import lead_store
 from Service.WhatsAppInquiryHandlingService import (
     client_store,
@@ -368,7 +369,7 @@ def clear_assignments(phone: str) -> CancelResult:
     return _cancel_active_assignments(phone, client.name if client is not None else None)
 
 
-@router.delete("/clients/{phone}", response_model=CancelResult)
+@router.delete("/clients/{phone}", response_model=CancelResult, dependencies=[Depends(require_admin)])
 def delete_client(phone: str) -> CancelResult:
     """Removes one inquiry outright: cancels every active visit (telling the
     agents, exactly as the Clear action does), then deletes the client's
@@ -437,5 +438,12 @@ def add_manual_property(phone: str, body: ManualPropertyRequest) -> List[str]:
 
 @router.delete("/clients/{phone}/manual-properties/{record_id}", response_model=List[str])
 def remove_manual_property(phone: str, record_id: str) -> List[str]:
+    """NOT admin-gated, unlike the DELETE routes below — this is routine
+    curation (unchecking one of a client's hand-picked properties, e.g.
+    from SelectPropertyPage.tsx's checkbox list or ClientMatchesDialog.tsx's
+    "Remove"), not deleting a client/property record. Gating it would break
+    an everyday part of an employee's job for no real security benefit: it
+    only ever removes a property from ONE client's shortlist, never the
+    property or client itself."""
     manual_property_store.remove_manual_property(phone, record_id)
     return manual_property_store.get_manual_properties(phone)

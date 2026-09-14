@@ -288,3 +288,18 @@ export const IconInstagram = svg(
     <path d="M17.2 6.8h.01" />
   </>,
 );
+
+export const IconLock = svg(
+  <>
+    <rect x="4.5" y="10.5" width="15" height="10" rx="2.2" />
+    <path d="M8 10.5V7a4 4 0 0 1 8 0v3.5" />
+  </>,
+);
+
+export const IconLogOut = svg(
+  <>
+    <path d="M9 21H5a2 2 0 0 1-2-2V5a2 2 0 0 1 2-2h4" />
+    <path d="M16 17l5-5-5-5" />
+    <path d="M21 12H9" />
+  </>,
+);

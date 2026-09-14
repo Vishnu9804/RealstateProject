@@ -121,6 +121,36 @@ class Settings(BaseSettings):
     # with no number in it whenever this is unset.
     business_contact_phone: str = ""
 
+    # --- AuthManagement (login accounts, Service/AuthManagementService/) ---
+    #
+    # Signs/verifies every login JWT (Service/AuthManagementService/
+    # token_service.py). Left blank by default like the other secrets above
+    # — a blank secret would let anyone forge a token, so token_service
+    # refuses to start signing until this is actually set in `.env`. There is
+    # deliberately no auto-generated fallback (unlike e.g.
+    # inquiry_form_base_url's LAN-IP autofill): a secret that's regenerated
+    # on every restart would invalidate every existing login each time the
+    # server restarts, and a secret that's auto-generated once and silently
+    # persisted somewhere is worse than just asking for one explicitly.
+    jwt_secret_key: str = ""
+    jwt_expiry_hours: int = Field(default=12, gt=0)
+    # First admin account, created once at startup if the `users` table (or
+    # its in-memory fallback) has no admin row yet — see
+    # Service/AuthManagementService/user_store.py's ensure_admin_seeded. Left
+    # blank by default; if either is unset on a database with no admin yet,
+    # startup logs a warning instead of guessing a default username/password
+    # (a guessed default sitting in the database unnoticed is a worse outcome
+    # than a clear "you have no admin account yet" warning). Never touches an
+    # admin row that already exists, so changing these after the first admin
+    # is created has no effect — that account's password is then only ever
+    # changed via PATCH /api/auth/me/password while logged in as that admin.
+    admin_username: str = ""
+    admin_password: str = ""
+    # Owner's personal WhatsApp number. When set, adding/editing staff logins,
+    # changing the admin password and "forgot password" all require a code
+    # sent here. Blank = the admin's password is asked for instead.
+    admin_phone: str = ""
+
     # --- per-identity daily allowances (see Middleware/daily_quota.py) ---
     #
     # How much ONE personal WhatsApp number, or ONE Instagram account, may

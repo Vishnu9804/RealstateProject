@@ -1,4 +1,4 @@
-from typing import Literal, Optional
+from typing import Dict, Literal, Optional
 
 from pydantic import BaseModel
 
@@ -42,6 +42,10 @@ class FormSubmissionRequest(BaseModel):
     budget_max_inr: Optional[float] = None
     preferred_areas: Optional[str] = None
     additional_requirements: Optional[str] = None
+    # One optional free-text size per picked type ({"Flat": "1200 sqft"}).
+    # Cleaned server-side against property_type (inquiry_form_service), so
+    # only sizes for types actually picked are ever stored.
+    property_sizes: Optional[Dict[str, Optional[str]]] = None
 
 
 class FormPrefillResponse(BaseModel):
@@ -82,6 +86,7 @@ class FormPrefillResponse(BaseModel):
     budget_max_inr: Optional[float] = None
     preferred_areas: Optional[str] = None
     additional_requirements: Optional[str] = None
+    property_sizes: Optional[Dict[str, str]] = None
 
 
 class FormSubmissionResult(BaseModel):

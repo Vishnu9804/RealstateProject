@@ -302,6 +302,11 @@ def init_db() -> None:
     from Database.manual_property_models import ManualPropertyRow  # noqa: F401
     from Service.WhatsAppDataFetchingService.embedding_service import EMBEDDING_DIMENSIONS
 
+    # Same import-for-side-effect reasoning, for the AuthManagement feature's
+    # login accounts table — UserRow lives on this module's own Base (see
+    # Database/user_models.py's own docstring for why it isn't on ClientBase).
+    from Database import user_models  # noqa: F401
+
     engine = _get_engine()
     with engine.begin() as connection:
         connection.execute(text("CREATE EXTENSION IF NOT EXISTS vector"))
@@ -311,6 +316,7 @@ def init_db() -> None:
         connection.execute(
             text(f"ALTER TABLE clients ADD COLUMN IF NOT EXISTS requirement_embedding vector({EMBEDDING_DIMENSIONS})")
         )
+        connection.execute(text("ALTER TABLE users ADD COLUMN IF NOT EXISTS session_epoch INTEGER NOT NULL DEFAULT 0"))
     with engine.begin() as connection:
         connection.execute(text("ALTER TABLE properties ADD COLUMN IF NOT EXISTS price_per_unit_text VARCHAR"))
         connection.execute(
@@ -480,6 +486,14 @@ def init_db() -> None:
         # database that never had it.
         connection.execute(text("ALTER TABLE properties DROP COLUMN IF EXISTS field_embeddings"))
     with engine.begin() as connection:
+        # Retiring the WhatsApp "welcome back — update your requirements?"
+        # yes/no flow (Service/WhatsAppInquiryHandlingService/
+        # inquiry_pipeline_service.py no longer has it: an existing client's
+        # messages are now ignored outright, so nothing ever sets this
+        # column). IF EXISTS, so this is a no-op after the first run and on
+        # a database that never had it.
+        connection.execute(text("ALTER TABLE clients DROP COLUMN IF EXISTS pending_action"))
+    with engine.begin() as connection:
         # AgentManagement feature: which agent (if any) is handling this
         # client's site visit, and whether the WhatsApp hand-off messages
         # were ever sent for them.
@@ -564,6 +578,16 @@ def init_db() -> None:
                 "ALTER TABLE instagram_contacts ADD COLUMN IF NOT EXISTS "
                 "requirement_submission_count INTEGER NOT NULL DEFAULT 0"
             )
+        )
+        # Multi-type requirements: the per-type size a client gave (see
+        # ClientRow.property_sizes) and which of their types a cached match
+        # was for (ClientPropertyMatchRow.matched_type). Nullable, no
+        # default, no backfill — catalog-only in Postgres, and NULL already
+        # means exactly what every existing row should say.
+        connection.execute(text("ALTER TABLE clients ADD COLUMN IF NOT EXISTS property_sizes JSON"))
+        connection.execute(text("ALTER TABLE instagram_contacts ADD COLUMN IF NOT EXISTS property_sizes JSON"))
+        connection.execute(
+            text("ALTER TABLE client_property_matches ADD COLUMN IF NOT EXISTS matched_type VARCHAR")
         )
         # The stored, indexed E.164 number on landing-page leads -- see
         # LandingLeadRow.phone_e164. The index is what turns the repeat-

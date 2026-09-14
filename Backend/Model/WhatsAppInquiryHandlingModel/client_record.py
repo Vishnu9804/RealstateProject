@@ -1,5 +1,5 @@
 from datetime import datetime
-from typing import Optional
+from typing import Dict, Optional
 
 from pydantic import BaseModel
 
@@ -15,7 +15,6 @@ class ClientRecord(BaseModel):
 
     phone: str
     status: str = "pending_registration"
-    pending_action: Optional[str] = None
     name: Optional[str] = None
     email: Optional[str] = None
 
@@ -26,6 +25,9 @@ class ClientRecord(BaseModel):
     budget_max_inr: Optional[float] = None
     preferred_areas: Optional[str] = None
     additional_requirements: Optional[str] = None
+    # Per-type size preference, keyed by a type named in property_type —
+    # see Database/client_models.py's column of the same name.
+    property_sizes: Optional[Dict[str, str]] = None
 
     # How many times the public requirements form has been completed for
     # this number -- 1 is the original registration, every later one an

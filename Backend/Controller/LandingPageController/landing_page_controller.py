@@ -15,11 +15,12 @@ Service/LandingPageService/landing_page_service.py.
 
 from typing import Any, List
 
-from fastapi import APIRouter, HTTPException, Request, Response
+from fastapi import APIRouter, Depends, HTTPException, Request, Response
 
 from Middleware import http_cache
 from Model.LandingPageModel.landing_lead import LandingLeadRecord, LandingLeadRequest, LandingLeadResult
 from Model.LandingPageModel.landing_property import LandingPropertyDetail, LandingPropertySummary
+from Service.AuthManagementService.auth_dependencies import get_current_user
 from Service.LandingPageService import landing_page_service
 
 router = APIRouter(prefix="/landing", tags=["landing-page"])
@@ -85,14 +86,17 @@ def submit_lead(body: LandingLeadRequest) -> LandingLeadResult:
     return landing_page_service.submit_lead(body)
 
 
-@router.get("/leads", response_model=List[LandingLeadRecord])
+@router.get("/leads", response_model=List[LandingLeadRecord], dependencies=[Depends(get_current_user)])
 def get_leads(limit: int = 100) -> List[LandingLeadRecord]:
     """Read side of the enquiry form, for the client's own use. Not called
-    by the public site — it only ever POSTs to /landing/leads."""
+    by the public site — it only ever POSTs to /landing/leads. Gated
+    per-route (not at router level, unlike every other internal feature)
+    because this router also serves the public site's own reads/write above
+    — see this module's docstring."""
     return landing_page_service.get_leads(limit=limit)
 
 
-@router.get("/leads/for-phone/{phone}", response_model=List[str])
+@router.get("/leads/for-phone/{phone}", response_model=List[str], dependencies=[Depends(get_current_user)])
 def get_lead_property_ids(phone: str) -> List[str]:
     """For the internal tool's Inquiries page only (components/
     ClientMatchesDialog.tsx) — distinct property ids this phone number

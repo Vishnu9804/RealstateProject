@@ -3,6 +3,7 @@ import { agentApi } from "../api/agentApi";
 import { inquiryClientApi } from "../api/inquiryClientApi";
 import type { AgentSummary, AssignedClientSummary, InquiryClientRecord, VisitRecord } from "../api/types";
 import { usePolling } from "../hooks/usePolling";
+import { useAuth } from "../state/AuthProvider";
 import { friendlyError } from "../lib/apiError";
 import { relativeTime } from "../lib/formatters";
 import { getCachedAgents, setCachedAgents } from "../lib/agentListCache";
@@ -275,6 +276,11 @@ function AgentCard({
   onEdit: () => void;
   onDelete: () => void;
 }) {
+  // Delete is admin-only — Backend/Controller/AgentManagementController/
+  // agent_controller.py's DELETE route requires it server-side regardless;
+  // hiding the button here is purely so an employee never sees one that
+  // would fail with a 403.
+  const { isAdmin } = useAuth();
   return (
     <Panel
       interactive
@@ -299,7 +305,9 @@ function AgentCard({
         </div>
         <div className="row-flex" style={{ gap: 4 }} onClick={(event) => event.stopPropagation()}>
           <Button size="sm" variant="ghost" iconOnly icon={<IconEdit size={14} />} onClick={onEdit} aria-label="Edit agent" />
-          <Button size="sm" variant="ghost" iconOnly icon={<IconTrash size={14} />} onClick={onDelete} aria-label="Remove agent" />
+          {isAdmin && (
+            <Button size="sm" variant="ghost" iconOnly icon={<IconTrash size={14} />} onClick={onDelete} aria-label="Remove agent" />
+          )}
         </div>
       </div>
 

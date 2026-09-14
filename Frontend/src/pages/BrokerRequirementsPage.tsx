@@ -4,6 +4,7 @@ import { matchingApi } from "../api/matchingApi";
 import { requirementApi } from "../api/requirementApi";
 import type { BrokerRequirementRecord } from "../api/types";
 import { useAppStatus } from "../state/StatusProvider";
+import { useAuth } from "../state/AuthProvider";
 import { useDebounced, usePersistentState } from "../hooks/useUi";
 import { friendlyError } from "../lib/apiError";
 import { formatCompactInr, relativeTime } from "../lib/formatters";
@@ -823,6 +824,11 @@ function RowActions({
   onEdit: (requirement: BrokerRequirementRecord) => void;
   onDelete: (requirement: BrokerRequirementRecord) => void;
 }) {
+  // Delete is admin-only — Backend/Controller/BrokerRequirementController/
+  // broker_requirement_controller.py's DELETE route requires it
+  // server-side regardless; hiding the button here is purely so an
+  // employee never sees one that would fail with a 403.
+  const { isAdmin } = useAuth();
   return (
     <div className="row-actions">
       <button
@@ -834,15 +840,17 @@ function RowActions({
       >
         <IconEdit size={15} />
       </button>
-      <button
-        type="button"
-        className="row-actions__btn row-actions__btn--danger"
-        title="Delete"
-        aria-label="Delete this requirement"
-        onClick={() => onDelete(requirement)}
-      >
-        <IconTrash size={15} />
-      </button>
+      {isAdmin && (
+        <button
+          type="button"
+          className="row-actions__btn row-actions__btn--danger"
+          title="Delete"
+          aria-label="Delete this requirement"
+          onClick={() => onDelete(requirement)}
+        >
+          <IconTrash size={15} />
+        </button>
+      )}
     </div>
   );
 }
@@ -1105,6 +1113,8 @@ function RequirementDetailDialog({
   onEdit: (requirement: BrokerRequirementRecord) => void;
   onDelete: (requirement: BrokerRequirementRecord) => void;
 }) {
+  // Delete is admin-only — see RowActions' own comment on the same check.
+  const { isAdmin } = useAuth();
   useEffect(() => {
     const onKeyDown = (event: KeyboardEvent) => {
       if (event.key === "Escape") {
@@ -1232,9 +1242,11 @@ function RequirementDetailDialog({
             <Button variant="ghost" icon={<IconEdit size={14} />} onClick={() => onEdit(requirement)}>
               Edit
             </Button>
-            <Button className="btn--danger" icon={<IconTrash size={14} />} onClick={() => onDelete(requirement)}>
-              Delete
-            </Button>
+            {isAdmin && (
+              <Button className="btn--danger" icon={<IconTrash size={14} />} onClick={() => onDelete(requirement)}>
+                Delete
+              </Button>
+            )}
           </span>
         </div>
       </div>

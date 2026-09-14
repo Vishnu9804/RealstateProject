@@ -109,6 +109,10 @@ def summarize_requirements(record: Optional[ClientRecord]) -> str:
         lines.append(f"- Purpose: {record.purpose}")
     if record.property_type:
         lines.append(f"- Property type: {record.property_type}")
+    if record.property_sizes:
+        sizes = "; ".join(f"{name}: {size}" for name, size in record.property_sizes.items() if size)
+        if sizes:
+            lines.append(f"- Preferred size: {sizes}")
     if record.bhk:
         lines.append(f"- BHK: {record.bhk}")
     if record.budget_min_inr or record.budget_max_inr:

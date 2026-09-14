@@ -49,6 +49,11 @@ class ClientPropertyMatchRow(ClientBase):
     property_category: Mapped[str] = mapped_column(String, nullable=False)
     field_scores: Mapped[dict] = mapped_column(JSON, nullable=False, default=dict)
     reason: Mapped[str] = mapped_column(String, nullable=False, default="")
+    # Which of the client's property types this property matched, for a
+    # client who picked more than one ("Flat, Bungalow") — lets the matches
+    # dialog split them into one tab per type. NULL for single-type clients
+    # and every row cached before this existed.
+    matched_type: Mapped[Optional[str]] = mapped_column(String, nullable=True)
 
     computed_at: Mapped[datetime] = mapped_column(
         DateTime(timezone=True), server_default=func.now(), onupdate=func.now()

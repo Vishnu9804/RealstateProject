@@ -87,6 +87,13 @@ def get_all_requirements(limit: int = 500) -> List[StructuredRequirement]:
     return list(_requirements[-limit:])
 
 
+def get_requirements_by_record_ids(record_ids: Collection[str]) -> List[StructuredRequirement]:
+    if is_database_configured():
+        return broker_requirement_repository.get_requirements_by_record_ids(record_ids)
+    wanted = set(record_ids)
+    return [requirement for requirement in _requirements if requirement.record_id in wanted]
+
+
 def get_requirement(record_id: str) -> Optional[StructuredRequirement]:
     if is_database_configured():
         return broker_requirement_repository.get_requirement(record_id)

@@ -33,6 +33,9 @@ from Model.ClientPropertyMatchingModel.match_bucket import MatchBucket
 from Model.ClientPropertyMatchingModel.match_score import MatchScore
 
 _SCORE_COLUMNS = ("score", "bucket", "evidence_ratio", "is_partial_match", "property_category", "field_scores", "reason")
+# Rows per multi-row upsert: 9 columns each keeps one statement far under
+# Postgres's 65,535 bind-parameter ceiling.
+_UPSERT_CHUNK = 1000
 
 
 def get_matches(record_id: str) -> Tuple[List[MatchScore], Optional[datetime], Optional[str]]:
@@ -95,6 +98,91 @@ def get_match_counts(live_property_ids: Collection[str], limit: int) -> Dict[str
     )
     with get_session() as session:
         return {record_id: int(count) for record_id, count in session.execute(stmt).all()}
+
+
+def get_run_index(limit: int) -> Dict[str, Tuple[Optional[datetime], Optional[str]]]:
+    """record_id -> (computed_at, requirement_fingerprint) for the `limit`
+    newest requirements, both None when a requirement was never scored — the
+    whole input the daily catch-up needs to decide who has anything new to
+    look at. ONE query that transfers an id, a timestamp and a 64-character
+    hash per requirement: no requirement text, no match row."""
+    recent = (
+        select(BrokerRequirementRow.id, BrokerRequirementRow.record_id)
+        .order_by(BrokerRequirementRow.id.desc())
+        .limit(limit)
+        .subquery()
+    )
+    stmt = (
+        select(
+            recent.c.record_id,
+            BrokerRequirementMatchRunRow.computed_at,
+            BrokerRequirementMatchRunRow.requirement_fingerprint,
+        )
+        .select_from(recent)
+        .outerjoin(BrokerRequirementMatchRunRow, BrokerRequirementMatchRunRow.requirement_id == recent.c.id)
+    )
+    with get_session() as session:
+        return {record_id: (computed_at, fingerprint) for record_id, computed_at, fingerprint in session.execute(stmt).all()}
+
+
+def merge_matches_bulk(updates: Dict[str, Tuple[List[MatchScore], Set[str], str]], computed_at: datetime) -> int:
+    """merge_matches for many requirements in ONE transaction: record_id ->
+    (re-scored properties that still match, properties considered, fingerprint).
+    Returns how many match rows were written.
+
+    Statement count does not grow with the number of requirements: one id
+    lookup, one delete per distinct considered set (requirements last scored
+    at the same moment share one — after the first daily run that is nearly
+    all of them), the upsert in chunks, one run-row upsert."""
+    if not updates:
+        return 0
+    with get_session() as session:
+        ids: Dict[str, int] = dict(
+            session.execute(
+                select(BrokerRequirementRow.record_id, func.min(BrokerRequirementRow.id))
+                .where(BrokerRequirementRow.record_id.in_(list(updates)))
+                .group_by(BrokerRequirementRow.record_id)
+            ).all()
+        )
+        if not ids:
+            return 0
+        groups: Dict[frozenset, List[int]] = {}
+        for record_id, (_, considered, _) in updates.items():
+            if record_id in ids and considered:
+                groups.setdefault(frozenset(considered), []).append(ids[record_id])
+        for considered, requirement_ids in groups.items():
+            session.execute(
+                delete(BrokerRequirementMatchRow).where(
+                    BrokerRequirementMatchRow.requirement_id.in_(requirement_ids),
+                    BrokerRequirementMatchRow.property_record_id.in_(list(considered)),
+                )
+            )
+        rows = [
+            _row_values(ids[record_id], match)
+            for record_id, (scores, _, _) in updates.items()
+            if record_id in ids
+            for match in scores
+        ]
+        # Upsert rather than plain insert only to survive a dialog open
+        # writing the same pair mid-run; chunked to stay far below
+        # Postgres's bind-parameter limit.
+        for start in range(0, len(rows), _UPSERT_CHUNK):
+            upsert = pg_insert(BrokerRequirementMatchRow).values(rows[start : start + _UPSERT_CHUNK])
+            session.execute(
+                upsert.on_conflict_do_update(
+                    constraint="uq_broker_requirement_match",
+                    set_={column: getattr(upsert.excluded, column) for column in _SCORE_COLUMNS},
+                )
+            )
+        _upsert_runs(
+            session,
+            [
+                {"requirement_id": ids[record_id], "computed_at": computed_at, "requirement_fingerprint": fingerprint}
+                for record_id, (_, _, fingerprint) in updates.items()
+                if record_id in ids
+            ],
+        )
+        return len(rows)
 
 
 def replace_matches(results: Dict[str, Tuple[List[MatchScore], str]], computed_at: datetime) -> int:

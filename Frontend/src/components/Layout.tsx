@@ -1,6 +1,7 @@
 import { memo, useLayoutEffect, useMemo, useRef, useState } from "react";
 import { NavLink, Outlet, useLocation } from "react-router-dom";
 import Scene from "./Scene";
+import AccountMenu from "./AccountMenu";
 import CommandPalette, { useCommandPalette } from "./CommandPalette";
 import { ThemeToggle } from "./ui/Theme";
 import { Tip } from "./ui/Primitives";
@@ -153,6 +154,8 @@ export default function Layout() {
               <Tip label="Toggle theme">
                 <ThemeToggle />
               </Tip>
+
+              <AccountMenu />
             </div>
           </div>
         </header>

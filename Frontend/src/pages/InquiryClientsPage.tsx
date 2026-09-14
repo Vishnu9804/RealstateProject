@@ -15,6 +15,7 @@ import type {
   MatchCounts,
 } from "../api/types";
 import { usePolling } from "../hooks/usePolling";
+import { useAuth } from "../state/AuthProvider";
 import { useDebounced } from "../hooks/useUi";
 import { friendlyError } from "../lib/apiError";
 import { formatCompactInr, relativeTime } from "../lib/formatters";
@@ -39,7 +40,6 @@ import {
 import {
   IconAlert,
   IconCheck,
-  IconClock,
   IconEdit,
   IconImage,
   IconInbox,
@@ -360,6 +360,7 @@ export default function InquiryClientsPage() {
         client.bhk,
         client.preferred_areas,
         client.additional_requirements,
+        ...Object.values(client.property_sizes ?? {}),
       ]
         .filter(Boolean)
         .join(" ")
@@ -695,6 +696,11 @@ function ClientTable({
   /** Raises the delete confirmation; the caller owns the actual delete. */
   onDelete: (client: InquiryClientRecord) => void;
 }) {
+  // Delete is admin-only — Backend/Controller/WhatsAppInquiryHandlingController/
+  // whatsapp_inquiry_controller.py's DELETE /clients/{phone} requires it
+  // server-side regardless; hiding the button here is purely so an
+  // employee never sees one that would fail with a 403.
+  const { isAdmin } = useAuth();
   return (
     <div className="table-frame anim-rise">
       <div className="table-scroll">
@@ -807,15 +813,17 @@ function ClientTable({
                       >
                         Edit
                       </Button>
-                      <Button
-                        size="sm"
-                        variant="ghost"
-                        icon={<IconTrash size={14} />}
-                        onClick={() => onDelete(client)}
-                        title="Delete this inquiry"
-                      >
-                        Delete
-                      </Button>
+                      {isAdmin && (
+                        <Button
+                          size="sm"
+                          variant="ghost"
+                          icon={<IconTrash size={14} />}
+                          onClick={() => onDelete(client)}
+                          title="Delete this inquiry"
+                        >
+                          Delete
+                        </Button>
+                      )}
                     </div>
                   </td>
                 </tr>
@@ -904,13 +912,6 @@ function ClientDetailDialog({
 function ClientDetail({ client }: { client: InquiryClientRecord }) {
   return (
     <div className="detail">
-      {client.pending_action && (
-        <Note tone="info" icon={<IconClock size={16} />}>
-          Waiting on this client:{" "}
-          <strong>{client.pending_action.replace(/_/g, " ")}</strong>
-        </Note>
-      )}
-
       <div className="detail__grid">
         <div className="detail__block">
           <div className="detail__k">Contact</div>
@@ -940,6 +941,19 @@ function ClientDetail({ client }: { client: InquiryClientRecord }) {
               : "—"}
           </div>
         </div>
+
+        {client.property_sizes && Object.keys(client.property_sizes).length > 0 && (
+          <div className="detail__block">
+            <div className="detail__k">
+              <IconTag size={11} /> Preferred size
+            </div>
+            {Object.entries(client.property_sizes).map(([type, size]) => (
+              <div className="detail__v" key={type}>
+                {type}: {size}
+              </div>
+            ))}
+          </div>
+        )}
 
         {(client.budget_min_inr !== null || client.budget_max_inr !== null) && (
           <div className="detail__block">

@@ -25,14 +25,8 @@ export function formatInr(amount: number): string {
 }
 
 /**
- * The no-symbol, no-space form the budget fields show once they lose focus:
- * 20000000 → "2cr", 8500000 → "85L", 25000000 → "2.5cr", 45000 → "45K".
- *
- * Purely a DISPLAY convenience. A budget is typed as a full rupee figure
- * and stored as one — nobody can compare "20000000" against "25000000" at a
- * glance, but everybody can compare 2cr against 2.5cr, and that is the only
- * problem this solves. `parseCompactInr` turns it back into the number
- * before anything is submitted.
+ * The no-symbol, no-space short form: 20000000 → "2cr", 8500000 → "85L",
+ * 25000000 → "2.5cr", 45000 → "45K". `parseCompactInr` reads it back.
  */
 export function formatCompactInr(amount: number): string {
   const magnitude = Math.abs(amount);
@@ -43,55 +37,85 @@ export function formatCompactInr(amount: number): string {
 }
 
 /**
- * What the budget fields actually put on screen when they lose focus.
+ * A saved budget written back into the requirements form the way somebody
+ * would type it: 25000000 → "2.5 cr", 8500000 → "85 L", 45000 → "45 K".
  *
- * The short form ONLY when it survives the trip back — 20000000 shows as
- * "2cr" because "2cr" reads back as exactly 20000000, but 1234567 stays as
- * it was typed, because `formatCompactInr` would round it to "12.35L" and
- * the number submitted would then be 1235000. Shortening a display is a
- * convenience; quietly moving somebody's budget by a few thousand rupees
- * because it didn't divide neatly is a bug, and it would be invisible to
- * the person it happened to.
+ * The short form ONLY when it survives the trip back — 1234567 stays as
+ * "1234567", because `formatCompactInr` would round it to "12.35L" and the
+ * number submitted would then be 1235000. Quietly moving somebody's budget
+ * by a few thousand rupees because it didn't divide neatly is a bug, and it
+ * would be invisible to the person it happened to.
  */
 export function formatBudgetDisplay(amount: number): string {
   const compact = formatCompactInr(amount);
-  return parseCompactInr(compact) === amount ? compact : String(amount);
+  if (parseCompactInr(compact) !== amount) return String(amount);
+  return compact.replace(/(cr|L|K)$/, " $1");
 }
 
-/**
- * The inverse. Accepts what someone would actually type or what the field
- * itself put back after a blur — "20000000", "2cr", "85 L", "₹75,00,000",
- * "700k". Returns null for anything unparseable so the caller can leave the
- * text alone rather than silently replacing it with a wrong number.
- */
-export function parseCompactInr(raw: string): number | null {
+function parseCompactParts(raw: string): { value: number; unit: string | undefined } | null {
   const cleaned = raw
     .trim()
     .toLowerCase()
     .replace(/[₹,\s]/g, "")
     .replace(/^(?:rs\.?|inr)/, "")
-    .replace(/\/-$/, "");
+    .replace(/\/-$/, "")
+    .replace(/\.$/, "");
   if (!cleaned) return null;
   const match = cleaned.match(/^(\d+(?:\.\d+)?)(cr|crore|crores|l|lac|lacs|lakh|lakhs|k|thousand)?$/);
   if (!match) return null;
-  const value = Number.parseFloat(match[1]);
-  switch (match[2]) {
+  return { value: Number.parseFloat(match[1]), unit: match[2] };
+}
+
+/**
+ * The inverse. Accepts what someone would actually type — "2.5 cr", "85 L",
+ * "85 lakh", "₹75,00,000", "700k", "20000000". Returns null for anything
+ * unparseable so the caller can say so rather than silently replacing it
+ * with a wrong number. A scaled amount is rounded to the rupee, so "1.2 cr"
+ * is exactly 12000000 and never a float's 11999999.999….
+ */
+export function parseCompactInr(raw: string): number | null {
+  const parts = parseCompactParts(raw);
+  if (!parts) return null;
+  switch (parts.unit) {
     case "cr":
     case "crore":
     case "crores":
-      return value * CRORE;
+      return Math.round(parts.value * CRORE);
     case "l":
     case "lac":
     case "lacs":
     case "lakh":
     case "lakhs":
-      return value * LAKH;
+      return Math.round(parts.value * LAKH);
     case "k":
     case "thousand":
-      return value * THOUSAND;
+      return Math.round(parts.value * THOUSAND);
     default:
-      return value;
+      return parts.value;
   }
+}
+
+/**
+ * One budget box of the requirements form: the rupee amount to submit, or
+ * the sentence to show when there isn't one.
+ *
+ * A bare small number is refused rather than guessed at: "85" is almost
+ * certainly 85 lakh, and reading it as ₹85 would quietly throw the budget
+ * away. A bare number of a thousand or more is taken as rupees exactly as
+ * typed — someone who writes 8500000 means 8500000.
+ */
+export function readBudget(raw: string): { amount: number | null; error: string | null } {
+  const text = raw.trim();
+  if (!text) return { amount: null, error: null };
+  const parts = parseCompactParts(text);
+  const amount = parseCompactInr(text);
+  if (!parts || amount === null || amount <= 0) {
+    return { amount: null, error: `We couldn't read “${text}” — write it like 2.5 cr, 85 L or 25 K.` };
+  }
+  if (!parts.unit && amount < THOUSAND) {
+    return { amount: null, error: `Please add cr, L or K after ${text} — for example ${text} L or ${text} cr.` };
+  }
+  return { amount, error: null };
 }
 
 /**

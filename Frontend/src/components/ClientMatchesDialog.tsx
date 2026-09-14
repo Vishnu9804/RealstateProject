@@ -25,7 +25,13 @@ import {
   setCachedCompletedVisits,
   setCachedMatchResult,
 } from "../lib/clientMatchCache";
-import { formatCarpetArea, formatPrice, formatPricePerUnit, formatVisitTime, relativeTime } from "../lib/formatters";
+import {
+  formatCarpetArea,
+  formatPrice,
+  formatPricePerUnit,
+  formatVisitTime,
+  relativeTime,
+} from "../lib/formatters";
 import {
   buildVisitTimeMessages,
   propertyLabel,
@@ -33,7 +39,11 @@ import {
   type HandoffPropertyLike,
 } from "../lib/handoffTemplate";
 import { sourceDetail, sourceLabel } from "../lib/propertyFilters";
-import { getCachedPropertyList, patchCachedProperty, setCachedPropertyList } from "../lib/propertyListCache";
+import {
+  getCachedPropertyList,
+  patchCachedProperty,
+  setCachedPropertyList,
+} from "../lib/propertyListCache";
 import type { SharePropertyLike } from "../lib/propertyShareTemplate";
 import HandoffDialog from "./HandoffDialog";
 import PropertyReadOnlyDialog from "./PropertyReadOnlyDialog";
@@ -42,7 +52,15 @@ import VisitMessagesDialog from "./VisitMessagesDialog";
 import VisitPlannerDialog from "./VisitPlannerDialog";
 import ConfirmDialog from "./ui/ConfirmDialog";
 import { useToast } from "./ui/Toast";
-import { Badge, Button, Copyable, EmptyState, Note, Segmented, SkeletonRows } from "./ui/Primitives";
+import {
+  Badge,
+  Button,
+  Copyable,
+  EmptyState,
+  Note,
+  Segmented,
+  SkeletonRows,
+} from "./ui/Primitives";
 import {
   IconAlert,
   IconBuilding,
@@ -130,9 +148,30 @@ const FIELD_SCORE_LABEL: Record<string, string> = {
   location: "Location",
   bhk: "BHK",
   semantic: "Overall fit",
+  size: "Size",
   purpose_gate: "Purpose match",
   property_type_gate: "Property type match",
 };
+
+/** The type row's "everything" option — a value no real type can have. */
+const ALL_TYPES = "__all__";
+
+/** A client's property types, one per comma-separated entry — the same
+ *  reading the backend gives them (Backend/Service/
+ *  ClientPropertyMatchingService/normalization.py's split_type_groups). */
+function splitClientTypes(raw: string | null): string[] {
+  const types: string[] = [];
+  for (const part of (raw ?? "").split(",")) {
+    const label = part.trim().replace(/\s+/g, " ");
+    if (label && !types.some((type) => sameType(type, label)))
+      types.push(label);
+  }
+  return types;
+}
+
+function sameType(a: string, b: string): boolean {
+  return a.trim().toLowerCase() === b.trim().toLowerCase();
+}
 
 /** Read the category off whatever is freshest. Both PropertyRecord and
  *  MatchedProperty carry `review_status`; the match's own cached
@@ -146,7 +185,9 @@ const FIELD_SCORE_LABEL: Record<string, string> = {
  *  and one a human or a client deliberately chose belongs on screen, filed
  *  under the drawer it actually sits in, with the "Flagged for review"
  *  note below spelling out that its data is thin. */
-function categoryOf(record: { review_status: "accepted" | "outsider" }): PropertyCategory {
+function categoryOf(record: {
+  review_status: "accepted" | "outsider";
+}): PropertyCategory {
   return record.review_status === "outsider" ? "outsider" : "main";
 }
 
@@ -154,8 +195,14 @@ function categoryOf(record: { review_status: "accepted" | "outsider" }): Propert
  *  `needs_review`: filing a property into Main or Outsider IS how the
  *  review flag gets resolved (see the Properties page's Needs review
  *  dialog, which offers exactly these two actions). */
-function categoryPatch(target: PropertyCategory): { review_status: "accepted" | "outsider"; needs_review: boolean } {
-  return { review_status: target === "outsider" ? "outsider" : "accepted", needs_review: false };
+function categoryPatch(target: PropertyCategory): {
+  review_status: "accepted" | "outsider";
+  needs_review: boolean;
+} {
+  return {
+    review_status: target === "outsider" ? "outsider" : "accepted",
+    needs_review: false,
+  };
 }
 
 /** One card in the dialog — a scored match, a hand-picked property, or
@@ -200,7 +247,12 @@ interface VisitPlan {
 /** Which small planner dialog is open, and for what. */
 type PlannerState =
   | { kind: "assign"; recordId: string }
-  | { kind: "revisit"; recordId: string; agentId: string | null; scheduledAt: string | null }
+  | {
+      kind: "revisit";
+      recordId: string;
+      agentId: string | null;
+      scheduledAt: string | null;
+    }
   | { kind: "reschedule"; visit: ActiveVisit }
   | null;
 
@@ -209,7 +261,13 @@ type PlannerState =
  *  was. */
 type AssignFlow =
   | { kind: "assign"; assignments: AgentAssignment[] }
-  | { kind: "revisit"; recordId: string; agentId: string; scheduledAt: string | null; assignments: AgentAssignment[] }
+  | {
+      kind: "revisit";
+      recordId: string;
+      agentId: string;
+      scheduledAt: string | null;
+      assignments: AgentAssignment[];
+    }
   | null;
 
 /** The "tell them about the new time?" step after a time is saved. */
@@ -228,7 +286,10 @@ function timeOf(iso: string | null): number {
 /** A hand-off-shaped property for a re-visit whose full record is not in
  *  the loaded list (e.g. beyond the list's size cap) — just the label the
  *  completed visit already snapshotted, which is all the message needs. */
-function snapshotProperty(recordId: string, label: string | null): HandoffPropertyLike {
+function snapshotProperty(
+  recordId: string,
+  label: string | null,
+): HandoffPropertyLike {
   return {
     record_id: recordId,
     property_type: null,
@@ -289,12 +350,22 @@ export default function ClientMatchesDialog({
   // once this session paints instantly on reopen — load() below always
   // fires a fresh fetch behind that regardless, so a seed is never the
   // last word, only a head start (see those caches' own docstrings).
-  const [result, setResult] = useState<ClientMatchResult | null>(() => getCachedMatchResult(phone));
-  const [properties, setProperties] = useState<PropertyRecord[] | null>(() => getCachedPropertyList()?.data ?? null);
+  const [result, setResult] = useState<ClientMatchResult | null>(() =>
+    getCachedMatchResult(phone),
+  );
+  const [properties, setProperties] = useState<PropertyRecord[] | null>(
+    () => getCachedPropertyList()?.data ?? null,
+  );
   const [client, setClient] = useState<InquiryClientRecord | null>(null);
-  const [agents, setAgents] = useState<AgentSummary[] | null>(() => getCachedAgents());
-  const [manualPropertyIds, setManualPropertyIds] = useState<string[] | null>(null);
-  const [completedVisits, setCompletedVisits] = useState<VisitRecord[] | null>(() => getCachedCompletedVisits(phone));
+  const [agents, setAgents] = useState<AgentSummary[] | null>(() =>
+    getCachedAgents(),
+  );
+  const [manualPropertyIds, setManualPropertyIds] = useState<string[] | null>(
+    null,
+  );
+  const [completedVisits, setCompletedVisits] = useState<VisitRecord[] | null>(
+    () => getCachedCompletedVisits(phone),
+  );
   // Property ids this client specifically enquired about on the public
   // site (LandingPage/) — see DialogItem.fromWebsiteInquiry and the Web
   // Site Property Inquiry section below. No loading gate of its own
@@ -312,8 +383,12 @@ export default function ClientMatchesDialog({
   // times faster on their own. Each starts "not loading" when a cached
   // value already exists, so a reopened dialog shows that immediately
   // instead of a skeleton it doesn't need.
-  const [loadingMatches, setLoadingMatches] = useState(() => getCachedMatchResult(phone) === null);
-  const [loadingCompleted, setLoadingCompleted] = useState(() => getCachedCompletedVisits(phone) === null);
+  const [loadingMatches, setLoadingMatches] = useState(
+    () => getCachedMatchResult(phone) === null,
+  );
+  const [loadingCompleted, setLoadingCompleted] = useState(
+    () => getCachedCompletedVisits(phone) === null,
+  );
   // client + manual ids — the two remaining reads with no cache of their
   // own (they're already at this backend's ~1.1s floor for any single
   // round trip, so there's nothing slow to hide behind a cache here).
@@ -329,21 +404,30 @@ export default function ClientMatchesDialog({
   // The property list is its own flag for the same reason as the others
   // — only the hand-picked cards strictly need it (a scored match carries
   // its own display fields), so this shouldn't hold up matched cards.
-  const [loadingProperties, setLoadingProperties] = useState(() => getCachedPropertyList() === null);
+  const [loadingProperties, setLoadingProperties] = useState(
+    () => getCachedPropertyList() === null,
+  );
   const [error, setError] = useState<string | null>(null);
   const [recomputing, setRecomputing] = useState(false);
   const [movingId, setMovingId] = useState<string | null>(null);
   const [removingManualId, setRemovingManualId] = useState<string | null>(null);
 
   const [category, setCategory] = useState<DialogView>(initialView ?? "main");
+  // null = every type. Only meaningful for a client who asked for more
+  // than one property type — see clientTypes below.
+  const [typeView, setTypeView] = useState<string | null>(null);
   const [selectedIds, setSelectedIds] = useState<Set<string>>(new Set());
   // Agent + optional time per ticked property — see VisitPlan.
   const [plans, setPlans] = useState<Record<string, VisitPlan>>({});
   const [planner, setPlanner] = useState<PlannerState>(null);
   const [savingSchedule, setSavingSchedule] = useState(false);
-  const [timeMessages, setTimeMessages] = useState<TimeMessagesState | null>(null);
+  const [timeMessages, setTimeMessages] = useState<TimeMessagesState | null>(
+    null,
+  );
   const [openItemId, setOpenItemId] = useState<string | null>(null);
-  const [viewingCompletedId, setViewingCompletedId] = useState<string | null>(null);
+  const [viewingCompletedId, setViewingCompletedId] = useState<string | null>(
+    null,
+  );
   const [assignFlow, setAssignFlow] = useState<AssignFlow>(null);
   // The "send the shortlist straight to the client" flow, deliberately
   // separate from assignFlow above: it involves no agent and no visit
@@ -396,7 +480,10 @@ export default function ClientMatchesDialog({
       .catch(() => {})
       .finally(() => setLoadingCompleted(false));
 
-    Promise.all([inquiryClientApi.getClient(phone), inquiryClientApi.getManualProperties(phone)])
+    Promise.all([
+      inquiryClientApi.getClient(phone),
+      inquiryClientApi.getManualProperties(phone),
+    ])
       .then(([clientRecord, manualIds]) => {
         setClient(clientRecord);
         setManualPropertyIds(manualIds);
@@ -467,13 +554,18 @@ export default function ClientMatchesDialog({
 
   const propertiesById = useMemo(() => {
     const map = new Map<string, PropertyRecord>();
-    for (const property of properties ?? []) map.set(property.record_id, property);
+    for (const property of properties ?? [])
+      map.set(property.record_id, property);
     return map;
   }, [properties]);
 
   const matchById = useMemo(() => {
     const map = new Map<string, MatchedProperty>();
-    for (const list of [result?.high ?? [], result?.medium ?? [], result?.low ?? []]) {
+    for (const list of [
+      result?.high ?? [],
+      result?.medium ?? [],
+      result?.low ?? [],
+    ]) {
       for (const match of list) map.set(match.record_id, match);
     }
     return map;
@@ -490,8 +582,12 @@ export default function ClientMatchesDialog({
       }
     }
     return list.sort((a, b) => {
-      const aWhen = a.active.scheduled_at ? timeOf(a.active.scheduled_at) : Number.POSITIVE_INFINITY;
-      const bWhen = b.active.scheduled_at ? timeOf(b.active.scheduled_at) : Number.POSITIVE_INFINITY;
+      const aWhen = a.active.scheduled_at
+        ? timeOf(a.active.scheduled_at)
+        : Number.POSITIVE_INFINITY;
+      const bWhen = b.active.scheduled_at
+        ? timeOf(b.active.scheduled_at)
+        : Number.POSITIVE_INFINITY;
       if (aWhen !== bWhen) return aWhen < bWhen ? -1 : 1;
       return timeOf(a.active.assigned_at) - timeOf(b.active.assigned_at);
     });
@@ -503,7 +599,8 @@ export default function ClientMatchesDialog({
   const activeByProperty = useMemo(() => {
     const map = new Map<string, ActiveVisit>();
     for (const visit of activeVisits) {
-      if (!map.has(visit.active.property_record_id)) map.set(visit.active.property_record_id, visit);
+      if (!map.has(visit.active.property_record_id))
+        map.set(visit.active.property_record_id, visit);
     }
     return map;
   }, [activeVisits]);
@@ -512,14 +609,24 @@ export default function ClientMatchesDialog({
    *  client. */
   const assignedAgentByProperty = useMemo(() => {
     const map = new Map<string, AgentSummary>();
-    for (const [recordId, visit] of activeByProperty) map.set(recordId, visit.agent);
+    for (const [recordId, visit] of activeByProperty)
+      map.set(recordId, visit.agent);
     return map;
   }, [activeByProperty]);
 
-  const agentsById = useMemo(() => new Map((agents ?? []).map((agent) => [agent.agent_id, agent])), [agents]);
+  const agentsById = useMemo(
+    () => new Map((agents ?? []).map((agent) => [agent.agent_id, agent])),
+    [agents],
+  );
 
-  const manualIdSet = useMemo(() => new Set(manualPropertyIds ?? []), [manualPropertyIds]);
-  const websiteIdSet = useMemo(() => new Set(websitePropertyIds), [websitePropertyIds]);
+  const manualIdSet = useMemo(
+    () => new Set(manualPropertyIds ?? []),
+    [manualPropertyIds],
+  );
+  const websiteIdSet = useMemo(
+    () => new Set(websitePropertyIds),
+    [websitePropertyIds],
+  );
 
   /** Every completed visit, grouped per property and ordered oldest-first
    *  within each group — so a property visited twice (a first visit, then a
@@ -535,7 +642,8 @@ export default function ClientMatchesDialog({
       if (group) group.push(visit);
       else map.set(visit.property_record_id, [visit]);
     }
-    for (const group of map.values()) group.sort((a, b) => timeOf(a.completed_at) - timeOf(b.completed_at));
+    for (const group of map.values())
+      group.sort((a, b) => timeOf(a.completed_at) - timeOf(b.completed_at));
     return map;
   }, [completedVisits]);
 
@@ -554,7 +662,11 @@ export default function ClientMatchesDialog({
   const titleFor = useCallback(
     (recordId: string, fallback: string | null): string => {
       const source = propertiesById.get(recordId) ?? matchById.get(recordId);
-      return (source && (source.society_name || source.property_type)) || fallback || "Property";
+      return (
+        (source && (source.society_name || source.property_type)) ||
+        fallback ||
+        "Property"
+      );
     },
     [propertiesById, matchById],
   );
@@ -625,15 +737,26 @@ export default function ClientMatchesDialog({
     }
 
     return [...byId.values()];
-  }, [result, manualPropertyIds, manualIdSet, propertiesById, completedByProperty, websiteIdSet]);
+  }, [
+    result,
+    manualPropertyIds,
+    manualIdSet,
+    propertiesById,
+    completedByProperty,
+    websiteIdSet,
+  ]);
 
-  const itemsById = useMemo(() => new Map(items.map((item) => [item.recordId, item])), [items]);
+  const itemsById = useMemo(
+    () => new Map(items.map((item) => [item.recordId, item])),
+    [items],
+  );
 
   // A ticked property that has since dropped off the list (moved, removed,
   // sold) can't be planned any more — close its planner rather than leave
   // an invisible layer swallowing Escape.
   useEffect(() => {
-    if (planner?.kind === "assign" && !itemsById.has(planner.recordId)) setPlanner(null);
+    if (planner?.kind === "assign" && !itemsById.has(planner.recordId))
+      setPlanner(null);
   }, [planner, itemsById]);
 
   const countByCategory = useMemo(() => {
@@ -644,17 +767,62 @@ export default function ClientMatchesDialog({
 
   const inDrawer = category === "main" || category === "outsider";
 
-  const visibleItems = useMemo(() => items.filter((item) => item.category === category), [items, category]);
+  const visibleItems = useMemo(
+    () => items.filter((item) => item.category === category),
+    [items, category],
+  );
+
+  /** The client's property types when they asked for more than one
+   *  ("Flat, Bungalow") — each gets a tab of its own under the
+   *  Main/Outsider row. The backend tags every scored match with the type
+   *  it matched (MatchedProperty.matched_type), so a tab is an exact split,
+   *  not a guess made here. */
+  const clientTypes = useMemo(
+    () => splitClientTypes(client?.property_type ?? null),
+    [client],
+  );
+  const showTypeTabs = clientTypes.length > 1 && category !== "completed";
+  const typeFilter =
+    showTypeTabs &&
+    typeView !== null &&
+    clientTypes.some((type) => sameType(type, typeView))
+      ? typeView
+      : null;
+
+  /** Only a scored match knows which type it was for. A hand-picked or
+   *  website-enquired property that never scored (or a match cached before
+   *  types were tracked) has no type to be filed under, so it stays on
+   *  every type tab rather than vanishing from all of them. */
+  const typeVisibleItems = useMemo(
+    () =>
+      typeFilter === null
+        ? visibleItems
+        : visibleItems.filter(
+            (item) =>
+              !item.match?.matched_type ||
+              sameType(item.match.matched_type, typeFilter),
+          ),
+    [visibleItems, typeFilter],
+  );
+
+  const countByType = useMemo(() => {
+    const counts = new Map<string, number>();
+    for (const item of visibleItems) {
+      const type = item.match?.matched_type?.trim().toLowerCase();
+      if (type) counts.set(type, (counts.get(type) ?? 0) + 1);
+    }
+    return counts;
+  }, [visibleItems]);
 
   const sections = useMemo(
     () =>
       SECTION_ORDER.map((key) => ({
         key,
-        items: visibleItems
+        items: typeVisibleItems
           .filter((item) => item.section === key)
           .sort((a, b) => (b.match?.score ?? 0) - (a.match?.score ?? 0)),
       })).filter((section) => section.items.length > 0),
-    [visibleItems],
+    [typeVisibleItems],
   );
 
   // Every card that came from a website enquiry, regardless of its own
@@ -664,20 +832,32 @@ export default function ClientMatchesDialog({
   // positioned right after Manually added (see the JSX below), never as
   // one of the sections above.
   const websiteItems = useMemo(
-    () => visibleItems.filter((item) => item.fromWebsiteInquiry).sort((a, b) => (b.match?.score ?? 0) - (a.match?.score ?? 0)),
-    [visibleItems],
+    () =>
+      typeVisibleItems
+        .filter((item) => item.fromWebsiteInquiry)
+        .sort((a, b) => (b.match?.score ?? 0) - (a.match?.score ?? 0)),
+    [typeVisibleItems],
   );
-  const manualSection = sections.find((section) => section.key === "manual") ?? null;
+  const manualSection =
+    sections.find((section) => section.key === "manual") ?? null;
   const bucketSections = sections.filter((section) => section.key !== "manual");
 
-  const openItem = useMemo(() => items.find((item) => item.recordId === openItemId) ?? null, [items, openItemId]);
+  const openItem = useMemo(
+    () => items.find((item) => item.recordId === openItemId) ?? null,
+    [items, openItemId],
+  );
 
   /** Ticked cards that can actually be handed off — an already-assigned
    *  property is never sent a second time (its checkbox is hidden for the
    *  same reason), even if it was ticked a moment before its assignment
    *  arrived from another screen. */
   const assignableItems = useMemo(
-    () => items.filter((item) => selectedIds.has(item.recordId) && !assignedAgentByProperty.has(item.recordId)),
+    () =>
+      items.filter(
+        (item) =>
+          selectedIds.has(item.recordId) &&
+          !assignedAgentByProperty.has(item.recordId),
+      ),
     [items, selectedIds, assignedAgentByProperty],
   );
 
@@ -687,7 +867,10 @@ export default function ClientMatchesDialog({
    *  never end up in a message — exactly the guarantee assignableItems
    *  above gives the hand-off. */
   const selectedShareProperties = useMemo<SharePropertyLike[]>(
-    () => items.filter((item) => selectedIds.has(item.recordId)).map((item) => item.handoff),
+    () =>
+      items
+        .filter((item) => selectedIds.has(item.recordId))
+        .map((item) => item.handoff),
     [items, selectedIds],
   );
 
@@ -697,11 +880,13 @@ export default function ClientMatchesDialog({
    *  stated rather than looking like the list is just short. */
   const pendingManualCount = useMemo(() => {
     if (loadingMeta || !loadingProperties) return 0;
-    return (manualPropertyIds ?? []).filter((id) => !propertiesById.has(id)).length;
+    return (manualPropertyIds ?? []).filter((id) => !propertiesById.has(id))
+      .length;
   }, [loadingMeta, loadingProperties, manualPropertyIds, propertiesById]);
 
   const assignedCount = useMemo(
-    () => items.filter((item) => assignedAgentByProperty.has(item.recordId)).length,
+    () =>
+      items.filter((item) => assignedAgentByProperty.has(item.recordId)).length,
     [items, assignedAgentByProperty],
   );
 
@@ -711,16 +896,26 @@ export default function ClientMatchesDialog({
     () =>
       [...completedByProperty.entries()]
         .map(([recordId, visits]) => ({ recordId, visits }))
-        .sort((a, b) => timeOf(b.visits[b.visits.length - 1].completed_at) - timeOf(a.visits[a.visits.length - 1].completed_at)),
+        .sort(
+          (a, b) =>
+            timeOf(b.visits[b.visits.length - 1].completed_at) -
+            timeOf(a.visits[a.visits.length - 1].completed_at),
+        ),
     [completedByProperty],
   );
 
   const firstVisits = useMemo(
-    () => activeVisits.filter((visit) => revisitNumberFor(visit.active.property_record_id) === null),
+    () =>
+      activeVisits.filter(
+        (visit) => revisitNumberFor(visit.active.property_record_id) === null,
+      ),
     [activeVisits, revisitNumberFor],
   );
   const reVisits = useMemo(
-    () => activeVisits.filter((visit) => revisitNumberFor(visit.active.property_record_id) !== null),
+    () =>
+      activeVisits.filter(
+        (visit) => revisitNumberFor(visit.active.property_record_id) !== null,
+      ),
     [activeVisits, revisitNumberFor],
   );
 
@@ -763,13 +958,18 @@ export default function ClientMatchesDialog({
     const now = Date.now();
     for (const item of assignableItems) {
       const plan = plans[item.recordId];
-      const problem = !plan || !agentsById.has(plan.agentId)
-        ? "doesn't have an agent yet"
-        : plan.scheduledAt && timeOf(plan.scheduledAt) <= now
-          ? "has a visit time that has already passed"
-          : null;
+      const problem =
+        !plan || !agentsById.has(plan.agentId)
+          ? "doesn't have an agent yet"
+          : plan.scheduledAt && timeOf(plan.scheduledAt) <= now
+            ? "has a visit time that has already passed"
+            : null;
       if (problem) {
-        toast.push({ tone: "info", title: "One more pick first", message: `${propertyLabel(item.handoff)} ${problem}.` });
+        toast.push({
+          tone: "info",
+          title: "One more pick first",
+          message: `${propertyLabel(item.handoff)} ${problem}.`,
+        });
         setPlanner({ kind: "assign", recordId: item.recordId });
         return;
       }
@@ -785,9 +985,13 @@ export default function ClientMatchesDialog({
         byAgent.set(agent.agent_id, entry);
       }
       entry.properties.push(item.handoff);
-      entry.visitMeta![item.recordId] = { scheduledAt: plan.scheduledAt, revisitNumber: null };
+      entry.visitMeta![item.recordId] = {
+        scheduledAt: plan.scheduledAt,
+        revisitNumber: null,
+      };
     }
-    if (byAgent.size > 0) setAssignFlow({ kind: "assign", assignments: [...byAgent.values()] });
+    if (byAgent.size > 0)
+      setAssignFlow({ kind: "assign", assignments: [...byAgent.values()] });
   }
 
   /** Puts just-handed-off visits on screen immediately (orange cards, the
@@ -799,10 +1003,18 @@ export default function ClientMatchesDialog({
     setAgents((previous) => {
       if (!previous) return previous;
       return previous.map((agent) => {
-        const assignment = assignments.find((a) => a.agent.agent_id === agent.agent_id);
+        const assignment = assignments.find(
+          (a) => a.agent.agent_id === agent.agent_id,
+        );
         if (!assignment) return agent;
         const additions: AssignedClientSummary[] = assignment.properties
-          .filter((p) => !agent.active_clients.some((a) => a.phone === phone && a.property_record_id === p.record_id))
+          .filter(
+            (p) =>
+              !agent.active_clients.some(
+                (a) =>
+                  a.phone === phone && a.property_record_id === p.record_id,
+              ),
+          )
           .map((p) => ({
             phone,
             name: client?.name ?? null,
@@ -811,14 +1023,24 @@ export default function ClientMatchesDialog({
             property_record_id: p.record_id,
             property_label: propertyLabel(p),
             assigned_at: assignedAt,
-            scheduled_at: assignment.visitMeta?.[p.record_id]?.scheduledAt ?? null,
+            scheduled_at:
+              assignment.visitMeta?.[p.record_id]?.scheduledAt ?? null,
           }));
-        return additions.length > 0 ? { ...agent, active_clients: [...agent.active_clients, ...additions] } : agent;
+        return additions.length > 0
+          ? {
+              ...agent,
+              active_clients: [...agent.active_clients, ...additions],
+            }
+          : agent;
       });
     });
   }
 
-  function handleRevisitConfirm(recordId: string, agentId: string, scheduledAt: string | null) {
+  function handleRevisitConfirm(
+    recordId: string,
+    agentId: string,
+    scheduledAt: string | null,
+  ) {
     const agent = agentsById.get(agentId);
     // The hand-off step needs the client record to address its messages;
     // without it there would be nothing to show (the Revisit button is
@@ -830,14 +1052,24 @@ export default function ClientMatchesDialog({
     const visits = completedByProperty.get(recordId) ?? [];
     const latest = visits[visits.length - 1] ?? null;
     const property: HandoffPropertyLike =
-      propertiesById.get(recordId) ?? matchById.get(recordId) ?? snapshotProperty(recordId, latest?.property_label ?? null);
+      propertiesById.get(recordId) ??
+      matchById.get(recordId) ??
+      snapshotProperty(recordId, latest?.property_label ?? null);
     setPlanner(null);
     setAssignFlow({
       kind: "revisit",
       recordId,
       agentId,
       scheduledAt,
-      assignments: [{ agent, properties: [property], visitMeta: { [recordId]: { scheduledAt, revisitNumber: visits.length + 1 } } }],
+      assignments: [
+        {
+          agent,
+          properties: [property],
+          visitMeta: {
+            [recordId]: { scheduledAt, revisitNumber: visits.length + 1 },
+          },
+        },
+      ],
     });
   }
 
@@ -855,17 +1087,21 @@ export default function ClientMatchesDialog({
         property_record_id: recordId,
         scheduled_at: scheduledAt,
       });
-      setAgents((previous) =>
-        previous?.map((agent) =>
-          agent.agent_id !== visit.agent.agent_id
-            ? agent
-            : {
-                ...agent,
-                active_clients: agent.active_clients.map((active) =>
-                  active.phone === phone && active.property_record_id === recordId ? updated : active,
-                ),
-              },
-        ) ?? previous,
+      setAgents(
+        (previous) =>
+          previous?.map((agent) =>
+            agent.agent_id !== visit.agent.agent_id
+              ? agent
+              : {
+                  ...agent,
+                  active_clients: agent.active_clients.map((active) =>
+                    active.phone === phone &&
+                    active.property_record_id === recordId
+                      ? updated
+                      : active,
+                  ),
+                },
+          ) ?? previous,
       );
       setPlanner(null);
       const messages = buildVisitTimeMessages({
@@ -886,7 +1122,11 @@ export default function ClientMatchesDialog({
         clientMessage: messages.client,
       });
     } catch (err) {
-      toast.push({ tone: "bad", title: "Could not save the visit time", message: friendlyError(err) });
+      toast.push({
+        tone: "bad",
+        title: "Could not save the visit time",
+        message: friendlyError(err),
+      });
       // Gone meanwhile (completed or cleared from another screen) — drop
       // the stale card rather than leave a planner pointing at nothing.
       if (err instanceof ApiError && err.status === 404) {
@@ -908,7 +1148,11 @@ export default function ClientMatchesDialog({
       toast.push({ tone: "ok", title: "Matches refreshed" });
       onChanged?.();
     } catch (err) {
-      toast.push({ tone: "bad", title: "Refresh failed", message: friendlyError(err) });
+      toast.push({
+        tone: "bad",
+        title: "Refresh failed",
+        message: friendlyError(err),
+      });
     } finally {
       setRecomputing(false);
     }
@@ -921,10 +1165,15 @@ export default function ClientMatchesDialog({
   async function handleMove(item: DialogItem, target: PropertyCategory) {
     setMovingId(item.recordId);
     try {
-      const updated = await propertyApi.updateProperty(item.recordId, categoryPatch(target));
+      const updated = await propertyApi.updateProperty(
+        item.recordId,
+        categoryPatch(target),
+      );
       setProperties((previous) => {
         if (previous === null) return [updated];
-        const index = previous.findIndex((p) => p.record_id === updated.record_id);
+        const index = previous.findIndex(
+          (p) => p.record_id === updated.record_id,
+        );
         if (index === -1) return [...previous, updated];
         const next = [...previous];
         next[index] = updated;
@@ -950,7 +1199,11 @@ export default function ClientMatchesDialog({
       });
       onChanged?.();
     } catch (err) {
-      toast.push({ tone: "bad", title: "Could not move property", message: friendlyError(err) });
+      toast.push({
+        tone: "bad",
+        title: "Could not move property",
+        message: friendlyError(err),
+      });
     } finally {
       setMovingId(null);
     }
@@ -982,17 +1235,27 @@ export default function ClientMatchesDialog({
       // Every card drops its "Assigned to X" badge immediately; the
       // re-read of the agent list confirms it. Nothing else changed, so
       // nothing else is re-read.
-      setAgents((previous) =>
-        previous?.map((agent) =>
-          agent.active_clients.some((active) => active.phone === phone)
-            ? { ...agent, active_clients: agent.active_clients.filter((active) => active.phone !== phone) }
-            : agent,
-        ) ?? previous,
+      setAgents(
+        (previous) =>
+          previous?.map((agent) =>
+            agent.active_clients.some((active) => active.phone === phone)
+              ? {
+                  ...agent,
+                  active_clients: agent.active_clients.filter(
+                    (active) => active.phone !== phone,
+                  ),
+                }
+              : agent,
+          ) ?? previous,
       );
       if (category === "assigned") setCategory("main");
       reloadAgents();
     } catch (err) {
-      toast.push({ tone: "bad", title: "Could not clear the assignments", message: friendlyError(err) });
+      toast.push({
+        tone: "bad",
+        title: "Could not clear the assignments",
+        message: friendlyError(err),
+      });
     } finally {
       setClearing(false);
     }
@@ -1001,7 +1264,9 @@ export default function ClientMatchesDialog({
   async function handleRemoveManual(recordId: string) {
     setRemovingManualId(recordId);
     try {
-      setManualPropertyIds(await inquiryClientApi.removeManualProperty(phone, recordId));
+      setManualPropertyIds(
+        await inquiryClientApi.removeManualProperty(phone, recordId),
+      );
       setSelectedIds((previous) => {
         if (!previous.has(recordId)) return previous;
         const next = new Set(previous);
@@ -1017,7 +1282,11 @@ export default function ClientMatchesDialog({
       setOpenItemId((previous) => (previous === recordId ? null : previous));
       onChanged?.();
     } catch (err) {
-      toast.push({ tone: "bad", title: "Could not remove this property", message: friendlyError(err) });
+      toast.push({
+        tone: "bad",
+        title: "Could not remove this property",
+        message: friendlyError(err),
+      });
     } finally {
       setRemovingManualId(null);
     }
@@ -1031,14 +1300,20 @@ export default function ClientMatchesDialog({
   // is built from has arrived, and its cards fall back to the visit's own
   // snapshot while property records load.
   const mainSectionLoading = loadingMatches || loadingMeta || loadingProperties;
-  const completedSectionLoading = loadingCompleted || loadingMeta || loadingProperties;
+  const completedSectionLoading =
+    loadingCompleted || loadingMeta || loadingProperties;
   const sectionLoading =
-    category === "completed" ? completedSectionLoading : category === "assigned" ? false : mainSectionLoading;
-  const allSettled = !loadingMatches && !loadingCompleted && !loadingMeta && !loadingProperties;
+    category === "completed"
+      ? completedSectionLoading
+      : category === "assigned"
+        ? false
+        : mainSectionLoading;
+  const allSettled =
+    !loadingMatches && !loadingCompleted && !loadingMeta && !loadingProperties;
 
   const renderMatchCard = (item: DialogItem) => {
     const plan = plans[item.recordId];
-    const planAgent = plan ? agentsById.get(plan.agentId) ?? null : null;
+    const planAgent = plan ? (agentsById.get(plan.agentId) ?? null) : null;
     return (
       <PropertyMatchCard
         key={item.recordId}
@@ -1047,7 +1322,11 @@ export default function ClientMatchesDialog({
         onToggleSelect={() => handleToggleSelect(item.recordId)}
         onOpen={() => setOpenItemId(item.recordId)}
         assigned={activeByProperty.get(item.recordId) ?? null}
-        plan={planAgent ? { agentName: planAgent.name, scheduledAt: plan.scheduledAt } : null}
+        plan={
+          planAgent
+            ? { agentName: planAgent.name, scheduledAt: plan.scheduledAt }
+            : null
+        }
         onPlan={() => setPlanner({ kind: "assign", recordId: item.recordId })}
       />
     );
@@ -1062,13 +1341,20 @@ export default function ClientMatchesDialog({
         property={propertiesById.get(recordId) ?? null}
         match={matchById.get(recordId) ?? null}
         revisitNumber={revisitNumberFor(recordId)}
-        onOpen={() => (itemsById.has(recordId) ? setOpenItemId(recordId) : setViewingCompletedId(recordId))}
+        onOpen={() =>
+          itemsById.has(recordId)
+            ? setOpenItemId(recordId)
+            : setViewingCompletedId(recordId)
+        }
         onEditTime={() => setPlanner({ kind: "reschedule", visit })}
       />
     );
   };
 
-  const plannerItem = planner?.kind === "assign" ? itemsById.get(planner.recordId) ?? null : null;
+  const plannerItem =
+    planner?.kind === "assign"
+      ? (itemsById.get(planner.recordId) ?? null)
+      : null;
 
   return createPortal(
     <>
@@ -1087,8 +1373,12 @@ export default function ClientMatchesDialog({
           <div className="detail-modal__head">
             <div style={{ minWidth: 0 }}>
               <div className="detail-modal__eyebrow">Matched properties</div>
-              <h2 className="detail-modal__title cell-truncate">{client?.name || clientName || "Matches"}</h2>
-              <div className="detail-modal__sub cell-truncate">{summariseRequirements(client, phone)}</div>
+              <h2 className="detail-modal__title cell-truncate">
+                {client?.name || clientName || "Matches"}
+              </h2>
+              <div className="detail-modal__sub cell-truncate">
+                {summariseRequirements(client, phone)}
+              </div>
               <div className="detail-modal__badges">
                 <Badge tone="accent">
                   {total} propert{total === 1 ? "y" : "ies"}
@@ -1096,21 +1386,35 @@ export default function ClientMatchesDialog({
                 {assignedCount > 0 && (
                   <Badge tone="orange">
                     {assignedCount} assigned
-                    {assignedCount < total ? ` · ${total - assignedCount} remaining` : ""}
+                    {assignedCount < total
+                      ? ` · ${total - assignedCount} remaining`
+                      : ""}
                   </Badge>
                 )}
                 {result?.computed_at && (
                   <span className="fact">
-                    <IconClock size={12} /> Computed {relativeTime(new Date(result.computed_at))}
+                    <IconClock size={12} /> Computed{" "}
+                    {relativeTime(new Date(result.computed_at))}
                   </span>
                 )}
               </div>
             </div>
             <div className="row-flex" style={{ gap: 8, flex: "none" }}>
-              <Button size="sm" variant="ghost" icon={<IconRefresh size={14} />} onClick={handleRefresh} busy={recomputing}>
+              <Button
+                size="sm"
+                variant="ghost"
+                icon={<IconRefresh size={14} />}
+                onClick={handleRefresh}
+                busy={recomputing}
+              >
                 Refresh
               </Button>
-              <button type="button" className="toast__close" onClick={onClose} aria-label="Close">
+              <button
+                type="button"
+                className="toast__close"
+                onClick={onClose}
+                aria-label="Close"
+              >
                 <IconX size={15} />
               </button>
             </div>
@@ -1121,16 +1425,20 @@ export default function ClientMatchesDialog({
               ariaLabel="Which properties to show"
               value={inDrawer ? (category as PropertyCategory) : null}
               onChange={setCategory}
-              options={(["main", "outsider"] as PropertyCategory[]).map((key) => ({
-                value: key,
-                label: `${CATEGORY_LABEL[key]}${countByCategory[key] ? ` (${countByCategory[key]})` : ""}`,
-              }))}
+              options={(["main", "outsider"] as PropertyCategory[]).map(
+                (key) => ({
+                  value: key,
+                  label: `${CATEGORY_LABEL[key]}${countByCategory[key] ? ` (${countByCategory[key]})` : ""}`,
+                }),
+              )}
             />
             {activeVisits.length > 0 && (
               <button
                 type="button"
                 className={`pill-orange${category === "assigned" ? " pill-orange--active" : ""}`}
-                onClick={() => setCategory(category === "assigned" ? "main" : "assigned")}
+                onClick={() =>
+                  setCategory(category === "assigned" ? "main" : "assigned")
+                }
                 aria-pressed={category === "assigned"}
               >
                 <IconUserCheck size={12} strokeWidth={2.2} />
@@ -1141,7 +1449,9 @@ export default function ClientMatchesDialog({
               <button
                 type="button"
                 className={`pill-ok${category === "completed" ? " pill-ok--active" : ""}`}
-                onClick={() => setCategory(category === "completed" ? "main" : "completed")}
+                onClick={() =>
+                  setCategory(category === "completed" ? "main" : "completed")
+                }
                 aria-pressed={category === "completed"}
               >
                 <IconCheck size={12} strokeWidth={2.4} />
@@ -1155,6 +1465,37 @@ export default function ClientMatchesDialog({
             )}
           </div>
 
+          {showTypeTabs && (
+            <div className="matches-dialog__tabs matches-dialog__tabs--types">
+              <span
+                className="section-head__eyebrow"
+                style={{ marginBottom: 0 }}
+              >
+                Property type
+              </span>
+              <Segmented<string>
+                ariaLabel="Which of the client's property types to show"
+                value={typeFilter ?? ALL_TYPES}
+                onChange={(value) =>
+                  setTypeView(value === ALL_TYPES ? null : value)
+                }
+                options={[
+                  {
+                    value: ALL_TYPES,
+                    label: `All${visibleItems.length ? ` (${visibleItems.length})` : ""}`,
+                  },
+                  ...clientTypes.map((type) => {
+                    const count = countByType.get(type.toLowerCase()) ?? 0;
+                    return {
+                      value: type,
+                      label: `${type}${count ? ` (${count})` : ""}`,
+                    };
+                  }),
+                ]}
+              />
+            </div>
+          )}
+
           <div className="detail-modal__body">
             {error && (
               <Note tone="bad" icon={<IconAlert size={16} />}>
@@ -1164,26 +1505,38 @@ export default function ClientMatchesDialog({
 
             {sectionLoading && <SkeletonRows rows={5} />}
 
-            {allSettled && result && !result.has_requirements && total === 0 && completedList.length === 0 && (
-              <EmptyState
-                icon={<IconInbox size={36} />}
-                title="No requirements yet"
-                body="This client hasn't submitted their property requirements (purpose, type, budget, area) yet — matches appear here automatically once they do. You can still add a property by hand."
-              />
-            )}
+            {allSettled &&
+              result &&
+              !result.has_requirements &&
+              total === 0 &&
+              completedList.length === 0 && (
+                <EmptyState
+                  icon={<IconInbox size={36} />}
+                  title="No requirements yet"
+                  body="This client hasn't submitted their property requirements (purpose, type, budget, area) yet — matches appear here automatically once they do. You can still add a property by hand."
+                />
+              )}
 
             {!mainSectionLoading &&
               inDrawer &&
-              (result?.has_requirements || total > 0 || completedList.length > 0) &&
+              (result?.has_requirements ||
+                total > 0 ||
+                completedList.length > 0) &&
               sections.length === 0 &&
               websiteItems.length === 0 && (
                 <EmptyState
                   icon={<IconInbox size={36} />}
-                  title={`Nothing in ${CATEGORY_LABEL[category as PropertyCategory]}`}
+                  title={
+                    typeFilter
+                      ? `No ${typeFilter} matches in ${CATEGORY_LABEL[category]}`
+                      : `Nothing in ${CATEGORY_LABEL[category as PropertyCategory]}`
+                  }
                   body={
-                    total > 0
-                      ? "Every property found for this client is filed under one of the other tabs above."
-                      : "No stored property matched this client's requirements yet. Add one by hand, or refresh the matches."
+                    typeFilter
+                      ? `Nothing here matched this client's ${typeFilter} requirement yet — try their other property type above, or the other tab.`
+                      : total > 0
+                        ? "Every property found for this client is filed under one of the other tabs above."
+                        : "No stored property matched this client's requirements yet. Add one by hand, or refresh the matches."
                   }
                 />
               )}
@@ -1199,79 +1552,117 @@ export default function ClientMatchesDialog({
             {category === "assigned" && firstVisits.length > 0 && (
               <div className="stack stack-3">
                 <div className="matches-dialog__section-head">
-                  <span className="section-head__eyebrow" style={{ marginBottom: 0 }}>
+                  <span
+                    className="section-head__eyebrow"
+                    style={{ marginBottom: 0 }}
+                  >
                     Site visits
                   </span>
-                  <span className="matches-dialog__section-count">{firstVisits.length}</span>
+                  <span className="matches-dialog__section-count">
+                    {firstVisits.length}
+                  </span>
                   <span className="matches-dialog__rule" />
                 </div>
-                <div className="matches-grid">{firstVisits.map(renderActiveCard)}</div>
+                <div className="matches-grid">
+                  {firstVisits.map(renderActiveCard)}
+                </div>
               </div>
             )}
             {category === "assigned" && reVisits.length > 0 && (
               <div className="stack stack-3">
                 <div className="matches-dialog__section-head">
-                  <span className="section-head__eyebrow" style={{ marginBottom: 0 }}>
+                  <span
+                    className="section-head__eyebrow"
+                    style={{ marginBottom: 0 }}
+                  >
                     Re-visits
                   </span>
-                  <span className="matches-dialog__section-count">{reVisits.length}</span>
+                  <span className="matches-dialog__section-count">
+                    {reVisits.length}
+                  </span>
                   <span className="matches-dialog__rule" />
                 </div>
-                <div className="matches-grid">{reVisits.map(renderActiveCard)}</div>
+                <div className="matches-grid">
+                  {reVisits.map(renderActiveCard)}
+                </div>
               </div>
             )}
 
             {/* ---- Completed: one card per property, every visit listed ---- */}
-            {!completedSectionLoading && category === "completed" && completedList.length === 0 && (
-              <EmptyState
-                icon={<IconInbox size={36} />}
-                title="No completed visits yet"
-                body="Once a visit for one of this client's properties is marked complete on the Agents page, it moves here."
-              />
-            )}
+            {!completedSectionLoading &&
+              category === "completed" &&
+              completedList.length === 0 && (
+                <EmptyState
+                  icon={<IconInbox size={36} />}
+                  title="No completed visits yet"
+                  body="Once a visit for one of this client's properties is marked complete on the Agents page, it moves here."
+                />
+              )}
 
-            {!completedSectionLoading && category === "completed" && completedList.length > 0 && (
-              <div className="stack stack-3">
-                <div className="matches-dialog__section-head">
-                  <span className="section-head__eyebrow" style={{ marginBottom: 0 }}>
-                    Completed
-                  </span>
-                  <span className="matches-dialog__section-count">{completedList.length}</span>
-                  <span className="matches-dialog__rule" />
+            {!completedSectionLoading &&
+              category === "completed" &&
+              completedList.length > 0 && (
+                <div className="stack stack-3">
+                  <div className="matches-dialog__section-head">
+                    <span
+                      className="section-head__eyebrow"
+                      style={{ marginBottom: 0 }}
+                    >
+                      Completed
+                    </span>
+                    <span className="matches-dialog__section-count">
+                      {completedList.length}
+                    </span>
+                    <span className="matches-dialog__rule" />
+                  </div>
+                  <div className="matches-grid">
+                    {completedList.map(({ recordId, visits }) => (
+                      <CompletedPropertyCard
+                        key={recordId}
+                        visits={visits}
+                        property={propertiesById.get(recordId) ?? null}
+                        onOpen={() => setViewingCompletedId(recordId)}
+                        activeVisit={activeByProperty.get(recordId) ?? null}
+                        canRevisit={client !== null}
+                        onRevisit={() =>
+                          setPlanner({
+                            kind: "revisit",
+                            recordId,
+                            agentId: null,
+                            scheduledAt: null,
+                          })
+                        }
+                      />
+                    ))}
+                  </div>
                 </div>
-                <div className="matches-grid">
-                  {completedList.map(({ recordId, visits }) => (
-                    <CompletedPropertyCard
-                      key={recordId}
-                      visits={visits}
-                      property={propertiesById.get(recordId) ?? null}
-                      onOpen={() => setViewingCompletedId(recordId)}
-                      activeVisit={activeByProperty.get(recordId) ?? null}
-                      canRevisit={client !== null}
-                      onRevisit={() => setPlanner({ kind: "revisit", recordId, agentId: null, scheduledAt: null })}
-                    />
-                  ))}
-                </div>
-              </div>
-            )}
+              )}
 
             {/* ---- Main / Outsider ---- */}
             {!mainSectionLoading && pendingManualCount > 0 && inDrawer && (
               <Note tone="info" icon={<IconClock size={16} />}>
-                Loading {pendingManualCount} hand-picked propert{pendingManualCount === 1 ? "y" : "ies"}…
+                Loading {pendingManualCount} hand-picked propert
+                {pendingManualCount === 1 ? "y" : "ies"}…
               </Note>
             )}
 
             {!mainSectionLoading && inDrawer && manualSection && (
               <div className="stack stack-3">
                 <div className="matches-dialog__section-head">
-                  <span className="section-head__eyebrow" style={{ marginBottom: 0 }}>
+                  <span
+                    className="section-head__eyebrow"
+                    style={{ marginBottom: 0 }}
+                  >
                     {SECTION_LABEL[manualSection.key]}
                   </span>
-                  <span className="matches-dialog__section-count">{manualSection.items.length}</span>
+                  <span className="matches-dialog__section-count">
+                    {manualSection.items.length}
+                  </span>
                   <span className="matches-dialog__rule" />
                 </div>
-                <div className="matches-grid">{manualSection.items.map(renderMatchCard)}</div>
+                <div className="matches-grid">
+                  {manualSection.items.map(renderMatchCard)}
+                </div>
               </div>
             )}
 
@@ -1283,13 +1674,20 @@ export default function ClientMatchesDialog({
             {!mainSectionLoading && inDrawer && websiteItems.length > 0 && (
               <div className="stack stack-3">
                 <div className="matches-dialog__section-head">
-                  <span className="section-head__eyebrow" style={{ marginBottom: 0 }}>
+                  <span
+                    className="section-head__eyebrow"
+                    style={{ marginBottom: 0 }}
+                  >
                     {SECTION_LABEL.website}
                   </span>
-                  <span className="matches-dialog__section-count">{websiteItems.length}</span>
+                  <span className="matches-dialog__section-count">
+                    {websiteItems.length}
+                  </span>
                   <span className="matches-dialog__rule" />
                 </div>
-                <div className="matches-grid">{websiteItems.map(renderMatchCard)}</div>
+                <div className="matches-grid">
+                  {websiteItems.map(renderMatchCard)}
+                </div>
               </div>
             )}
 
@@ -1298,13 +1696,20 @@ export default function ClientMatchesDialog({
               bucketSections.map((section) => (
                 <div key={section.key} className="stack stack-3">
                   <div className="matches-dialog__section-head">
-                    <span className="section-head__eyebrow" style={{ marginBottom: 0 }}>
+                    <span
+                      className="section-head__eyebrow"
+                      style={{ marginBottom: 0 }}
+                    >
                       {SECTION_LABEL[section.key]}
                     </span>
-                    <span className="matches-dialog__section-count">{section.items.length}</span>
+                    <span className="matches-dialog__section-count">
+                      {section.items.length}
+                    </span>
                     <span className="matches-dialog__rule" />
                   </div>
-                  <div className="matches-grid">{section.items.map(renderMatchCard)}</div>
+                  <div className="matches-grid">
+                    {section.items.map(renderMatchCard)}
+                  </div>
                 </div>
               ))}
           </div>
@@ -1326,7 +1731,12 @@ export default function ClientMatchesDialog({
                 button that can only ever say "nothing to clear" is noise.
                 Counts every active visit, re-visits included. */}
             {activeVisits.length > 0 && (
-              <Button variant="ghost" icon={<IconTrash size={15} />} onClick={() => setClearOpen(true)} busy={clearing}>
+              <Button
+                variant="ghost"
+                icon={<IconTrash size={15} />}
+                onClick={() => setClearOpen(true)}
+                busy={clearing}
+              >
                 Clear assignments ({activeVisits.length})
               </Button>
             )}
@@ -1375,13 +1785,20 @@ export default function ClientMatchesDialog({
             if (!wasSelected) setOpenItemId(null);
           }}
           onMove={(target) => handleMove(openItem, target)}
-          onRemoveManual={openItem.section === "manual" ? () => handleRemoveManual(openItem.recordId) : undefined}
+          onRemoveManual={
+            openItem.section === "manual"
+              ? () => handleRemoveManual(openItem.recordId)
+              : undefined
+          }
           onClose={() => setOpenItemId(null)}
         />
       )}
 
       {viewingCompletedId && (
-        <PropertyReadOnlyDialog recordId={viewingCompletedId} onClose={() => setViewingCompletedId(null)} />
+        <PropertyReadOnlyDialog
+          recordId={viewingCompletedId}
+          onClose={() => setViewingCompletedId(null)}
+        />
       )}
 
       {clearOpen && (
@@ -1395,13 +1812,18 @@ export default function ClientMatchesDialog({
           body={
             <div className="stack stack-3">
               <p className="section-head__sub" style={{ margin: 0 }}>
-                {activeVisits.length} site visit{activeVisits.length === 1 ? " is" : "s are"} currently out with an agent for{" "}
-                <strong>{displayName}</strong>. Clearing removes{" "}
-                {activeVisits.length === 1 ? "that assignment" : "all of those assignments"} and messages every agent
-                involved on WhatsApp to say the visits are cancelled.
+                {activeVisits.length} site visit
+                {activeVisits.length === 1 ? " is" : "s are"} currently out with
+                an agent for <strong>{displayName}</strong>. Clearing removes{" "}
+                {activeVisits.length === 1
+                  ? "that assignment"
+                  : "all of those assignments"}{" "}
+                and messages every agent involved on WhatsApp to say the visits
+                are cancelled.
               </p>
               <p className="section-head__sub" style={{ margin: 0 }}>
-                The properties themselves stay on this list, ready to be assigned again.{" "}
+                The properties themselves stay on this list, ready to be
+                assigned again.{" "}
                 <strong>Completed visits are not affected.</strong>
               </p>
             </div>
@@ -1437,7 +1859,10 @@ export default function ClientMatchesDialog({
           initialScheduledAt={plans[plannerItem.recordId]?.scheduledAt ?? null}
           revisitNumber={null}
           onConfirm={(agentId, scheduledAt) => {
-            setPlans((previous) => ({ ...previous, [plannerItem.recordId]: { agentId, scheduledAt } }));
+            setPlans((previous) => ({
+              ...previous,
+              [plannerItem.recordId]: { agentId, scheduledAt },
+            }));
             setPlanner(null);
           }}
           onClose={() => setPlanner(null)}
@@ -1449,14 +1874,25 @@ export default function ClientMatchesDialog({
           key={`revisit-${planner.recordId}`}
           mode="revisit"
           clientName={displayName}
-          propertyLabel={titleFor(planner.recordId, completedByProperty.get(planner.recordId)?.[0]?.property_label ?? null)}
-          propertyArea={(propertiesById.get(planner.recordId) ?? matchById.get(planner.recordId))?.area_name ?? null}
+          propertyLabel={titleFor(
+            planner.recordId,
+            completedByProperty.get(planner.recordId)?.[0]?.property_label ??
+              null,
+          )}
+          propertyArea={
+            (
+              propertiesById.get(planner.recordId) ??
+              matchById.get(planner.recordId)
+            )?.area_name ?? null
+          }
           wantedAreas={client?.preferred_areas ?? null}
           agents={agents}
           initialAgentId={planner.agentId}
           initialScheduledAt={planner.scheduledAt}
           revisitNumber={revisitNumberFor(planner.recordId)}
-          onConfirm={(agentId, scheduledAt) => handleRevisitConfirm(planner.recordId, agentId, scheduledAt)}
+          onConfirm={(agentId, scheduledAt) =>
+            handleRevisitConfirm(planner.recordId, agentId, scheduledAt)
+          }
           onClose={() => setPlanner(null)}
         />
       )}
@@ -1466,16 +1902,22 @@ export default function ClientMatchesDialog({
           key={`reschedule-${planner.visit.agent.agent_id}-${planner.visit.active.property_record_id}`}
           mode="reschedule"
           clientName={displayName}
-          propertyLabel={titleFor(planner.visit.active.property_record_id, planner.visit.active.property_label)}
+          propertyLabel={titleFor(
+            planner.visit.active.property_record_id,
+            planner.visit.active.property_label,
+          )}
           propertyArea={null}
           wantedAreas={null}
           agents={[planner.visit.agent]}
           initialAgentId={planner.visit.agent.agent_id}
           initialScheduledAt={planner.visit.active.scheduled_at}
-          revisitNumber={revisitNumberFor(planner.visit.active.property_record_id)}
+          revisitNumber={revisitNumberFor(
+            planner.visit.active.property_record_id,
+          )}
           busy={savingSchedule}
           onConfirm={(_agentId, scheduledAt) => {
-            if (scheduledAt) void handleSaveSchedule(planner.visit, scheduledAt);
+            if (scheduledAt)
+              void handleSaveSchedule(planner.visit, scheduledAt);
           }}
           onClose={() => !savingSchedule && setPlanner(null)}
         />
@@ -1526,7 +1968,9 @@ export default function ClientMatchesDialog({
               // outstanding property (it's already completed), so it never
               // moves the Inquiries table's counts and reports nothing.
               const sentIds = new Set(
-                assignFlow.assignments.flatMap((assignment) => assignment.properties.map((p) => p.record_id)),
+                assignFlow.assignments.flatMap((assignment) =>
+                  assignment.properties.map((p) => p.record_id),
+                ),
               );
               const newlyAssigned = [...sentIds].filter(
                 (id) => itemsById.has(id) && !assignedAgentByProperty.has(id),
@@ -1546,7 +1990,10 @@ export default function ClientMatchesDialog({
 
 /** Rewrite the two category fields on every copy of one property inside a
  *  cached match result, leaving scores untouched. */
-function patchMatchFields(result: ClientMatchResult, updated: PropertyRecord): ClientMatchResult {
+function patchMatchFields(
+  result: ClientMatchResult,
+  updated: PropertyRecord,
+): ClientMatchResult {
   const patch = (list: MatchedProperty[]) =>
     list.map((match) =>
       match.record_id === updated.record_id
@@ -1558,10 +2005,18 @@ function patchMatchFields(result: ClientMatchResult, updated: PropertyRecord): C
           }
         : match,
     );
-  return { ...result, high: patch(result.high), medium: patch(result.medium), low: patch(result.low) };
+  return {
+    ...result,
+    high: patch(result.high),
+    medium: patch(result.medium),
+    low: patch(result.low),
+  };
 }
 
-function summariseRequirements(client: InquiryClientRecord | null, phone: string): string {
+function summariseRequirements(
+  client: InquiryClientRecord | null,
+  phone: string,
+): string {
   if (!client) return phone;
   const parts = [
     [client.bhk, client.property_type].filter(Boolean).join(" ") || null,
@@ -1573,7 +2028,13 @@ function summariseRequirements(client: InquiryClientRecord | null, phone: string
 
 function formatCompletedDate(iso: string | null): string | null {
   return iso
-    ? new Date(iso).toLocaleString("en-IN", { day: "2-digit", month: "short", year: "numeric", hour: "numeric", minute: "2-digit" })
+    ? new Date(iso).toLocaleString("en-IN", {
+        day: "2-digit",
+        month: "short",
+        year: "numeric",
+        hour: "numeric",
+        minute: "2-digit",
+      })
     : null;
 }
 
@@ -1603,11 +2064,22 @@ function PropertyMatchCard({
 }) {
   const source = item.property ?? item.match!;
   const title = source.society_name || source.property_type || "Property";
-  const location = [source.area_name, item.property?.address ?? item.match?.address].filter(Boolean).join(" · ");
+  const location = [
+    source.area_name,
+    item.property?.address ?? item.match?.address,
+  ]
+    .filter(Boolean)
+    .join(" · ");
 
   return (
     <div
-      className={["match-card", selected && "match-card--selected", assigned && "match-card--assigned"].filter(Boolean).join(" ")}
+      className={[
+        "match-card",
+        selected && "match-card--selected",
+        assigned && "match-card--assigned",
+      ]
+        .filter(Boolean)
+        .join(" ")}
       role="button"
       tabIndex={0}
       onClick={onOpen}
@@ -1641,10 +2113,14 @@ function PropertyMatchCard({
       <div className="match-card__head">
         <div style={{ minWidth: 0 }}>
           <div className="pcard__title cell-truncate">{title}</div>
-          {location && <div className="pcard__sub cell-truncate">{location}</div>}
+          {location && (
+            <div className="pcard__sub cell-truncate">{location}</div>
+          )}
         </div>
         {item.match && (
-          <span className={`match-card__score match-card__score--${item.match.bucket}`}>
+          <span
+            className={`match-card__score match-card__score--${item.match.bucket}`}
+          >
             {Math.round(item.match.score * 100)}%
           </span>
         )}
@@ -1673,18 +2149,31 @@ function PropertyMatchCard({
 
       <div className="match-card__badges">
         <Badge
-          tone={item.section === "manual" || item.section === "website" ? "info" : BUCKET_TONE[item.match?.bucket ?? "low"]}
+          tone={
+            item.section === "manual" || item.section === "website"
+              ? "info"
+              : BUCKET_TONE[item.match?.bucket ?? "low"]
+          }
         >
           {item.section === "manual" || item.section === "website"
             ? SECTION_LABEL[item.section]
             : SECTION_LABEL[item.section].replace(" matches", " match")}
         </Badge>
+        {/* Only ever set for a client who asked for more than one type —
+            says which of their requirements this property answers. */}
+        {item.match?.matched_type && (
+          <Badge tone="accent">For {item.match.matched_type}</Badge>
+        )}
         {/* Only when this card's OWN section isn't already the Web Site
             Property Inquiry badge above — a website enquiry that also
             scored or was hand-picked gets this second, smaller badge to
             say so without duplicating the same words twice on one card. */}
-        {item.fromWebsiteInquiry && item.section !== "website" && <Badge tone="accent">Website enquiry</Badge>}
-        {item.match?.is_partial_match && <Badge tone="info">Partial data</Badge>}
+        {item.fromWebsiteInquiry && item.section !== "website" && (
+          <Badge tone="accent">Website enquiry</Badge>
+        )}
+        {item.match?.is_partial_match && (
+          <Badge tone="info">Partial data</Badge>
+        )}
         {assigned && (
           <Badge tone="orange">
             <IconUserCheck size={11} /> Assigned to {assigned.agent.name}
@@ -1692,7 +2181,8 @@ function PropertyMatchCard({
         )}
         {assigned?.active.scheduled_at && (
           <span className="fact">
-            <IconClock size={12} /> {formatVisitTime(assigned.active.scheduled_at)}
+            <IconClock size={12} />{" "}
+            {formatVisitTime(assigned.active.scheduled_at)}
           </span>
         )}
       </div>
@@ -1706,7 +2196,13 @@ function PropertyMatchCard({
             {plan ? (
               <>
                 Agent <strong>{plan.agentName}</strong> selected
-                <span className="faint"> · {plan.scheduledAt ? formatVisitTime(plan.scheduledAt) : "no time yet"}</span>
+                <span className="faint">
+                  {" "}
+                  ·{" "}
+                  {plan.scheduledAt
+                    ? formatVisitTime(plan.scheduledAt)
+                    : "no time yet"}
+                </span>
               </>
             ) : (
               <span className="faint">No agent chosen yet</span>
@@ -1725,10 +2221,14 @@ function PropertyMatchCard({
         </div>
       )}
 
-      {item.match?.reason && <div className="match-card__reason">{item.match.reason}</div>}
+      {item.match?.reason && (
+        <div className="match-card__reason">{item.match.reason}</div>
+      )}
 
       <div className="match-card__foot">
-        <span className="pcard__price">{formatPrice(source.price_text, source.price_amount_inr)}</span>
+        <span className="pcard__price">
+          {formatPrice(source.price_text, source.price_amount_inr)}
+        </span>
         <span className="faint small">{source.listing_type}</span>
       </div>
     </div>
@@ -1755,8 +2255,13 @@ function AssignedVisitCard({
   onEditTime: () => void;
 }) {
   const source = property ?? match;
-  const title = (source && (source.society_name || source.property_type)) || visit.active.property_label || "Property";
-  const location = [source?.area_name, property?.address ?? match?.address].filter(Boolean).join(" · ");
+  const title =
+    (source && (source.society_name || source.property_type)) ||
+    visit.active.property_label ||
+    "Property";
+  const location = [source?.area_name, property?.address ?? match?.address]
+    .filter(Boolean)
+    .join(" · ");
   const when = visit.active.scheduled_at;
   const passed = when !== null && timeOf(when) < Date.now();
 
@@ -1777,10 +2282,16 @@ function AssignedVisitCard({
       <div className="match-card__head">
         <div style={{ minWidth: 0 }}>
           <div className="pcard__title cell-truncate">{title}</div>
-          {location && <div className="pcard__sub cell-truncate">{location}</div>}
+          {location && (
+            <div className="pcard__sub cell-truncate">{location}</div>
+          )}
         </div>
         {match && (
-          <span className={`match-card__score match-card__score--${match.bucket}`}>{Math.round(match.score * 100)}%</span>
+          <span
+            className={`match-card__score match-card__score--${match.bucket}`}
+          >
+            {Math.round(match.score * 100)}%
+          </span>
         )}
       </div>
 
@@ -1801,7 +2312,10 @@ function AssignedVisitCard({
           {source.carpet_area_sqft !== null && (
             <span className="fact">
               <IconRuler size={12} />
-              {formatCarpetArea(source.carpet_area_sqft, source.carpet_area_unit)}
+              {formatCarpetArea(
+                source.carpet_area_sqft,
+                source.carpet_area_unit,
+              )}
             </span>
           )}
         </div>
@@ -1823,13 +2337,18 @@ function AssignedVisitCard({
           <button
             type="button"
             className={`visit-when${passed ? " visit-when--past" : ""}`}
-            title={passed ? "This time has passed — click to change it" : "Change the visit time"}
+            title={
+              passed
+                ? "This time has passed — click to change it"
+                : "Change the visit time"
+            }
             onClick={(event) => {
               event.stopPropagation();
               onEditTime();
             }}
           >
-            <IconClock size={13} /> {formatVisitTime(when)} <IconEdit size={12} />
+            <IconClock size={13} /> {formatVisitTime(when)}{" "}
+            <IconEdit size={12} />
           </button>
         ) : (
           <Button
@@ -1843,7 +2362,11 @@ function AssignedVisitCard({
             Set visit time
           </Button>
         )}
-        {source && <span className="pcard__price">{formatPrice(source.price_text, source.price_amount_inr)}</span>}
+        {source && (
+          <span className="pcard__price">
+            {formatPrice(source.price_text, source.price_amount_inr)}
+          </span>
+        )}
       </div>
     </div>
   );
@@ -1877,8 +2400,14 @@ export function CompletedPropertyCard({
   onRevisit: () => void;
 }) {
   const latest = visits[visits.length - 1];
-  const title = property?.society_name || property?.property_type || latest.property_label || "Property";
-  const location = [property?.area_name, property?.address].filter(Boolean).join(" · ");
+  const title =
+    property?.society_name ||
+    property?.property_type ||
+    latest.property_label ||
+    "Property";
+  const location = [property?.area_name, property?.address]
+    .filter(Boolean)
+    .join(" · ");
   const single = visits.length === 1;
   const completedDate = formatCompletedDate(latest.completed_at);
 
@@ -1899,7 +2428,9 @@ export function CompletedPropertyCard({
       <div className="match-card__head">
         <div style={{ minWidth: 0 }}>
           <div className="pcard__title cell-truncate">{title}</div>
-          {location && <div className="pcard__sub cell-truncate">{location}</div>}
+          {location && (
+            <div className="pcard__sub cell-truncate">{location}</div>
+          )}
         </div>
         {!activeVisit && (
           <Button
@@ -1935,7 +2466,10 @@ export function CompletedPropertyCard({
           {property.carpet_area_sqft !== null && (
             <span className="fact">
               <IconRuler size={12} />
-              {formatCarpetArea(property.carpet_area_sqft, property.carpet_area_unit)}
+              {formatCarpetArea(
+                property.carpet_area_sqft,
+                property.carpet_area_unit,
+              )}
             </span>
           )}
         </div>
@@ -1943,7 +2477,10 @@ export function CompletedPropertyCard({
 
       <div className="match-card__badges">
         <Badge tone="ok">
-          <IconCheck size={11} /> {single ? `Completed by ${latest.agent_name}` : `Visited ${visits.length} times`}
+          <IconCheck size={11} />{" "}
+          {single
+            ? `Completed by ${latest.agent_name}`
+            : `Visited ${visits.length} times`}
         </Badge>
         {activeVisit && (
           <Badge tone="orange">
@@ -1963,9 +2500,12 @@ export function CompletedPropertyCard({
                 <span className="visit-history__num">{index + 1}</span>
                 <div className="visit-history__body">
                   <div className="visit-history__when">
-                    {date ? `Completed ${date}` : "Completed"} · {visit.agent_name}
+                    {date ? `Completed ${date}` : "Completed"} ·{" "}
+                    {visit.agent_name}
                   </div>
-                  {visit.notes && <div className="visit-history__notes">{visit.notes}</div>}
+                  {visit.notes && (
+                    <div className="visit-history__notes">{visit.notes}</div>
+                  )}
                 </div>
               </li>
             );
@@ -1975,9 +2515,17 @@ export function CompletedPropertyCard({
 
       <div className="match-card__foot">
         <span className="faint small">
-          {single ? (completedDate ? `Completed ${completedDate}` : "Completed") : `${visits.length} visits`}
+          {single
+            ? completedDate
+              ? `Completed ${completedDate}`
+              : "Completed"
+            : `${visits.length} visits`}
         </span>
-        {property && <span className="pcard__price">{formatPrice(property.price_text, property.price_amount_inr)}</span>}
+        {property && (
+          <span className="pcard__price">
+            {formatPrice(property.price_text, property.price_amount_inr)}
+          </span>
+        )}
       </div>
     </div>
   );
@@ -2025,11 +2573,12 @@ export function PropertyMatchDetailDialog({
   const { match, property } = item;
   const source = property ?? match!;
   const title = source.society_name || source.property_type || "Property";
-  const subtitle = [source.area_name, property?.address ?? match?.address].filter(Boolean).join(" · ");
-  const fieldScoreEntries = Object.entries(match?.field_scores ?? {}).filter(([, value]) => value !== null) as [
-    string,
-    number,
-  ][];
+  const subtitle = [source.area_name, property?.address ?? match?.address]
+    .filter(Boolean)
+    .join(" · ");
+  const fieldScoreEntries = Object.entries(match?.field_scores ?? {}).filter(
+    ([, value]) => value !== null,
+  ) as [string, number][];
   // Every drawer except the one it is already in — the whole point of
   // these buttons is that they never present a no-op.
   const moveTargets = (["main", "outsider"] as PropertyCategory[]).filter(
@@ -2037,22 +2586,43 @@ export function PropertyMatchDetailDialog({
   );
 
   return createPortal(
-    <div className="modal-scrim" onMouseDown={(event) => event.target === event.currentTarget && onClose()}>
-      <div className="detail-modal anim-rise" role="dialog" aria-modal="true" aria-label="Property details">
+    <div
+      className="modal-scrim"
+      onMouseDown={(event) => event.target === event.currentTarget && onClose()}
+    >
+      <div
+        className="detail-modal anim-rise"
+        role="dialog"
+        aria-modal="true"
+        aria-label="Property details"
+      >
         <div className="detail-modal__head">
           <div style={{ minWidth: 0 }}>
             <div className="detail-modal__eyebrow">
               {source.property_type || "Property"} · {source.listing_type}
             </div>
             <h2 className="detail-modal__title cell-truncate">{title}</h2>
-            {subtitle && <div className="detail-modal__sub cell-truncate">{subtitle}</div>}
+            {subtitle && (
+              <div className="detail-modal__sub cell-truncate">{subtitle}</div>
+            )}
             <div className="detail-modal__badges">
-              {match && <Badge tone={BUCKET_TONE[match.bucket]}>{Math.round(match.score * 100)}% match</Badge>}
-              {match?.is_partial_match && <Badge tone="info">Partial data</Badge>}
+              {match && (
+                <Badge tone={BUCKET_TONE[match.bucket]}>
+                  {Math.round(match.score * 100)}% match
+                </Badge>
+              )}
+              {match?.is_partial_match && (
+                <Badge tone="info">Partial data</Badge>
+              )}
+              {match?.matched_type && (
+                <Badge tone="accent">For {match.matched_type}</Badge>
+              )}
               <Badge tone={item.category === "main" ? "ok" : "info"}>
                 {CATEGORY_LABEL[item.category]}
               </Badge>
-              {item.section === "manual" && <Badge tone="info">Manually added</Badge>}
+              {item.section === "manual" && (
+                <Badge tone="info">Manually added</Badge>
+              )}
               {assignedAgent && (
                 <Badge tone="orange">
                   <IconUserCheck size={11} /> Assigned to {assignedAgent.name}
@@ -2067,12 +2637,20 @@ export function PropertyMatchDetailDialog({
               {source.carpet_area_sqft !== null && (
                 <span className="fact">
                   <IconRuler size={12} />
-                  {formatCarpetArea(source.carpet_area_sqft, source.carpet_area_unit)}
+                  {formatCarpetArea(
+                    source.carpet_area_sqft,
+                    source.carpet_area_unit,
+                  )}
                 </span>
               )}
             </div>
           </div>
-          <button type="button" className="toast__close" onClick={onClose} aria-label="Close">
+          <button
+            type="button"
+            className="toast__close"
+            onClick={onClose}
+            aria-label="Close"
+          >
             <IconX size={15} />
           </button>
         </div>
@@ -2089,16 +2667,21 @@ export function PropertyMatchDetailDialog({
               <div className="detail__k">Why this match</div>
               <div className="detail__v">{match.reason}</div>
               {fieldScoreEntries.length > 0 && (
-                <div className="faint small row-flex" style={{ gap: 10, marginTop: 6, flexWrap: "wrap" }}>
+                <div
+                  className="faint small row-flex"
+                  style={{ gap: 10, marginTop: 6, flexWrap: "wrap" }}
+                >
                   {fieldScoreEntries.map(([name, value]) => (
                     <span key={name}>
-                      {FIELD_SCORE_LABEL[name] ?? name}: {Math.round(value * 100)}%
+                      {FIELD_SCORE_LABEL[name] ?? name}:{" "}
+                      {Math.round(value * 100)}%
                     </span>
                   ))}
                 </div>
               )}
               <div className="faint small" style={{ marginTop: 6 }}>
-                Data available for {Math.round(match.evidence_ratio * 100)}% of the fields compared.
+                Data available for {Math.round(match.evidence_ratio * 100)}% of
+                the fields compared.
               </div>
             </div>
           )}
@@ -2118,7 +2701,11 @@ export function PropertyMatchDetailDialog({
               <div className="detail__block">
                 <div className="detail__k">Price per unit</div>
                 <div className="detail__v">
-                  {property.price_per_unit_text ?? formatPricePerUnit(null, property.price_per_unit_amount_inr)}
+                  {property.price_per_unit_text ??
+                    formatPricePerUnit(
+                      null,
+                      property.price_per_unit_amount_inr,
+                    )}
                 </div>
               </div>
             )}
@@ -2138,9 +2725,13 @@ export function PropertyMatchDetailDialog({
                 <div className="detail__k">Sender</div>
                 <div className="detail__v">
                   {property.sender_name}
-                  {property.sender_saved_name && property.sender_saved_name !== property.sender_name && (
-                    <span className="faint"> · saved as {property.sender_saved_name}</span>
-                  )}
+                  {property.sender_saved_name &&
+                    property.sender_saved_name !== property.sender_name && (
+                      <span className="faint">
+                        {" "}
+                        · saved as {property.sender_saved_name}
+                      </span>
+                    )}
                 </div>
                 <div className="detail__v" style={{ marginTop: 4 }}>
                   <Copyable text={property.sender_phone} />
@@ -2162,7 +2753,9 @@ export function PropertyMatchDetailDialog({
           {(property?.description ?? match?.description) && (
             <div className="detail__block">
               <div className="detail__k">Description</div>
-              <div className="detail__v">{property?.description ?? match?.description}</div>
+              <div className="detail__v">
+                {property?.description ?? match?.description}
+              </div>
             </div>
           )}
 
@@ -2192,12 +2785,24 @@ export function PropertyMatchDetailDialog({
             </Button>
           )}
           {moveTargets.map((target) => (
-            <Button key={target} size="sm" icon={<IconMove size={14} />} busy={moving} onClick={() => onMove(target)}>
+            <Button
+              key={target}
+              size="sm"
+              icon={<IconMove size={14} />}
+              busy={moving}
+              onClick={() => onMove(target)}
+            >
               Move to {CATEGORY_LABEL[target]}
             </Button>
           ))}
           {onRemoveManual && (
-            <Button size="sm" variant="ghost" icon={<IconTrash size={14} />} busy={removing} onClick={onRemoveManual}>
+            <Button
+              size="sm"
+              variant="ghost"
+              icon={<IconTrash size={14} />}
+              busy={removing}
+              onClick={onRemoveManual}
+            >
               Remove
             </Button>
           )}

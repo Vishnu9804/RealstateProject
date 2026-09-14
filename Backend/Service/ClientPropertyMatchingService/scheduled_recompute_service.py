@@ -29,6 +29,7 @@ import time
 from datetime import datetime, timedelta, timezone
 
 from Middleware import step_logger
+from Service.BrokerRequirementService import requirement_matching_service
 from Service.ClientPropertyMatchingService import matching_service
 from Service.WhatsAppDataFetchingService import property_vector_store
 from Service.WhatsAppInquiryHandlingService import client_store
@@ -52,19 +53,36 @@ def start_daily_recompute_in_background() -> None:
     thread.start()
     step_logger.info(
         f"Daily match recompute scheduled for {_RUN_HOUR_IST:02d}:00 IST every day "
-        "(re-scores every existing client against the current property list)."
+        "(re-scores every existing client, then every broker requirement, against new/edited properties)."
     )
 
 
 def _daily_loop() -> None:
     while True:
         time.sleep(_seconds_until_next_run())
-        try:
-            _recompute_all_clients()
-        except Exception as exc:  # noqa: BLE001
-            # One bad cycle (a transient DB/embedding error) must never kill
-            # this thread — the next day's run is the retry.
-            step_logger.error(f"[Daily Matching] Scheduled recompute cycle failed ({type(exc).__name__}): {exc!r}")
+        # Back to back on one thread, not two schedulers: the database wakes
+        # once for both, and the two CPU-heavy passes never overlap.
+        for job in (_recompute_all_clients, _rescore_all_broker_requirements):
+            try:
+                job()
+            except Exception as exc:  # noqa: BLE001
+                # One bad cycle (a transient DB/embedding error) must never
+                # kill this thread, nor skip the other pass — the next day's
+                # run is the retry.
+                step_logger.error(
+                    f"[Daily Matching] {job.__name__} failed ({type(exc).__name__}): {exc!r}"
+                )
+
+
+def _rescore_all_broker_requirements() -> None:
+    """The same catch-up for Broker Requirement Matching — each requirement
+    compared only against properties added or edited since it was last
+    scored (see requirement_matching_service.rescore_all_requirements)."""
+    rescored, up_to_date, written = requirement_matching_service.rescore_all_requirements()
+    step_logger.success(
+        f"[Daily Matching] Broker requirement rescore finished — {rescored} requirement(s) rescored "
+        f"({written} match(es) written), {up_to_date} already up to date."
+    )
 
 
 def _seconds_until_next_run() -> float:

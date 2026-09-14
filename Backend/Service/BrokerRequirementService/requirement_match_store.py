@@ -20,6 +20,7 @@ from typing import Dict, List, Optional, Set, Tuple
 from Database import broker_requirement_match_repository
 from Database.session import is_database_configured
 from Model.ClientPropertyMatchingModel.match_score import MatchScore
+from Service.BrokerRequirementService import requirement_store
 
 # In-memory fallback only: record_id -> (scores, computed_at, fingerprint).
 _matches: Dict[str, Tuple[List[MatchScore], datetime, str]] = {}
@@ -75,6 +76,30 @@ def merge_matches(
     previous = _matches.get(record_id, ([], computed_at, fingerprint))[0]
     kept = [score for score in previous if score.record_id not in considered_record_ids]
     _matches[record_id] = (kept + list(scores), computed_at, fingerprint)
+
+
+def get_run_index(limit: int) -> Dict[str, Tuple[Optional[datetime], Optional[str]]]:
+    """record_id -> (computed_at, fingerprint) for the `limit` newest
+    requirements, (None, None) when never scored — see
+    broker_requirement_match_repository.get_run_index."""
+    if is_database_configured():
+        return broker_requirement_match_repository.get_run_index(limit)
+    index: Dict[str, Tuple[Optional[datetime], Optional[str]]] = {}
+    for requirement in requirement_store.get_all_requirements(limit):
+        stored = _matches.get(requirement.record_id)
+        index[requirement.record_id] = (stored[1], stored[2]) if stored else (None, None)
+    return index
+
+
+def merge_matches_bulk(updates: Dict[str, Tuple[List[MatchScore], Set[str], str]], computed_at: datetime) -> int:
+    """merge_matches for many requirements at once (record_id -> (scores,
+    considered property ids, fingerprint)), one transaction in database mode.
+    Returns how many match rows were written."""
+    if is_database_configured():
+        return broker_requirement_match_repository.merge_matches_bulk(updates, computed_at)
+    for record_id, (scores, considered, fingerprint) in updates.items():
+        merge_matches(record_id, scores, considered, computed_at, fingerprint)
+    return sum(len(scores) for scores, _, _ in updates.values())
 
 
 def forget_requirement_in_memory(record_id: str) -> None:

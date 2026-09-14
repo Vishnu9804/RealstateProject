@@ -1,42 +1,37 @@
 """Owns what happens once one user's debounced message batch is flushed
 (Service/WhatsAppInquiryHandlingService/inquiry_buffer_service.py).
 
-Every flush is routed one of two ways, checked in this order:
+Every flush is routed by first checking whether this phone already has a
+real client record (one created by an actual form submission — see
+below):
 
-  1. This phone has a pending_action set (currently only
-     "awaiting_update_confirmation") -> interpreted DIRECTLY as a yes/no
-     reply, deterministically, WITHOUT calling the LLM classifier at all.
-     We just asked this exact client a closed yes/no question — re-running
-     general property-vs-not classification on their answer risks the LLM
-     reading a bare "yes" as not property-related and silently dropping it,
-     and it would burn a request for something a plain keyword check
-     answers just as reliably (requirement #4: no unnecessary LLM calls).
-  2. Otherwise -> classified as property-related or not, then routed three
-     ways:
-       - a client record already exists  -> EXISTING client (a client
-                                             record only ever exists once
-                                             they've actually submitted the
-                                             form — see below): send their
-                                             stored requirements, ask
-                                             whether to update, and set
-                                             pending_action so their next
-                                             reply is handled by branch 1.
-       - no record, never invited before -> NEW client: send the welcome +
-                                             registration-form link, exactly
-                                             once.
-       - no record, already invited      -> already sent the welcome link,
-                                             hasn't submitted yet: do NOT
-                                             resend it (duplicate-message
-                                             prevention) — tracked in
-                                             invitation_tracker.py, NOT in
-                                             the database.
+  1. A client record already exists -> EXISTING client: this phone has
+     already submitted the requirements form once. Their message is
+     ignored completely — NOT sent to the LLM classifier, no auto-reply
+     sent, no state changed. We stop listening to a number the moment it
+     has given us its requirements; anything they send after that (an
+     update, a correction, a random reply) is simply not processed. The
+     only way this phone is treated as a first-time texter again is if the
+     owner deletes that client record — see delete_client in
+     Controller/WhatsAppInquiryHandlingController/
+     whatsapp_inquiry_controller.py, which also clears
+     invitation_tracker's mark for the number so the very next message
+     retriggers the NEW-client welcome below.
+  2. No record yet -> classified as property-related or not, then routed
+     two ways:
+       - never invited before -> NEW client: send the welcome +
+                                  registration-form link, exactly once.
+       - already invited      -> already sent the welcome link, hasn't
+                                  submitted yet: do NOT resend it
+                                  (duplicate-message prevention) — tracked
+                                  in invitation_tracker.py, NOT in the
+                                  database.
 
 IMPORTANT: nothing here ever writes to the client database. A client
 record is created exactly once through THIS pipeline — when they actually
 submit the registration/update form (Service/WhatsAppInquiryHandlingService/
-inquiry_form_service.py:submit_form). Being sent a link, or even asked to
-update, produces no database entry on its own; only their own submitted
-data does.
+inquiry_form_service.py:submit_form). Being sent a link produces no
+database entry on its own; only their own submitted data does.
 
 The one thing that CAN create a record without any of that happening is a
 website enquiry (Service/LandingPageService/landing_page_service.py's
@@ -49,15 +44,13 @@ actually messages this number.
 
 from __future__ import annotations
 
-from typing import List, Optional
+from typing import List
 
 from Agent.WhatsAppInquiryHandlingAgent import inquiry_classifier
 from Config.settings import get_settings
 from Middleware import step_logger
-from Model.WhatsAppInquiryHandlingModel.client_record import ClientRecord
 from Model.WhatsAppInquiryHandlingModel.inquiry_message import InquiryChatMessage
 from Service.WhatsAppInquiryHandlingService import (
-    assignment_lock_service,
     client_store,
     form_token_service,
     inquiry_connection_store,
@@ -69,44 +62,11 @@ from Service.WhatsAppInquiryHandlingService.phone_utils import normalize_phone
 _property_inquiry_count = 0
 _non_property_count = 0
 
-_AWAITING_UPDATE_CONFIRMATION = "awaiting_update_confirmation"
-
-# Deliberately plain, common English/Hinglish yes/no words — this is a
-# closed question we just asked, not open text, so a small fixed set covers
-# the overwhelming majority of real replies without needing an LLM call.
-_AFFIRMATIVE_WORDS = {"yes", "y", "yeah", "yep", "yup", "sure", "ok", "okay", "update", "haan", "ha"}
-_NEGATIVE_WORDS = {"no", "n", "nope", "nah", "nahi", "not now", "no thanks", "no need"}
-
 _WELCOME_TEXT_TEMPLATE = (
     "Welcome to Manibhadra Real Estate! \n"
     "Thanks for reaching out — we'd love to help you find the right property.\n"
     "Please share your requirements here so our team can assist you better:\n{link}"
 )
-
-_EXISTING_CLIENT_TEXT_TEMPLATE = (
-    "Welcome back to Manibhadra Real Estate!\n"
-    "Here's what we currently have on file for you:\n{summary}\n\n"
-    "Would you like to update your requirements? Reply YES to update, or NO if this is still correct."
-)
-
-_UPDATE_LINK_TEXT_TEMPLATE = "Sure! Update your requirements here:\n{link}"
-
-# Sent instead of a form link when this client has used up the online
-# updates the form will accept (see inquiry_form_service.
-# MAX_REQUIREMENT_SUBMISSIONS). Checked BEFORE a link is minted for exactly
-# the same reason the assignment lock is: handing someone a link that is
-# certain to be refused at the end wastes their time and teaches them the
-# system is broken.
-_UPDATE_LIMIT_TEXT = (
-    "Of course! One small thing — you've already updated your requirements three times through "
-    "the online form, which is as many as it can take.\n\n"
-    "Please don't worry though: just tell us here what you'd like changed, or give us a call, and one "
-    "of our team will update it for you personally right away."
-)
-
-_KEEP_EXISTING_TEXT = "No problem — we'll keep your existing requirements as they are. Feel free to reach out anytime!"
-
-_CLARIFY_YES_NO_TEXT = "Sorry, I didn't quite get that — please reply YES to update your requirements, or NO to keep them as they are."
 
 
 def handle_batch_ready(phone: str, messages: List[InquiryChatMessage]) -> None:
@@ -136,14 +96,23 @@ def handle_batch_ready(phone: str, messages: List[InquiryChatMessage]) -> None:
     # enquired on the public site, NOT that it ever actually texted this
     # WhatsApp number before — treated as no record at all for everything
     # below, so a first-time texter still gets the real new-client welcome
-    # + registration link, never the "welcome back" existing-client
-    # greeting for a conversation that never happened. Its pending_action
-    # is always None (only the real flow below ever sets that), so this
-    # substitution is safe for the check just below too.
+    # + registration link, not silently ignored for a conversation that
+    # never happened.
     real_existing_client = existing_client if existing_client is not None and existing_client.status != "website_lead" else None
 
-    if real_existing_client is not None and real_existing_client.pending_action == _AWAITING_UPDATE_CONFIRMATION:
-        _handle_update_confirmation_reply(client_phone, real_existing_client, messages)
+    # This is the whole "stop listening once they've submitted the form"
+    # rule: checked FIRST, before the LLM classifier ever runs, so a message
+    # from a phone that already has a real client record costs nothing and
+    # produces no reply at all. It stays this way until the owner deletes
+    # the client record (see delete_client in
+    # Controller/WhatsAppInquiryHandlingController/
+    # whatsapp_inquiry_controller.py), at which point real_existing_client
+    # is None again and this phone is treated as a first-time texter.
+    if real_existing_client is not None:
+        step_logger.info(
+            f"[Inquiry] {client_phone}: already an existing client (requirements already submitted) — "
+            "message ignored, not sent to the LLM, no reply sent."
+        )
         return
 
     classification = inquiry_classifier.classify_batch(messages)
@@ -159,9 +128,7 @@ def handle_batch_ready(phone: str, messages: List[InquiryChatMessage]) -> None:
     _property_inquiry_count += 1
     reason = classification.reason or "no reason given"
 
-    if real_existing_client is not None:
-        _greet_existing_client(client_phone, real_existing_client, reason)
-    elif invitation_tracker.was_invited(client_phone):
+    if invitation_tracker.was_invited(client_phone):
         step_logger.info(
             f"[Inquiry] {client_phone}: already invited, hasn't submitted the form yet ({reason}) — "
             "welcome message already sent once, not resending."
@@ -188,109 +155,6 @@ def _start_new_client(phone: str, reason: str) -> None:
         step_logger.error(
             f"[Inquiry] {phone}: NEW client, property-related ({reason}) — FAILED to send welcome message."
         )
-
-
-def _greet_existing_client(phone: str, record: ClientRecord, reason: str) -> None:
-    summary = _summarize_requirements(record)
-    sent = outbound_messenger.send_text(phone, _EXISTING_CLIENT_TEXT_TEMPLATE.format(summary=summary))
-    if sent:
-        step_logger.success(
-            f"[Inquiry] {phone}: EXISTING client, property-related ({reason}) — existing-data summary sent, "
-            "awaiting yes/no reply."
-        )
-    else:
-        step_logger.error(
-            f"[Inquiry] {phone}: EXISTING client, property-related ({reason}) — FAILED to send summary message."
-        )
-        return  # don't mark them as "awaiting a reply" to a message they never received
-
-    # Only set once the message actually sent (see the early return above)
-    # — this is exactly what routes their NEXT batch to
-    # _handle_update_confirmation_reply instead of back through the LLM
-    # classifier. This DOES write to the database, but it's an update to an
-    # existing row (they already have one, from their earlier submission),
-    # never a new row.
-    client_store.upsert_client(record.model_copy(update={"pending_action": _AWAITING_UPDATE_CONFIRMATION}))
-
-
-def _handle_update_confirmation_reply(phone: str, record: ClientRecord, messages: List[InquiryChatMessage]) -> None:
-    combined_text = " ".join(m.text.strip() for m in messages if m.text.strip())
-    answer = _interpret_yes_no(combined_text)
-
-    if answer is None:
-        outbound_messenger.send_text(phone, _CLARIFY_YES_NO_TEXT)
-        step_logger.info(
-            f"[Inquiry] {phone}: reply to update-confirmation wasn't a clear yes/no ({combined_text!r}) — "
-            "asked to clarify, still awaiting reply."
-        )
-        return  # pending_action stays set — still waiting on a clear answer
-
-    # Cleared either way, once we have a definite answer — this client is no
-    # longer "awaiting" anything, so their next message goes through normal
-    # classification again, not back through this handler.
-    client_store.upsert_client(record.model_copy(update={"pending_action": None}))
-
-    if answer is True:
-        # Checked BEFORE a link is minted, not after it is submitted: a
-        # client with a site visit already assigned to an agent can't change
-        # their requirements online at all (see assignment_lock_service.py),
-        # so sending them a form to fill in would only waste their time and
-        # end in a refusal. They get the explanation straight away instead.
-        if assignment_lock_service.has_active_assignment(phone):
-            assignment_lock_service.send_locked_notice(phone, record)
-            return
-
-        # Same "check before minting, not after submitting" rule, for the
-        # other reason a submission can be refused. Lazy import to keep this
-        # module's import graph free of the form service, which imports the
-        # Instagram feature.
-        from Service.WhatsAppInquiryHandlingService import inquiry_form_service
-
-        if record.requirement_submission_count >= inquiry_form_service.MAX_REQUIREMENT_SUBMISSIONS:
-            sent = outbound_messenger.send_text(phone, _UPDATE_LIMIT_TEXT)
-            step_logger.info(
-                f"[Inquiry] {phone}: confirmed YES to update but has used all "
-                f"{inquiry_form_service.MAX_REQUIREMENT_SUBMISSIONS} online submissions — no link minted "
-                f"({'explanation sent' if sent else 'FAILED TO SEND explanation'})."
-            )
-            return
-
-        link = _build_form_link(phone)
-        sent = outbound_messenger.send_text(phone, _UPDATE_LINK_TEXT_TEMPLATE.format(link=link))
-        step_logger.success(
-            f"[Inquiry] {phone}: confirmed YES to update — form link {'sent' if sent else 'FAILED TO SEND'}: {link}"
-        )
-    else:
-        sent = outbound_messenger.send_text(phone, _KEEP_EXISTING_TEXT)
-        step_logger.success(
-            f"[Inquiry] {phone}: confirmed NO — keeping existing requirements "
-            f"({'closing message sent' if sent else 'FAILED TO SEND closing message'})."
-        )
-
-
-def _interpret_yes_no(combined_text: str) -> Optional[bool]:
-    """Deterministic, not LLM-driven — see the module docstring. Returns
-    True (yes), False (no), or None (couldn't tell, needs clarification).
-    Never guesses when unsure: for a business-critical flow, silently
-    misreading an unclear reply as yes/no is worse than asking again."""
-    normalized = combined_text.strip().lower().strip(".!?")
-    if not normalized:
-        return None
-    first_word = normalized.split()[0]
-    if normalized in _AFFIRMATIVE_WORDS or first_word in _AFFIRMATIVE_WORDS:
-        return True
-    if normalized in _NEGATIVE_WORDS or first_word in _NEGATIVE_WORDS:
-        return False
-    return None
-
-
-def _summarize_requirements(record: ClientRecord) -> str:
-    """Delegates to assignment_lock_service so the "here's what we have
-    for you" block reads identically whether it arrives in this
-    welcome-back message or in that module's refusal message — a client
-    comparing the two should be reading the same words about the same
-    data."""
-    return assignment_lock_service.summarize_requirements(record)
 
 
 def _build_form_link(phone: str) -> str:

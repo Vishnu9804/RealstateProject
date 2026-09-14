@@ -19,7 +19,6 @@ from Model.WhatsAppInquiryHandlingModel.client_record import ClientRecord
 _COLUMNS = (
     "phone",
     "status",
-    "pending_action",
     "name",
     "email",
     "purpose",
@@ -29,6 +28,7 @@ _COLUMNS = (
     "budget_max_inr",
     "preferred_areas",
     "additional_requirements",
+    "property_sizes",
     "requirement_submission_count",
     "assigned_agent_id",
     "handoff_sent_at",

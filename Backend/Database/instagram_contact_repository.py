@@ -30,6 +30,7 @@ _COLUMNS = (
     "budget_max_inr",
     "preferred_areas",
     "additional_requirements",
+    "property_sizes",
     "requirement_submission_count",
 )
 

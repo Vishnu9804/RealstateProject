@@ -27,53 +27,90 @@ export class ApiError extends Error {
   }
 }
 
+// The one place the login token is stored/read — AuthProvider (see
+// state/AuthProvider.tsx) is the only other thing that touches this key
+// directly, for restoring/clearing a session; every other piece of the app
+// just gets the header attached automatically below.
+export const AUTH_TOKEN_STORAGE_KEY = "authToken";
+
+export function getStoredAuthToken(): string | null {
+  try {
+    return localStorage.getItem(AUTH_TOKEN_STORAGE_KEY);
+  } catch {
+    // Private-browsing/storage-disabled edge case — same "just act logged
+    // out" fallback AuthProvider uses on the same failure.
+    return null;
+  }
+}
+
+export function setStoredAuthToken(token: string): void {
+  try {
+    localStorage.setItem(AUTH_TOKEN_STORAGE_KEY, token);
+  } catch {
+    // Nothing to do — a session that can't persist still works for the
+    // current tab's lifetime, it just won't survive a refresh.
+  }
+}
+
+export function clearStoredAuthToken(): void {
+  try {
+    localStorage.removeItem(AUTH_TOKEN_STORAGE_KEY);
+  } catch {
+    // See setStoredAuthToken.
+  }
+}
+
+type ExtraHeaders = Record<string, string>;
+
 /**
- * Content-Type is attached only when there is actually a body to describe.
- *
- * It reads as harmless boilerplate on a GET, but it is not: the backend is
- * a different origin (a different port is a different origin), and
- * "application/json" is not one of the values CORS lets through without
- * asking first. So every bodyless request carrying it became TWO round
- * trips — an OPTIONS preflight, then the real request. Dropping it makes a
- * GET a "simple" request, which the browser sends straight out.
- *
- * It also unblocks HTTP caching in practice: fewer moving parts between the
- * request and the browser's cache, and the conditional-request exchange
- * (see Backend/Middleware/http_cache.py) is only worth having if asking
- * "has this changed?" is genuinely cheaper than re-fetching.
+ * Content-Type only when there is a body (keeps preflights narrow). A 401 ends
+ * the session app-wide via "auth:unauthorized" — but only if the token that
+ * request carried is still the stored one, so a sign-in that happened while
+ * an older request was in flight is never undone by it.
  */
-async function request<T>(path: string, options?: RequestInit): Promise<T> {
+async function send(path: string, options?: RequestInit): Promise<Response> {
   const hasBody = options?.body !== undefined;
+  const token = getStoredAuthToken();
   const response = await fetch(`${API_BASE_URL}${path}`, {
-    // `...options` first, headers last: spreading options AFTER the headers
-    // would let an options object that carries its own `headers` replace the
-    // computed ones wholesale rather than merge with them.
     ...options,
     headers: {
       ...(hasBody ? { "Content-Type": "application/json" } : {}),
+      ...(token ? { Authorization: `Bearer ${token}` } : {}),
       ...options?.headers,
     },
   });
+
+  if (response.status === 401 && getStoredAuthToken() === token) {
+    clearStoredAuthToken();
+    window.dispatchEvent(new Event("auth:unauthorized"));
+  }
 
   if (!response.ok) {
     const body = await response.json().catch(() => null);
     const message = body?.detail ?? response.statusText;
     throw new ApiError(response.status, typeof message === "string" ? message : JSON.stringify(message));
   }
+  return response;
+}
 
+async function request<T>(path: string, options?: RequestInit): Promise<T> {
+  const response = await send(path, options);
   if (response.status === 204) {
     return undefined as T;
   }
   return (await response.json()) as T;
 }
 
+const jsonBody = (body: unknown) => (body !== undefined ? JSON.stringify(body) : undefined);
+
 export const apiClient = {
   get: <T,>(path: string): Promise<T> => request<T>(path),
-  post: <T,>(path: string, body?: unknown): Promise<T> =>
-    request<T>(path, { method: "POST", body: body !== undefined ? JSON.stringify(body) : undefined }),
-  put: <T,>(path: string, body?: unknown): Promise<T> =>
-    request<T>(path, { method: "PUT", body: body !== undefined ? JSON.stringify(body) : undefined }),
-  patch: <T,>(path: string, body?: unknown): Promise<T> =>
-    request<T>(path, { method: "PATCH", body: body !== undefined ? JSON.stringify(body) : undefined }),
-  delete: <T,>(path: string): Promise<T> => request<T>(path, { method: "DELETE" }),
+  getBlob: async (path: string): Promise<Blob> => (await send(path, { cache: "no-store" })).blob(),
+  post: <T,>(path: string, body?: unknown, headers?: ExtraHeaders): Promise<T> =>
+    request<T>(path, { method: "POST", body: jsonBody(body), headers }),
+  put: <T,>(path: string, body?: unknown, headers?: ExtraHeaders): Promise<T> =>
+    request<T>(path, { method: "PUT", body: jsonBody(body), headers }),
+  patch: <T,>(path: string, body?: unknown, headers?: ExtraHeaders): Promise<T> =>
+    request<T>(path, { method: "PATCH", body: jsonBody(body), headers }),
+  delete: <T,>(path: string, headers?: ExtraHeaders): Promise<T> => request<T>(path, { method: "DELETE", headers }),
 };

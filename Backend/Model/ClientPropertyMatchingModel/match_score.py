@@ -36,3 +36,8 @@ class MatchScore(BaseModel):
     property_category: str
     field_scores: Dict[str, Optional[float]] = {}
     reason: str
+    # Which of the client's property types this property was matched
+    # under, set only when the client picked more than one (see
+    # scoring.score_client_property). None everywhere else, including every
+    # broker-requirement match.
+    matched_type: Optional[str] = None

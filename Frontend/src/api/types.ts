@@ -156,7 +156,6 @@ export interface InquiryFormSubmission {
 export interface InquiryClientRecord {
   phone: string;
   status: string;
-  pending_action: string | null;
   name: string | null;
   email: string | null;
   purpose: string | null;
@@ -166,6 +165,10 @@ export interface InquiryClientRecord {
   budget_max_inr: number | null;
   preferred_areas: string | null;
   additional_requirements: string | null;
+  /** The optional size the client gave for each type in `property_type`
+   *  (which lists every type they picked, comma-separated):
+   *  {"Flat": "1200 sqft", "Bungalow": "200 vaar"}. Null when none. */
+  property_sizes?: Record<string, string> | null;
   /** AgentManagement feature — which agent (if any) is handling this
    *  client's site visit, and whether the WhatsApp hand-off messages were
    *  ever sent. See Backend/Database/client_models.py's own comment. */
@@ -315,6 +318,10 @@ export interface MatchedProperty {
   property_category: string;
   field_scores: Record<string, number | null>;
   reason: string;
+  /** Which of the client's property types this matched — set only for a
+   *  client who picked more than one, and what the matches dialog's type
+   *  tabs split on. */
+  matched_type?: string | null;
   property_type: string | null;
   bhk: string | null;
   society_name: string | null;
@@ -659,3 +666,47 @@ export interface BrokerRequirementRecord {
 /* Area knowledge base types moved to Dashboard/ — see
    Dashboard/src/api/types.ts. That feature's tab (now "Surat Area
    Knowledge Base") lives in the Dashboard app, not here. */
+
+/**
+ * Mirrors Backend/Model/AuthManagementModel/user_record.py's UserSummary —
+ * never carries the password hash (that never leaves the backend). "admin"
+ * can do everything, including delete anything and manage employee
+ * accounts; "employee" can do everything EXCEPT delete and account
+ * management — see Service/AuthManagementService/auth_dependencies.py.
+ */
+export type UserRole = "admin" | "employee";
+
+export interface UserSummary {
+  user_id: string;
+  username: string;
+  role: UserRole;
+  /** Admin still signing in with ADMIN_PASSWORD from the server's .env. */
+  using_initial_password?: boolean;
+  created_at: string | null;
+  updated_at: string | null;
+}
+
+/** Mirrors Backend/Model/AuthManagementModel/user_record.py's LoginResult. */
+export interface LoginResult {
+  access_token: string;
+  token_type: string;
+  user: UserSummary;
+}
+
+export interface OwnerVerificationStatus {
+  method: "whatsapp" | "password";
+  available: boolean;
+  reason: "no_whatsapp_connection" | "invalid_owner_phone" | null;
+  phone_hint: string | null;
+}
+
+export interface VerificationCodeResult {
+  status: "sent" | "cooldown" | "unavailable" | "not_configured";
+  retry_after_seconds: number;
+  phone_hint: string | null;
+}
+
+export interface OwnerVerificationGrant {
+  verification_token: string;
+  expires_in_seconds: number;
+}

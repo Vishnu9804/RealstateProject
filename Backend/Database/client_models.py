@@ -20,7 +20,7 @@ from datetime import datetime
 from typing import List, Optional
 
 from pgvector.sqlalchemy import Vector
-from sqlalchemy import DateTime, Float, Integer, String, Text, func
+from sqlalchemy import JSON, DateTime, Float, Integer, String, Text, func
 from sqlalchemy.orm import DeclarativeBase, Mapped, column_property, mapped_column
 
 from Service.WhatsAppDataFetchingService.embedding_service import EMBEDDING_DIMENSIONS
@@ -42,23 +42,14 @@ class ClientRow(ClientBase):
 
     # "pending_registration" (welcome message + form link sent, no
     # submission yet) or "registered" (has submitted the form at least
-    # once). Drives the 3-way branch in inquiry_pipeline_service.py: a
+    # once). Drives the branch in inquiry_pipeline_service.py: a
     # brand-new number gets the welcome message exactly once — a second
     # qualifying message from the same number while still
     # pending_registration must NOT re-trigger it (duplicate-message
-    # prevention), and only a "registered" client gets the
-    # existing-data/update flow instead of the welcome flow.
+    # prevention) — and a "registered" client's messages are ignored
+    # outright (see handle_batch_ready's module docstring), never
+    # re-triggering the welcome flow.
     status: Mapped[str] = mapped_column(String, nullable=False, default="pending_registration")
-
-    # Set while we're waiting on a specific yes/no reply from this client —
-    # currently only "awaiting_update_confirmation", set by
-    # inquiry_pipeline_service._greet_existing_client(). When set, the next
-    # incoming batch from this phone is interpreted directly as yes/no
-    # (see _handle_update_confirmation_reply) instead of being re-classified
-    # by the LLM — deterministic and far more reliable than an LLM guess for
-    # a closed question we just asked ourselves, and cheaper (requirement
-    # #4: don't send unnecessary context to the LLM).
-    pending_action: Mapped[Optional[str]] = mapped_column(String, nullable=True)
 
     # --- client info ---
     name: Mapped[Optional[str]] = mapped_column(String, nullable=True)
@@ -72,6 +63,14 @@ class ClientRow(ClientBase):
     budget_max_inr: Mapped[Optional[float]] = mapped_column(Float, nullable=True)
     preferred_areas: Mapped[Optional[str]] = mapped_column(String, nullable=True)
     additional_requirements: Mapped[Optional[str]] = mapped_column(Text, nullable=True)
+    # The optional size a client gave for EACH property type they picked,
+    # keyed by the type exactly as it appears in `property_type` (which now
+    # holds every picked type, comma-separated: "Flat, Bungalow"), e.g.
+    # {"Flat": "1200 sqft", "Bungalow": "200 vaar"}. Free text on purpose —
+    # people write a size in any format and any language, and
+    # Service/ClientPropertyMatchingService/normalization.py reads what it
+    # can out of it. NULL for every client written before this existed.
+    property_sizes: Mapped[Optional[dict]] = mapped_column(JSON(none_as_null=True), nullable=True)
 
     # --- public-form abuse guard ---
     # How many times the PUBLIC requirements form has been completed for
@@ -229,6 +228,7 @@ class InstagramContactRow(ClientBase):
     budget_max_inr: Mapped[Optional[float]] = mapped_column(Float, nullable=True)
     preferred_areas: Mapped[Optional[str]] = mapped_column(String, nullable=True)
     additional_requirements: Mapped[Optional[str]] = mapped_column(Text, nullable=True)
+    property_sizes: Mapped[Optional[dict]] = mapped_column(JSON(none_as_null=True), nullable=True)
 
     created_at: Mapped[datetime] = mapped_column(DateTime(timezone=True), server_default=func.now())
     updated_at: Mapped[datetime] = mapped_column(

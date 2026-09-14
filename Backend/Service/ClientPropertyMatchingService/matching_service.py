@@ -45,6 +45,7 @@ _REQUIREMENT_FIELDS = (
     "budget_max_inr",
     "preferred_areas",
     "additional_requirements",
+    "property_sizes",
 )
 
 # How many stored properties get scored per recompute. The property table
@@ -76,13 +77,15 @@ def recompute_for_client(phone: str) -> Optional[ClientMatchResult]:
     scores: List[MatchScore] = []
     if has_requirements(client):
         vector = _embed_requirements(client)
-        # score_property returns None for anything below scoring.LOW_CUTOFF
-        # (currently 70%) — filtered out here so those never reach the
-        # cache or the dashboard, in any bucket.
+        plan = scoring.client_type_plan(client)
+        # score_client_property returns None for anything below
+        # scoring.LOW_CUTOFF (currently 70%) — filtered out here so those
+        # never reach the cache or the dashboard, in any bucket.
         scores = [
             score
             for prop in property_vector_store.get_all_properties(limit=_MAX_PROPERTIES_SCORED)
-            if _is_matchable(prop) and (score := scoring.score_property(client, prop, vector)) is not None
+            if _is_matchable(prop)
+            and (score := scoring.score_client_property(client, prop, vector, plan)) is not None
         ]
 
     computed_at = _now()
@@ -124,10 +127,11 @@ def rescore_changed_properties(
     if not has_requirements(client):
         return 0
     vector = stored_vector if stored_vector else _embed_requirements(client)
+    plan = scoring.client_type_plan(client)
     scores = [
         score
         for prop in changed
-        if _is_matchable(prop) and (score := scoring.score_property(client, prop, vector)) is not None
+        if _is_matchable(prop) and (score := scoring.score_client_property(client, prop, vector, plan)) is not None
     ]
     # Everything looked at, matchable or not — see
     # matching_repository.merge_matches_for_client for why the merge needs
@@ -241,6 +245,7 @@ def has_requirements(client: ClientRecord) -> bool:
             client.budget_max_inr is not None,
             client.preferred_areas,
             client.additional_requirements,
+            client.property_sizes,
         ]
     )
 
@@ -248,9 +253,9 @@ def has_requirements(client: ClientRecord) -> bool:
 def requirement_fields_changed(previous: Optional[ClientRecord], current: ClientRecord) -> bool:
     """Whether any REQUIREMENT field differs between the two records —
     deliberately narrower than "the record changed at all", so a
-    pending_action toggle or a name/email-only edit doesn't trigger a
-    pointless recompute. See client_store.upsert_client, the single choke
-    point every client write goes through."""
+    name/email-only edit doesn't trigger a pointless recompute. See
+    client_store.upsert_client, the single choke point every client write
+    goes through."""
     if previous is None:
         return any(getattr(current, name) is not None for name in _REQUIREMENT_FIELDS)
     return any(getattr(previous, name) != getattr(current, name) for name in _REQUIREMENT_FIELDS)

@@ -5,8 +5,8 @@ import CommandPalette, { useCommandPalette } from "./CommandPalette";
 import { ThemeToggle } from "./ui/Theme";
 import { Tip } from "./ui/Primitives";
 import {
+  IconBuilding,
   IconCommand,
-  IconDatabase,
   IconGrid,
   IconInbox,
   IconLink,
@@ -27,11 +27,14 @@ const NAV = [
   // halves of the same intake, and reading one usually means reading the
   // other.
   { to: "/requirements", end: false, label: "Broker Requirements", icon: IconInbox },
+  // The third half of supply: properties added by hand rather than
+  // captured from WhatsApp — the same fields as Properties, kept apart
+  // from them (see BuilderProjectsPage.tsx).
+  { to: "/builder-projects", end: false, label: "Builder Projects", icon: IconBuilding },
   { to: "/landing-page", end: false, label: "Landing Page", icon: IconWindow },
   { to: "/inquiries", end: false, label: "Inquiries", icon: IconUsers },
   { to: "/agents", end: false, label: "Agents", icon: IconUserCheck },
   { to: "/settings", end: false, label: "Settings", icon: IconSliders },
-  { to: "/temporary", end: false, label: "Temporary", icon: IconDatabase },
 ];
 
 export default function Layout() {

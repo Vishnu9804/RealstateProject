@@ -5,9 +5,10 @@ complete_visit/get_all_visits once DATABASE_URL is set.
 
 from __future__ import annotations
 
+from datetime import datetime
 from typing import List, Optional
 
-from sqlalchemy import select
+from sqlalchemy import select, update
 
 from Database.agent_visit_models import AgentVisitRow
 from Database.client_session import get_client_session
@@ -24,6 +25,7 @@ _COLUMNS = (
     "budget_min_inr",
     "budget_max_inr",
     "notes",
+    "scheduled_at",
 )
 
 
@@ -37,6 +39,7 @@ def create_visit(
     budget_min_inr: Optional[float],
     budget_max_inr: Optional[float],
     notes: Optional[str],
+    scheduled_at: Optional[datetime] = None,
 ) -> VisitRecord:
     with get_client_session() as session:
         row = AgentVisitRow(
@@ -49,6 +52,7 @@ def create_visit(
             budget_min_inr=budget_min_inr,
             budget_max_inr=budget_max_inr,
             notes=notes,
+            scheduled_at=scheduled_at,
         )
         session.add(row)
         session.flush()
@@ -107,6 +111,30 @@ def delete_visit(visit_id: str) -> bool:
             return False
         session.delete(row)
         return True
+
+
+def get_unfollowed_completed_since(since: datetime) -> List[VisitRecord]:
+    """Visit-reminder scheduler's read: completed visits from `since`
+    onward whose next-day follow-up has not been sent."""
+    stmt = select(AgentVisitRow).where(
+        AgentVisitRow.followup_sent_at.is_(None),
+        AgentVisitRow.completed_at >= since,
+    )
+    with get_client_session() as session:
+        rows = list(session.execute(stmt).scalars().all())
+    return [_to_pydantic(row) for row in rows]
+
+
+def mark_followups_sent(visit_ids: List[str], sent_at: datetime) -> None:
+    if not visit_ids:
+        return
+    with get_client_session() as session:
+        session.execute(
+            update(AgentVisitRow)
+            .where(AgentVisitRow.visit_id.in_(visit_ids))
+            .values(followup_sent_at=sent_at)
+            .execution_options(synchronize_session=False)
+        )
 
 
 def _to_pydantic(row: AgentVisitRow) -> VisitRecord:

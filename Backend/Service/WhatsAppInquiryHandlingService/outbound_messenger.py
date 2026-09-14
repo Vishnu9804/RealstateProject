@@ -32,3 +32,15 @@ def send_text(phone: str, text: str, connection_id: Optional[str] = None) -> boo
         step_logger.error(f"Cannot send WhatsApp message to {phone}: no connected number is available to send from.")
         return False
     return client.send_text(phone, text)
+
+
+def send_image(phone: str, image: bytes, caption: Optional[str] = None, connection_id: Optional[str] = None) -> bool:
+    """A photo with an optional caption (one WhatsApp message) — same
+    sender choice and fallback as send_text."""
+    client = whatsapp_connection_manager.get_sender_client(
+        prefer_role="inquiry", connection_id=connection_id
+    )
+    if client is None:
+        step_logger.error(f"Cannot send WhatsApp image to {phone}: no connected number is available to send from.")
+        return False
+    return client.send_image(phone, image, caption)

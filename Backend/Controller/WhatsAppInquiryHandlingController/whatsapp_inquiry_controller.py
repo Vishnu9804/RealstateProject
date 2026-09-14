@@ -3,10 +3,10 @@ logic lives in Service/WhatsAppInquiryHandlingService/whatsapp_inquiry_service.p
 this module only translates HTTP <-> Service.
 """
 
+from datetime import datetime, timezone
 from typing import Dict, List, Optional
 
 from fastapi import APIRouter, HTTPException
-from pydantic import BaseModel
 from pydantic import BaseModel
 
 from Model.WhatsAppInquiryHandlingModel.client_record import ClientRecord
@@ -17,6 +17,7 @@ from Service.WhatsAppInquiryHandlingService import (
     client_store,
     inquiry_connection_store,
     invitation_tracker,
+    manual_client_service,
     outbound_messenger,
     whatsapp_inquiry_service,
 )
@@ -71,6 +72,83 @@ def create_manual_link(request: ManualLinkRequest) -> ManualLinkResponse:
     return ManualLinkResponse(url=url, phone=phone)
 
 
+class ClientDetailsRequest(BaseModel):
+    """The Inquiries page's own Add/Edit client dialog — see
+    Service/WhatsAppInquiryHandlingService/manual_client_service.py. On a
+    PATCH only the fields actually present in the JSON body are applied (the
+    route's exclude_unset), so the dialog sends just what changed, and
+    `photo_url` in particular is touched only when it is sent (null clears
+    it) — an edit that never loaded the photo can never wipe it."""
+
+    name: Optional[str] = None
+    email: Optional[str] = None
+    purpose: Optional[str] = None
+    property_type: Optional[str] = None
+    bhk: Optional[str] = None
+    budget_min_inr: Optional[float] = None
+    budget_max_inr: Optional[float] = None
+    preferred_areas: Optional[str] = None
+    additional_requirements: Optional[str] = None
+    # A data URL, already resized in the browser.
+    photo_url: Optional[str] = None
+
+
+class ClientCreateRequest(ClientDetailsRequest):
+    # Any reasonable spelling — normalized to E.164 before anything is
+    # stored, exactly like every other client identity.
+    phone: str
+
+
+class ClientPhoto(BaseModel):
+    photo_url: Optional[str] = None
+
+
+# What each refused save means over HTTP. Nothing is written for any of them.
+_MANUAL_CLIENT_ERRORS = {
+    "invalid_phone": (400, "That doesn't look like a valid phone number."),
+    "invalid_photo": (400, "That photo couldn't be read — please choose an image file."),
+    "exists": (409, "A client with this number already exists — find them in the list and use Edit."),
+    "not_found": (404, "No client found for that phone number."),
+    "locked": (409, manual_client_service.LOCKED_MESSAGE),
+}
+
+
+def _manual_client_response(result: manual_client_service.ManualClientResult) -> ClientRecord:
+    if result.outcome == "ok" and result.client is not None:
+        return result.client
+    status_code, detail = _MANUAL_CLIENT_ERRORS.get(result.outcome, (400, "This client couldn't be saved."))
+    raise HTTPException(status_code=status_code, detail=detail)
+
+
+@router.post("/clients", response_model=ClientRecord, status_code=201)
+def create_client(body: ClientCreateRequest) -> ClientRecord:
+    """The Inquiries page's "Add" dialog: registers a client typed in by
+    staff, photo included, without opening anything on the public site."""
+    fields = body.model_dump(include=set(manual_client_service.DETAIL_FIELDS))
+    return _manual_client_response(manual_client_service.create_client(body.phone, fields, body.photo_url))
+
+
+@router.patch("/clients/{phone}", response_model=ClientRecord)
+def update_client(phone: str, body: ClientDetailsRequest) -> ClientRecord:
+    """The Inquiries page's "Edit" dialog — pre-filled from what we hold,
+    and saving only what changed."""
+    sent = body.model_dump(exclude_unset=True)
+    update_photo = "photo_url" in sent
+    photo_url = sent.pop("photo_url", None)
+    return _manual_client_response(manual_client_service.update_client(phone, sent, photo_url, update_photo))
+
+
+@router.get("/clients/{phone}/photo", response_model=ClientPhoto)
+def get_client_photo(phone: str) -> ClientPhoto:
+    """One client's photo, on its own — the client list only ever says
+    whether there is one (ClientRecord.has_photo), so opening the Inquiries
+    page never moves photo data."""
+    found, photo_url = client_store.get_client_photo(phone)
+    if not found:
+        raise HTTPException(status_code=404, detail="No client found for that phone number.")
+    return ClientPhoto(photo_url=photo_url)
+
+
 @router.get("/clients/{phone}", response_model=ClientRecord)
 def get_client(phone: str) -> ClientRecord:
     """`phone` should be E.164 (e.g. "+919876543210") — the same canonical
@@ -102,6 +180,10 @@ class HandoffPropertyRef(BaseModel):
 
     record_id: str
     label: str
+    # When the site visit is booked for, if the operator picked a time in
+    # the matches dialog's visit planner; None when they skipped it (it can
+    # be set later from the dialog's Assigned tab).
+    scheduled_at: Optional[datetime] = None
 
 
 class AgentHandoffMessage(BaseModel):
@@ -157,12 +239,19 @@ def send_handoff(phone: str, body: HandoffSendRequest) -> HandoffSendResult:
     recording that a hand-off was attempted; the assignment itself is a
     business decision made before sending, not contingent on delivery."""
     agent_results = []
+    # Who these visits are for, read once for the whole hand-off rather than
+    # once per property (see agent_store.resolve_assignment_client).
+    assignment_client = agent_store.resolve_assignment_client(phone)
     for agent_message in body.agent_messages:
         target = normalize_phone(agent_message.agent_phone) or agent_message.agent_phone
         sent = outbound_messenger.send_text(target, agent_message.message)
         agent_results.append(AgentSendResult(agent_phone=agent_message.agent_phone, sent=sent))
-        for property_ref in agent_message.properties:
-            agent_store.record_assignment(agent_message.agent_id, phone, property_ref.record_id, property_ref.label)
+        agent_store.record_assignments(
+            agent_message.agent_id,
+            phone,
+            assignment_client,
+            [(ref.record_id, ref.label, _as_utc(ref.scheduled_at)) for ref in agent_message.properties],
+        )
     client_sent = outbound_messenger.send_text(phone, body.client_message)
 
     # None when this hand-off was for a website lead rather than a
@@ -173,6 +262,50 @@ def send_handoff(phone: str, body: HandoffSendRequest) -> HandoffSendResult:
     # a second time.
     updated = client_store.mark_handoff_sent(phone)
     return HandoffSendResult(agent_results=agent_results, client_sent=client_sent, client=updated)
+
+
+def _as_utc(value: Optional[datetime]) -> Optional[datetime]:
+    """The frontend always sends an ISO instant with its offset; a bare one
+    is read as UTC rather than left to the database session's timezone."""
+    if value is not None and value.tzinfo is None:
+        return value.replace(tzinfo=timezone.utc)
+    return value
+
+
+class VisitMessagesRequest(BaseModel):
+    """The matches dialog's "tell them about the new visit time" step —
+    shown right after a visit time is set or changed on the Assigned tab.
+    Both messages are already rendered (and possibly edited) on the
+    frontend; a blank one is simply not sent."""
+
+    agent_phone: Optional[str] = None
+    agent_message: Optional[str] = None
+    client_message: Optional[str] = None
+
+
+class VisitMessagesResult(BaseModel):
+    """None = not attempted (that message was blank); True/False = whether
+    the WhatsApp actually went out."""
+
+    agent_sent: Optional[bool] = None
+    client_sent: Optional[bool] = None
+
+
+@router.post("/clients/{phone}/visit-messages", response_model=VisitMessagesResult)
+def send_visit_messages(phone: str, body: VisitMessagesRequest) -> VisitMessagesResult:
+    """Delivers the visit-time messages over the connected inquiry WhatsApp
+    account, exactly as the hand-off does. Touches NO database table: the
+    time itself was already saved by PATCH /agents/{agent_id}/visits/schedule
+    before this step was even offered, which is what lets the operator skip
+    sending without losing the time."""
+    agent_sent: Optional[bool] = None
+    if body.agent_phone and body.agent_message and body.agent_message.strip():
+        target = normalize_phone(body.agent_phone) or body.agent_phone
+        agent_sent = outbound_messenger.send_text(target, body.agent_message)
+    client_sent: Optional[bool] = None
+    if body.client_message and body.client_message.strip():
+        client_sent = outbound_messenger.send_text(phone, body.client_message)
+    return VisitMessagesResult(agent_sent=agent_sent, client_sent=client_sent)
 
 
 class CancelResult(BaseModel):

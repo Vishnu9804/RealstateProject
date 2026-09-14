@@ -17,7 +17,7 @@ from __future__ import annotations
 
 import threading
 from datetime import datetime, timezone
-from typing import Dict, List, Optional, Set
+from typing import Dict, List, Optional, Set, Tuple
 
 from Database import client_repository
 from Database.client_session import is_client_database_configured
@@ -25,6 +25,10 @@ from Model.WhatsAppInquiryHandlingModel.client_record import ClientRecord
 
 # In-memory fallback only — untouched whenever the client database is configured.
 _clients: Dict[str, ClientRecord] = {}
+# In-memory fallback's stand-in for ClientRow.photo_url — kept apart from
+# _clients for the same reason that column is kept out of the upsert's
+# column list: every other write replaces the whole ClientRecord.
+_client_photos: Dict[str, str] = {}
 # Bumped on every in-memory upsert — the fallback's equivalent of
 # ClientRow.updated_at. Only ever read by get_clients_version below.
 _version_counter = 0
@@ -40,6 +44,8 @@ def upsert_client(
     record: ClientRecord,
     previous: Optional[ClientRecord] = None,
     defer_recompute: bool = False,
+    photo_url: Optional[str] = None,
+    update_photo: bool = False,
 ) -> ClientRecord:
     """`previous` is this client's state BEFORE this write, and is only ever
     an optimisation: callers that have already read the record (the
@@ -56,12 +62,18 @@ def upsert_client(
     matches are for the dashboard to show later. Every internal caller
     leaves it False and keeps the old, strictly-ordered behaviour, so
     nothing on the dashboard can read a half-computed result.
+
+    `update_photo=True` also sets this client's photo to `photo_url` (None
+    clears it), in the same write. Only the Inquiries page's own Add/Edit
+    dialog ever passes it — see Database/client_models.py's ClientRow.photo_url
+    for why every other caller must leave the photo alone, which they do by
+    simply not passing it.
     """
     if previous is None:
         previous = get_client_by_phone(record.phone)
 
     if is_client_database_configured():
-        saved = client_repository.upsert_client(record)
+        saved = client_repository.upsert_client(record, photo_url=photo_url, update_photo=update_photo)
     else:
         global _version_counter
         _version_counter += 1
@@ -69,10 +81,18 @@ def upsert_client(
         # enforces in client_repository.upsert_client — see the comment
         # there. Without it the two backends would disagree about the one
         # field whose whole purpose is to be hard to reset.
+        updates = {}
         if previous is not None and previous.requirement_submission_count > record.requirement_submission_count:
-            record = record.model_copy(
-                update={"requirement_submission_count": previous.requirement_submission_count}
-            )
+            updates["requirement_submission_count"] = previous.requirement_submission_count
+        if update_photo:
+            if photo_url:
+                _client_photos[record.phone] = photo_url
+            else:
+                _client_photos.pop(record.phone, None)
+        # Derived on every write, never taken from the caller's record — the
+        # in-memory mirror of ClientRow.has_photo being computed by Postgres.
+        updates["has_photo"] = record.phone in _client_photos
+        record = record.model_copy(update=updates)
         _clients[record.phone] = record
         saved = record
 
@@ -183,11 +203,23 @@ def delete_client(phone: str) -> bool:
     if is_client_database_configured():
         return client_repository.delete_client(phone)
     global _version_counter
+    # Before the existence check, so a photo can never outlive its client
+    # (the database path gets this for free: the photo is on the same row).
+    _client_photos.pop(phone, None)
     if phone not in _clients:
         return False
     del _clients[phone]
     _version_counter += 1
     return True
+
+
+def get_client_photo(phone: str) -> Tuple[bool, Optional[str]]:
+    """(found, photo_url) for one client — fetched on its own, only when a
+    client's details or Edit dialog is opened, never with the client list.
+    `found` tells "no such client" apart from "a client with no photo"."""
+    if is_client_database_configured():
+        return client_repository.get_client_photo(phone)
+    return phone in _clients, _client_photos.get(phone)
 
 
 def client_exists(phone: str) -> bool:

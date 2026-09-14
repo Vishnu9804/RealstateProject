@@ -1,4 +1,4 @@
-import { useEffect } from "react";
+import { useEffect, type ReactNode } from "react";
 import { createPortal } from "react-dom";
 import { Avatar, Badge, Button, Note } from "./ui/Primitives";
 import { IconAlert, IconInfo, IconSend, IconX } from "./ui/Icons";
@@ -53,6 +53,11 @@ export default function SendPropertiesDialog({
   onClose,
   onBack,
   backLabel = "Back",
+  messageLabel = "Message being sent",
+  messageRows = 14,
+  messageOptional = false,
+  canSendExtra = true,
+  children,
 }: {
   eyebrow: string;
   title: string;
@@ -78,6 +83,14 @@ export default function SendPropertiesDialog({
   /** Only supplied when there is a previous step to go back to. */
   onBack?: () => void;
   backLabel?: string;
+  messageLabel?: string;
+  messageRows?: number;
+  /** An empty main message may be sent (it is then simply skipped). */
+  messageOptional?: boolean;
+  /** Extra send condition from the caller's own fields in `children`. */
+  canSendExtra?: boolean;
+  /** Further editable messages, shown under the main one once loaded. */
+  children?: ReactNode;
 }) {
   useEffect(() => {
     const onKeyDown = (event: KeyboardEvent) => {
@@ -91,7 +104,7 @@ export default function SendPropertiesDialog({
   }, [onClose, sending]);
 
   const recipient = toName || toPhone;
-  const canSend = !loading && !sending && message.trim().length > 0;
+  const canSend = !loading && !sending && canSendExtra && (messageOptional || message.trim().length > 0);
 
   return createPortal(
     <div className="modal-scrim" onMouseDown={(event) => event.target === event.currentTarget && !sending && onClose()}>
@@ -144,11 +157,11 @@ export default function SendPropertiesDialog({
 
           <div className="field">
             <label className="field__hint" style={{ fontWeight: 560, color: "var(--ink-2)" }}>
-              Message being sent
+              {messageLabel}
             </label>
             <textarea
               className="textarea"
-              rows={14}
+              rows={messageRows}
               value={loading ? "" : message}
               disabled={loading || sending}
               placeholder={loading ? "Preparing the message…" : undefined}
@@ -156,6 +169,8 @@ export default function SendPropertiesDialog({
               style={{ fontSize: 13, lineHeight: 1.55 }}
             />
           </div>
+
+          {!loading && children}
 
           <Note tone="info" icon={<IconInfo size={16} />}>
             Edit anything above and only <strong>this</strong> message changes — your saved template on the Settings

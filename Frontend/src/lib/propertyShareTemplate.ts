@@ -39,7 +39,13 @@ export interface SharePropertyLike {
   carpet_area_unit: string | null;
   contact_name: string | null;
   contact_phone: string | null;
+  /** Known for a full PropertyRecord; absent on a bare MatchedProperty. */
+  image_count?: number;
 }
+
+/** Mirrors Backend/Service/PropertySharingService/property_share_service.py's
+ *  MAX_PHOTOS_PER_PROPERTY. */
+export const MAX_PHOTOS_PER_PROPERTY = 10;
 
 export function shareBudgetRange(min: number | null, max: number | null): string {
   if (min === null && max === null) return "Not specified";
@@ -144,6 +150,34 @@ export function buildRequirementShareMessage(
   properties: SharePropertyLike[],
 ): string {
   return renderTemplate(template, buildRequirementShareTokens(requirement, properties));
+}
+
+/** One property as its own WhatsApp message (the caption under its photos). */
+export function buildPropertyDetailMessage(property: SharePropertyLike, index: number, total: number): string {
+  const [first, ...rest] = describeProperty(property, index);
+  const heading = first.replace(/^\d+\) /, "");
+  return [`🏠 ${total > 1 ? `${index + 1}/${total} · ` : ""}${heading}`, ...rest.map((line) => line.trim())].join("\n");
+}
+
+/** The client template split for sending property-by-property: the text
+ *  before {properties} is the opening message, the text after it the closing
+ *  one, and each property gets its own message. A template without
+ *  {properties} is all opening message. */
+export function buildClientShareParts(
+  template: string,
+  client: InquiryClientRecord,
+  properties: SharePropertyLike[],
+): { intro: string; closing: string; details: string[] } {
+  const token = "{properties}";
+  const tokens = { ...buildClientShareTokens(client, properties), properties: "" };
+  const at = template.indexOf(token);
+  const before = at === -1 ? template : template.slice(0, at);
+  const after = at === -1 ? "" : template.slice(at + token.length);
+  return {
+    intro: renderTemplate(before, tokens).trim(),
+    closing: renderTemplate(after, tokens).trim(),
+    details: properties.map((property, index) => buildPropertyDetailMessage(property, index, properties.length)),
+  };
 }
 
 export function buildClientShareMessage(

@@ -119,6 +119,7 @@ def get_all_agents_with_active_clients() -> List[AgentSummary]:
                     property_record_id=assignment_row.property_record_id,
                     property_label=assignment_row.property_label,
                     assigned_at=assignment_row.created_at,
+                    scheduled_at=assignment_row.scheduled_at,
                 )
             )
     return list(agents.values())

@@ -109,7 +109,7 @@ def structure_batch(batch: List[WhatsAppChatMessage]) -> List[StructuredRequirem
         return []
 
     request_body = glm_client.build_request_body(_build_system_prompt(), _build_user_prompt(batch))
-    content = glm_client.post_with_retries(request_body, f"a requirement batch of {len(batch)}")
+    content = glm_client.post_with_retries(request_body, f"a requirement batch of {len(batch)}", site="requirement")
     if content is None:
         return []
 

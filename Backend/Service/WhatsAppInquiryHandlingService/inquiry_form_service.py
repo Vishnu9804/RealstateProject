@@ -244,6 +244,9 @@ _PREFILL_EXCLUDE = {
     "requirement_submission_count",
     "assigned_agent_id",
     "handoff_sent_at",
+    # Staff-only (Database/client_models.py's ClientRow.photo_url): the
+    # public form never asks for a photo and never says whether one exists.
+    "has_photo",
     "created_at",
     "updated_at",
 }

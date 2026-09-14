@@ -35,6 +35,13 @@ class StructuredProperty(BaseModel):
     address: Optional[str] = None
     carpet_area_sqft: Optional[float] = None
     carpet_area_unit: Optional[str] = None  # "sqft" | "vaar" | "vigha" — the unit carpet_area_sqft was written in
+    # The "super built" (super built-up) area, exactly as a human typed it in
+    # the Add/Edit dialog — e.g. "1850 sq ft". Never extracted by the LLM: it
+    # is deliberately absent from the extraction schema
+    # (Agent/WhatsAppDataFetchingAgent/glm_extraction_schema.py) and the
+    # structuring prompt, so it adds nothing to any GLM call. Free text rather
+    # than a number because it is quoted with its own unit and wording.
+    super_built: Optional[str] = None
     price_text: Optional[str] = None
     price_amount_inr: Optional[float] = None
     price_per_unit_text: Optional[str] = None

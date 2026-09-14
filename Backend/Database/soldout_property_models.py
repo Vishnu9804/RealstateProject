@@ -84,6 +84,9 @@ class SoldOutPropertyRow(Base):
     address: Mapped[Optional[str]] = mapped_column(Text, nullable=True)
     carpet_area_sqft: Mapped[Optional[float]] = mapped_column(Float, nullable=True)
     carpet_area_unit: Mapped[Optional[str]] = mapped_column(String, nullable=True)
+    # Copied from PropertyRow.super_built like every other content column;
+    # retrofitted by Database/session.py's init_db, so nullable.
+    super_built: Mapped[Optional[str]] = mapped_column(String, nullable=True)
     price_text: Mapped[Optional[str]] = mapped_column(String, nullable=True)
     price_amount_inr: Mapped[Optional[float]] = mapped_column(Float, nullable=True)
     price_per_unit_text: Mapped[Optional[str]] = mapped_column(String, nullable=True)

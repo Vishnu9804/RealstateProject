@@ -25,6 +25,7 @@ from Agent.WhatsAppInquiryHandlingAgent.inquiry_classification_schema import Inq
 from Config.settings import get_settings
 from Middleware import step_logger
 from Model.WhatsAppInquiryHandlingModel.inquiry_message import InquiryChatMessage
+from Service.LLMUsageService import llm_usage_service
 
 _client: Optional[genai.Client] = None
 
@@ -52,10 +53,11 @@ def classify_batch(messages: List[InquiryChatMessage]) -> InquiryClassification:
     if not combined_text:
         return InquiryClassification(is_property_related=False, reason="empty batch")
 
+    model = get_settings().gemini_model
     try:
         client = _get_client()
         response = client.models.generate_content(
-            model=get_settings().gemini_model,
+            model=model,
             contents=_build_prompt(combined_text),
             config=types.GenerateContentConfig(
                 response_mime_type="application/json",
@@ -67,7 +69,24 @@ def classify_batch(messages: List[InquiryChatMessage]) -> InquiryClassification:
         step_logger.error(f"Gemini inquiry-classification request failed: {exc!r}")
         return InquiryClassification(is_property_related=False, reason=f"classification request failed: {exc!r}")
 
+    _record_usage(model, response)
     return _parse_classification(response)
+
+
+def _record_usage(model: str, response) -> None:
+    """Best-effort: feeds this call's token counts to the Dashboard's LLM
+    Cost tab (Service/LLMUsageService/llm_usage_service.py). Never raises —
+    a tracking failure must never affect a real classification. The
+    google-genai SDK exposes this directly on the response as
+    `usage_metadata` (no request-shape change needed, unlike the streamed
+    GLM call sites)."""
+    try:
+        usage = getattr(response, "usage_metadata", None)
+        input_tokens = int(getattr(usage, "prompt_token_count", 0) or 0) if usage is not None else 0
+        output_tokens = int(getattr(usage, "candidates_token_count", 0) or 0) if usage is not None else 0
+        llm_usage_service.observe_call("intent", model, input_tokens, output_tokens)
+    except Exception as exc:  # noqa: BLE001
+        step_logger.warn(f"Could not record LLM usage for an inquiry-classification call: {exc!r}")
 
 
 def _build_prompt(combined_text: str) -> str:

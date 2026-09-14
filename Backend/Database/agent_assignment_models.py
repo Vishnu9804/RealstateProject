@@ -53,4 +53,17 @@ class AgentAssignmentRow(ClientBase):
     property_record_id: Mapped[str] = mapped_column(String, nullable=False)
     property_label: Mapped[str] = mapped_column(String, nullable=False)
 
+    # When the site visit itself is booked for — picked in the matches
+    # dialog's visit planner, either at hand-off time or later from its
+    # Assigned tab. Nullable on purpose: "agent chosen, time not fixed yet"
+    # is a normal state (the planner lets the operator skip the time), and
+    # rows written before this column existed have none.
+    scheduled_at: Mapped[Optional[datetime]] = mapped_column(DateTime(timezone=True), nullable=True)
+
+    # The scheduled_at value the client's visit-day WhatsApp reminder was
+    # sent for (Service/AgentManagementService/visit_reminder_service.py).
+    # Storing the TIME reminded for, not a plain flag, is what makes a
+    # rescheduled visit get reminded again for its new time. Null = never.
+    reminder_sent_for: Mapped[Optional[datetime]] = mapped_column(DateTime(timezone=True), nullable=True)
+
     created_at: Mapped[datetime] = mapped_column(DateTime(timezone=True), server_default=func.now())

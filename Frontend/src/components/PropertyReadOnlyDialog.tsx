@@ -248,6 +248,12 @@ function PropertyReadOnlyBody({
                 {formatCarpetArea(property.carpet_area_sqft, property.carpet_area_unit)}
               </span>
             )}
+            {property.super_built && (
+              <span className="fact" title="Super built">
+                <IconRuler size={12} />
+                Super built {property.super_built}
+              </span>
+            )}
           </div>
         </div>
         <button type="button" className="toast__close" onClick={onClose} aria-label="Close">

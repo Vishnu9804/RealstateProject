@@ -13,3 +13,7 @@ class AreaFilterSettings(BaseModel):
     WhatsAppDataFetchingAgent/property_structurer.py)."""
 
     keywords: List[str] = []
+    # Response-only: whether this list may be changed right now
+    # (ALLOW_AREA_CHANGE in Backend/.env — see Config/settings.py). Ignored
+    # when sent in a request body; the server decides.
+    editable: bool = False

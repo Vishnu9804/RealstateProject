@@ -49,6 +49,12 @@ export interface WhatsAppStatusResponse {
    *  never edited, so this only moves when a NEW sale is recorded — which
    *  is what lets the Sold out tab fetch once and then sit still. */
   soldout_version: string;
+  /** How many builder projects exist, and the same kind of opaque change
+   *  token for that list — both answered from the backend's own in-memory
+   *  cache, so the Builder Projects page refreshes only when a project was
+   *  actually added, edited or deleted (in any tab). */
+  builder_project_count: number;
+  builder_projects_version: string;
 }
 
 export interface WhatsAppGroup {
@@ -87,6 +93,8 @@ export interface WhatsAppConnection {
 
 export interface AreaFilterSettings {
   keywords: string[];
+  /** Whether the list may be changed — ALLOW_AREA_CHANGE in Backend/.env. */
+  editable: boolean;
 }
 
 export interface DisplaySettings {
@@ -163,6 +171,11 @@ export interface InquiryClientRecord {
    *  ever sent. See Backend/Database/client_models.py's own comment. */
   assigned_agent_id: string | null;
   handoff_sent_at: string | null;
+  /** Whether staff added a photo of this client. The photo itself never
+   *  travels with the client list — it is fetched on its own
+   *  (inquiryClientApi.getClientPhoto, via lib/clientPhotoCache.ts) only
+   *  when that client's details or Edit dialog is opened. */
+  has_photo: boolean;
   created_at: string | null;
   updated_at: string | null;
 }
@@ -207,6 +220,10 @@ export interface AssignedClientSummary {
    *  active visits oldest-first using this. Null only for rows written
    *  before this field existed. */
   assigned_at: string | null;
+  /** When the site visit itself is booked for (ISO instant) — picked in
+   *  the matches dialog's visit planner at hand-off time, or later from its
+   *  Assigned tab. null = agent chosen, time not fixed yet. */
+  scheduled_at: string | null;
 }
 
 /** Mirrors Backend/Model/AgentManagementModel/visit_record.py — one
@@ -229,6 +246,9 @@ export interface VisitRecord {
   budget_min_inr: number | null;
   budget_max_inr: number | null;
   notes: string | null;
+  /** The time this visit had been booked for, snapshotted from the active
+   *  assignment at completion. null when none was ever set. */
+  scheduled_at: string | null;
   completed_at: string | null;
 }
 
@@ -416,6 +436,15 @@ export interface ShareResult {
   from_number: string | null;
 }
 
+/** Sending a client their properties one message each (see
+ *  Backend/Model/PropertySharingModel/share_result.py's
+ *  PropertyBatchShareResult). `sent` is true only if every message went. */
+export interface PropertyBatchShareResult extends ShareResult {
+  properties_sent: number;
+  properties_failed: number;
+  photos_sent: number;
+}
+
 export interface PropertyRecord {
   record_id: string;
   source_message_id: string;
@@ -426,6 +455,9 @@ export interface PropertyRecord {
   address: string | null;
   carpet_area_sqft: number | null;
   carpet_area_unit: string | null;
+  /** The "super built" area as a person typed it ("1850 sq ft") — set only
+   *  in the Add/Edit dialog, never extracted from WhatsApp by the LLM. */
+  super_built: string | null;
   price_text: string | null;
   price_amount_inr: number | null;
   price_per_unit_text: string | null;
@@ -499,6 +531,49 @@ export interface SoldOutActionResult {
   visits_cancelled: number;
   agents_notified: number;
   agents_failed: number;
+}
+
+/* ------------------------------------------------------ builder projects */
+
+/**
+ * Mirrors Backend/Model/BuilderProjectModel/builder_project.py's
+ * BuilderProjectRecord — a property added BY HAND on the Builder Projects
+ * page, never captured from WhatsApp.
+ *
+ * The content fields are a PropertyRecord's own, under the same names —
+ * which is what lets that page reuse the Properties page's Add/Edit dialog
+ * and column filters as they are. None of a property's WhatsApp-intake state
+ * is here (no sender/group/message, no Main/Outsider/Needs review, no Landing
+ * Page flags): a project that was typed in has none of it.
+ */
+export interface BuilderProjectRecord {
+  record_id: string;
+  property_type: string | null;
+  bhk: string | null;
+  society_name: string | null;
+  area_name: string | null;
+  address: string | null;
+  carpet_area_sqft: number | null;
+  carpet_area_unit: string | null;
+  super_built: string | null;
+  price_text: string | null;
+  price_amount_inr: number | null;
+  price_per_unit_text: string | null;
+  price_per_unit_amount_inr: number | null;
+  listing_type: "Sale" | "Rent";
+  contact_name: string | null;
+  contact_phone: string | null;
+  description: string | null;
+  instagram_reel_url: string | null;
+  /** Always [] from the API — photos come from
+   *  builderProjectApi.getBuilderProjectImages, on demand. */
+  image_urls: string[];
+  /** Accurate on every response. */
+  image_count: number;
+  created_at: string | null;
+  updated_at: string | null;
+  /** When it was added, pre-formatted IST per the 12h/24h setting. */
+  formatted_timestamp: string;
 }
 
 /**
@@ -581,80 +656,6 @@ export interface BrokerRequirementRecord {
   formatted_timestamp: string;
 }
 
-/* ------------------------------------------------- area knowledge base */
-
-/**
- * Mirrors Backend/Model/WhatsAppDataFetchingModel/area_knowledge.py — the
- * internal area knowledge base the property pipeline grows as a SIDE EFFECT
- * of LLM structuring, and the analysis of how well it is doing. Read-only:
- * nothing in the app writes to it, the pipeline does (see
- * Backend/Service/WhatsAppDataFetchingService/area_knowledge_service.py).
- */
-export interface AreaKnowledgeTotals {
-  batches_observed: number;
-  /** Visits to the knowledge base — one per property the LLM produced. */
-  properties_seen: number;
-  properties_recorded: number;
-  properties_skipped_no_area: number;
-  properties_all_known: number;
-  properties_with_new_places: number;
-  /** Place STRINGS checked. One visit usually checks several. */
-  place_lookups: number;
-  place_hits: number;
-  place_writes: number;
-  cross_area_collisions: number;
-  hit_rate: number;
-  area_count: number;
-  place_count: number;
-  first_observed_at: string | null;
-  last_observed_at: string | null;
-  stats_since: string | null;
-}
-
-export interface AreaKnowledgeBreakdown {
-  /** "area" | "address" | "society", or "accepted" | "outsider". */
-  name: string;
-  lookups: number;
-  hits: number;
-  writes: number;
-  hit_rate: number;
-}
-
-export interface AreaKnowledgeArea {
-  area: string;
-  place_count: number;
-  places: string[];
-  lookups: number;
-  hits: number;
-  writes: number;
-  hit_rate: number;
-  properties: number;
-  first_seen: string | null;
-  last_updated: string | null;
-}
-
-export interface AreaKnowledgeEvent {
-  at: string;
-  area: string | null;
-  source_message_id: string | null;
-  record_id: string | null;
-  review_status: string | null;
-  lookups: number;
-  hits: number;
-  writes: number;
-  hit_places: string[];
-  new_places: string[];
-  collisions: string[];
-  skipped: boolean;
-  skip_reason: string | null;
-}
-
-export interface AreaKnowledgeOverview {
-  /** Absolute path of the .py knowledge base file on the server. */
-  file_path: string;
-  totals: AreaKnowledgeTotals;
-  by_source: AreaKnowledgeBreakdown[];
-  by_status: AreaKnowledgeBreakdown[];
-  areas: AreaKnowledgeArea[];
-  events: AreaKnowledgeEvent[];
-}
+/* Area knowledge base types moved to Dashboard/ — see
+   Dashboard/src/api/types.ts. That feature's tab (now "Surat Area
+   Knowledge Base") lives in the Dashboard app, not here. */

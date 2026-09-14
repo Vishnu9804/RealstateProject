@@ -8,7 +8,7 @@ through this API. Thin by design — all of the logic lives in that service.
 
 from fastapi import APIRouter
 
-from Model.WhatsAppDataFetchingModel.area_knowledge import AreaKnowledgeOverview
+from Model.WhatsAppDataFetchingModel.area_knowledge import AreaKnowledgeFilesResponse, AreaKnowledgeOverview
 from Service.WhatsAppDataFetchingService import area_knowledge_service
 
 router = APIRouter(prefix="/area-knowledge", tags=["area-knowledge"])
@@ -19,6 +19,13 @@ def get_overview() -> AreaKnowledgeOverview:
     """The whole snapshot in one call — totals, breakdowns, every area with
     its learned place strings, and the recent per-property activity."""
     return AreaKnowledgeOverview(**area_knowledge_service.get_overview())
+
+
+@router.get("/files", response_model=AreaKnowledgeFilesResponse)
+def get_files() -> AreaKnowledgeFilesResponse:
+    """The two knowledge base files (the learned dict + the stats snapshot),
+    exactly as they sit on disk right now."""
+    return AreaKnowledgeFilesResponse(**area_knowledge_service.get_files())
 
 
 @router.post("/reset-stats", response_model=AreaKnowledgeOverview)

@@ -426,6 +426,52 @@
   border-top: 1px solid var(--rim);
   background: var(--plane-1);
 }
+/* A tall, single-column variant — the Inquiries page's Add/Edit client
+   dialog (components/ClientFormDialog.tsx): one field under the next, top
+   to bottom, with room for nearly all of them before anything scrolls. */
+.detail-modal--tall { width: min(620px, 100%); max-height: min(94vh, 1040px); }
+
+/* ---- client photo — the Add/Edit client dialog and the client details ---
+   A circle rather than the property picker's tile grid: one portrait, not a
+   gallery. Same "well" surface as the property photo drop zone. */
+.client-photo { display: flex; align-items: center; gap: 18px; flex-wrap: wrap; }
+.client-photo__frame {
+  position: relative;
+  width: 108px;
+  height: 108px;
+  flex: none;
+  border-radius: 50%;
+  overflow: hidden;
+  display: grid;
+  place-items: center;
+  background: var(--plane-0);
+  border: 1px dashed var(--rim-strong);
+  color: var(--ink-4);
+  transition: border-color var(--t-base) var(--ease-out), transform var(--t-base) var(--ease-spring),
+    box-shadow var(--t-base) var(--ease-out);
+}
+.client-photo__frame--filled { border-style: solid; box-shadow: var(--elev-2); }
+.client-photo__frame--over { border-color: var(--accent); transform: scale(1.05); }
+.client-photo__frame img { width: 100%; height: 100%; object-fit: cover; }
+.client-photo__side { display: flex; flex-direction: column; gap: 8px; min-width: 0; flex: 1; }
+.client-photo__buttons { display: flex; flex-wrap: wrap; gap: 8px; }
+/* The upload button is a <label> wrapping a transparent file input, so a
+   click anywhere on it opens the picker with no script involved. */
+.client-photo__upload { position: relative; overflow: hidden; cursor: pointer; }
+.client-photo__upload input[type="file"] { position: absolute; inset: 0; opacity: 0; cursor: pointer; }
+.client-photo__error { color: var(--bad); }
+
+.client-avatar {
+  display: inline-grid;
+  place-items: center;
+  flex: none;
+  border-radius: 50%;
+  object-fit: cover;
+  background: var(--plane-0);
+  border: 1px solid var(--rim-strong);
+  box-shadow: var(--elev-1);
+}
+.client-photo-mark { display: inline-flex; margin-left: 6px; color: var(--ink-4); vertical-align: middle; }
 
 /* ---- property photo picker ---------------------------------------------
    Same "well" surface as .input (things you drop stuff into sit below the
@@ -858,6 +904,11 @@
   vertical-align: top;
   border-bottom: 1px solid var(--rim);
   color: var(--ink-2);
+  /* One line per value — "more than 3 bhk" or "Flat, Bungalow" must never
+     stack word-by-word down the cell. The column grows to fit instead, and
+     .table-scroll already scrolls the table sideways when that makes it
+     wider than the page. */
+  white-space: nowrap;
 }
 .row {
   cursor: pointer;
@@ -1478,20 +1529,41 @@ mark.hl {
   background: color-mix(in oklab, var(--accent) 10%, var(--plane-1));
   box-shadow: var(--elev-2), var(--glow-accent);
 }
-/* Already out with an agent — green all the way through, so a full round
-   of hand-offs is legible at a glance without reading a single badge. */
+/* Already out with an agent — orange all the way through, so a full round
+   of hand-offs is legible at a glance without reading a single badge (and
+   never confused with a completed visit's green, below). */
 .match-card--assigned {
-  border-color: color-mix(in oklab, var(--ok) 48%, transparent);
-  background: color-mix(in oklab, var(--ok) 12%, var(--plane-1));
+  border-color: color-mix(in oklab, var(--assigned) 50%, transparent);
+  background: color-mix(in oklab, var(--assigned) 12%, var(--plane-1));
 }
 /* Assigned cards stay idle on hover — no lift, no growth — since there is
    nothing left to click into selecting; only the background tints up a
    touch to acknowledge the hover happened. */
-.match-card--assigned:hover { background: color-mix(in oklab, var(--ok) 17%, var(--plane-1)); transform: none; box-shadow: none; }
+.match-card--assigned:hover { background: color-mix(in oklab, var(--assigned) 17%, var(--plane-1)); transform: none; box-shadow: none; }
 .match-card--assigned.match-card--selected {
-  border-color: color-mix(in oklab, var(--ok) 70%, transparent);
-  box-shadow: var(--elev-2), 0 0 0 3px color-mix(in oklab, var(--ok) 22%, transparent);
+  border-color: color-mix(in oklab, var(--assigned) 70%, transparent);
+  box-shadow: var(--elev-2), 0 0 0 3px color-mix(in oklab, var(--assigned) 22%, transparent);
 }
+/* A re-visit: still assigned (orange), but dashed and cut with the info
+   colour, so it never reads as just another first visit. */
+.match-card--revisit {
+  border-style: dashed;
+  border-color: color-mix(in oklab, var(--info) 60%, transparent);
+  background:
+    linear-gradient(135deg, color-mix(in oklab, var(--info) 11%, transparent), transparent 55%),
+    color-mix(in oklab, var(--assigned) 10%, var(--plane-1));
+}
+.match-card--revisit:hover {
+  background:
+    linear-gradient(135deg, color-mix(in oklab, var(--info) 15%, transparent), transparent 55%),
+    color-mix(in oklab, var(--assigned) 14%, var(--plane-1));
+}
+/* A visit already done — green, exactly as assigned cards used to be. */
+.match-card--completed {
+  border-color: color-mix(in oklab, var(--ok) 48%, transparent);
+  background: color-mix(in oklab, var(--ok) 12%, var(--plane-1));
+}
+.match-card--completed:hover { background: color-mix(in oklab, var(--ok) 17%, var(--plane-1)); transform: none; box-shadow: none; }
 
 /* The checkbox sits on the card's own top-left corner rather than in a
    rail beside it — a grid of cards has no single left edge to hang one
@@ -1609,3 +1681,302 @@ mark.hl {
    badge wrap mid-phrase or squeeze the columns beside it. */
 .cell-pipeline { white-space: nowrap; min-width: 176px; }
 .cell-pipeline .badge { white-space: nowrap; }
+
+/* ---- matches dialog — visit planning on the cards ---------------------- */
+/* "Agent X selected · time" on a ticked card, with its Change button. */
+.match-card__plan {
+  display: flex;
+  align-items: center;
+  justify-content: space-between;
+  gap: 8px;
+  padding: 7px 8px 7px 10px;
+  border-radius: var(--r-sm);
+  border: 1px solid color-mix(in oklab, var(--accent) 40%, transparent);
+  background: color-mix(in oklab, var(--accent) 12%, var(--plane-1));
+  font-size: 12px;
+  color: var(--ink-2);
+}
+.match-card__plan-text { display: inline-flex; align-items: center; gap: 6px; flex-wrap: wrap; min-width: 0; }
+.match-card__plan-text svg { flex: none; color: var(--accent); }
+.match-card__plan-text strong { color: var(--ink); font-weight: 640; }
+.match-card__plan-btn {
+  flex: none;
+  border: 1px solid var(--rim-strong);
+  background: var(--plane-2);
+  color: var(--ink);
+  border-radius: var(--r-pill);
+  padding: 3px 10px;
+  font: inherit;
+  font-size: 11.5px;
+  font-weight: 620;
+  cursor: pointer;
+  transition: background-color var(--t-fast) var(--ease-out), border-color var(--t-fast) var(--ease-out);
+}
+.match-card__plan-btn:hover { background: var(--plane-3); border-color: var(--accent); }
+
+/* The Completed card's top-right Revisit action. */
+.match-card__revisit { flex: none; margin: -4px -6px 0 0; }
+
+/* An Assigned card's booked time — the card's one action, so it reads as a
+   button: click it to change the time. */
+.visit-when {
+  display: inline-flex;
+  align-items: center;
+  gap: 6px;
+  border: 1px solid color-mix(in oklab, var(--assigned) 45%, transparent);
+  background: color-mix(in oklab, var(--assigned) 14%, transparent);
+  color: var(--ink);
+  border-radius: var(--r-pill);
+  padding: 5px 11px;
+  font: inherit;
+  font-size: 12.5px;
+  font-weight: 600;
+  cursor: pointer;
+  transition: background-color var(--t-fast) var(--ease-out), border-color var(--t-fast) var(--ease-out);
+}
+.visit-when svg { color: var(--assigned); flex: none; }
+.visit-when:hover { background: color-mix(in oklab, var(--assigned) 22%, transparent); border-color: var(--assigned); }
+.visit-when--past { border-style: dashed; color: var(--ink-3); }
+
+/* A property visited more than once — numbered, visit 1 first. */
+.visit-history { list-style: none; margin: 0; padding: 0; display: flex; flex-direction: column; gap: 8px; }
+.visit-history__item { display: flex; align-items: flex-start; gap: 9px; }
+.visit-history__num {
+  flex: none;
+  display: inline-grid;
+  place-items: center;
+  width: 20px;
+  height: 20px;
+  border-radius: 50%;
+  background: color-mix(in oklab, var(--ok) 22%, var(--plane-2));
+  border: 1px solid color-mix(in oklab, var(--ok) 45%, transparent);
+  color: var(--ok);
+  font-size: 11px;
+  font-weight: 700;
+  font-variant-numeric: tabular-nums;
+}
+.visit-history__body { min-width: 0; display: flex; flex-direction: column; gap: 3px; }
+.visit-history__when { font-size: 12px; font-weight: 600; color: var(--ink-2); }
+.visit-history__notes { font-size: 12px; line-height: 1.5; color: var(--ink-3); word-break: break-word; }
+
+/* ---- visit planner — the small "who, and when" dialog ------------------ */
+.mini-modal {
+  width: min(400px, 100%);
+  max-height: min(92vh, 720px);
+  display: flex;
+  flex-direction: column;
+  border-radius: var(--r-lg);
+  background: var(--plane-2);
+  border: 1px solid var(--rim-strong);
+  box-shadow: var(--elev-4);
+  backdrop-filter: blur(30px) saturate(180%);
+  -webkit-backdrop-filter: blur(30px) saturate(180%);
+  overflow: hidden;
+}
+.mini-modal__head {
+  display: flex;
+  align-items: flex-start;
+  justify-content: space-between;
+  gap: 10px;
+  padding: 14px 12px 12px 18px;
+  border-bottom: 1px solid var(--rim);
+  background: linear-gradient(165deg, color-mix(in oklab, var(--accent) 8%, transparent), transparent 60%);
+}
+.mini-modal__eyebrow {
+  font-size: 10.5px;
+  font-weight: 660;
+  letter-spacing: 0.09em;
+  text-transform: uppercase;
+  color: var(--ink-4);
+  margin-bottom: 2px;
+}
+.mini-modal__title { font-size: 15.5px; font-weight: 650; letter-spacing: -0.01em; color: var(--ink); }
+.mini-modal .cell-truncate { max-width: 100%; }
+.mini-modal__body { padding: 14px 18px; overflow-y: auto; flex: 1; }
+.mini-modal__hint { font-size: 12px; color: var(--ink-3); margin-bottom: 2px; }
+.mini-modal__foot {
+  display: flex;
+  align-items: center;
+  gap: 10px;
+  padding: 10px 14px;
+  border-top: 1px solid var(--rim);
+  background: var(--plane-1);
+}
+
+.agent-mini-list { display: flex; flex-direction: column; gap: 7px; }
+.agent-mini {
+  display: flex;
+  align-items: center;
+  gap: 10px;
+  width: 100%;
+  padding: 8px 10px;
+  border-radius: var(--r-sm);
+  border: 1px solid var(--rim);
+  background: var(--plane-1);
+  color: var(--ink);
+  font: inherit;
+  text-align: left;
+  cursor: pointer;
+  transition: border-color var(--t-fast) var(--ease-out), background-color var(--t-fast) var(--ease-out), transform var(--t-fast) var(--ease-out);
+}
+button.agent-mini:hover { border-color: var(--accent); background: var(--plane-2); transform: translateY(-1px); }
+.agent-mini--chosen {
+  cursor: default;
+  border-color: color-mix(in oklab, var(--accent) 50%, transparent);
+  background: color-mix(in oklab, var(--accent) 12%, var(--plane-1));
+}
+.agent-mini__main { display: flex; flex-direction: column; gap: 1px; min-width: 0; flex: 1; }
+.agent-mini__name { display: inline-flex; align-items: center; gap: 5px; font-size: 13.5px; font-weight: 620; }
+.agent-mini--chosen .agent-mini__name svg { color: var(--accent); }
+.agent-mini__meta { font-size: 11.5px; color: var(--ink-3); }
+.agent-mini__covers {
+  flex: none;
+  display: inline-flex;
+  align-items: center;
+  gap: 4px;
+  padding: 2px 8px;
+  border-radius: var(--r-pill);
+  font-size: 10.5px;
+  font-weight: 640;
+  color: var(--ok);
+  border: 1px solid color-mix(in oklab, var(--ok) 34%, transparent);
+  background: color-mix(in oklab, var(--ok) 12%, transparent);
+}
+.agent-mini__change {
+  flex: none;
+  border: 1px solid var(--rim-strong);
+  background: var(--plane-2);
+  color: var(--ink);
+  border-radius: var(--r-pill);
+  padding: 3px 10px;
+  font: inherit;
+  font-size: 11.5px;
+  font-weight: 620;
+  cursor: pointer;
+}
+.agent-mini__change:hover { border-color: var(--accent); }
+
+/* Chevron reuse: IconChevron points down; these turn it. */
+.vt-rot { display: inline-flex; }
+.vt-rot--left { transform: rotate(90deg); }
+.vt-rot--right { transform: rotate(-90deg); }
+.vt-rot--up { transform: rotate(180deg); }
+
+.vt-cal { border: 1px solid var(--rim); border-radius: var(--r-sm); background: var(--plane-0); padding: 8px; }
+.vt-cal__head { display: flex; align-items: center; justify-content: space-between; margin-bottom: 6px; }
+.vt-cal__month { font-size: 13px; font-weight: 640; color: var(--ink); }
+.vt-cal__nav {
+  display: inline-grid;
+  place-items: center;
+  width: 28px;
+  height: 28px;
+  border-radius: var(--r-xs);
+  border: 1px solid var(--rim);
+  background: var(--plane-1);
+  color: var(--ink-2);
+  cursor: pointer;
+}
+.vt-cal__nav:hover:not(:disabled) { border-color: var(--rim-strong); color: var(--ink); }
+.vt-cal__nav:disabled { opacity: 0.35; cursor: default; }
+.vt-cal__grid { display: grid; grid-template-columns: repeat(7, 1fr); gap: 3px; }
+.vt-cal__wd { text-align: center; font-size: 10.5px; font-weight: 640; color: var(--ink-4); padding: 2px 0 4px; }
+.vt-cal__day {
+  height: 32px;
+  border-radius: var(--r-xs);
+  border: 1px solid transparent;
+  background: transparent;
+  color: var(--ink);
+  font: inherit;
+  font-size: 12.5px;
+  font-weight: 560;
+  font-variant-numeric: tabular-nums;
+  cursor: pointer;
+  transition: background-color var(--t-fast) var(--ease-out), border-color var(--t-fast) var(--ease-out);
+}
+.vt-cal__day:hover:not(:disabled) { background: var(--plane-2); border-color: var(--rim-strong); }
+.vt-cal__day--today { border-color: color-mix(in oklab, var(--accent) 45%, transparent); }
+.vt-cal__day--on,
+.vt-cal__day--on:hover:not(:disabled) { background: var(--accent-gradient); border-color: transparent; color: #fff; font-weight: 700; }
+.vt-cal__day:disabled { color: var(--ink-4); opacity: 0.45; cursor: default; }
+
+.vt-time { display: flex; align-items: center; justify-content: center; gap: 12px; }
+.vt-time__colon { font-size: 22px; font-weight: 700; color: var(--ink-3); }
+.vt-wheel-wrap { display: flex; flex-direction: column; align-items: center; gap: 2px; }
+.vt-wheel__arrow {
+  display: inline-grid;
+  place-items: center;
+  width: 30px;
+  height: 20px;
+  border: 0;
+  border-radius: var(--r-xs);
+  background: transparent;
+  color: var(--ink-3);
+  cursor: pointer;
+}
+.vt-wheel__arrow:hover { color: var(--ink); background: var(--plane-2); }
+.vt-wheel {
+  display: flex;
+  flex-direction: column;
+  align-items: center;
+  width: 58px;
+  padding: 2px 0;
+  border-radius: var(--r-sm);
+  border: 1px solid var(--rim-strong);
+  background: linear-gradient(180deg, var(--plane-0), var(--plane-2) 50%, var(--plane-0));
+  touch-action: none;
+  user-select: none;
+  cursor: ns-resize;
+}
+.vt-wheel:focus-visible { outline: 2px solid var(--accent); outline-offset: 2px; }
+.vt-wheel__row {
+  width: 100%;
+  border: 0;
+  background: transparent;
+  font: inherit;
+  font-size: 13px;
+  line-height: 22px;
+  color: var(--ink-4);
+  font-variant-numeric: tabular-nums;
+  cursor: pointer;
+}
+.vt-wheel__row--on {
+  font-size: 20px;
+  line-height: 30px;
+  font-weight: 700;
+  color: var(--ink);
+  cursor: inherit;
+  animation: pop-in var(--t-fast) var(--ease-spring) both;
+}
+.vt-min { display: grid; grid-template-columns: repeat(2, 44px); gap: 6px; }
+.vt-ampm { display: grid; grid-template-rows: repeat(2, auto); gap: 6px; }
+.vt-chip {
+  height: 32px;
+  min-width: 44px;
+  padding: 0 8px;
+  border-radius: var(--r-xs);
+  border: 1px solid var(--rim);
+  background: var(--plane-1);
+  color: var(--ink-2);
+  font: inherit;
+  font-size: 13px;
+  font-weight: 620;
+  font-variant-numeric: tabular-nums;
+  cursor: pointer;
+  transition: background-color var(--t-fast) var(--ease-out), border-color var(--t-fast) var(--ease-out), color var(--t-fast) var(--ease-out);
+}
+.vt-chip:hover { border-color: var(--rim-strong); color: var(--ink); }
+.vt-chip--on,
+.vt-chip--on:hover { background: var(--accent-gradient); border-color: transparent; color: #fff; }
+
+.vt-summary {
+  text-align: center;
+  font-size: 12.5px;
+  font-weight: 600;
+  color: var(--ink-3);
+  padding: 7px 10px;
+  border-radius: var(--r-sm);
+  background: var(--plane-1);
+  border: 1px solid var(--rim);
+}
+.vt-summary--ok { color: var(--ink); border-color: color-mix(in oklab, var(--accent) 40%, transparent); }
+.vt-summary--bad { color: var(--bad); border-color: color-mix(in oklab, var(--bad) 40%, transparent); }

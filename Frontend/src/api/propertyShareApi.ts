@@ -1,5 +1,5 @@
 import { apiClient } from "./client";
-import type { PropertyShareTemplates, ShareResult, ShareTarget } from "./types";
+import type { PropertyBatchShareResult, PropertyShareTemplates, ShareResult, ShareTarget } from "./types";
 
 /**
  * Mirrors Backend/Controller/PropertySharingController/
@@ -30,4 +30,11 @@ export const propertyShareApi = {
     apiClient.get(`/property-share/clients/${encodeURIComponent(phone)}/target`),
   sendForClient: (phone: string, message: string): Promise<ShareResult> =>
     apiClient.post(`/property-share/clients/${encodeURIComponent(phone)}/send`, { message }),
+  /** Opening message, then each property as its own message (photos first,
+   *  details as their caption), then the closing message. */
+  sendPropertiesToClient: (
+    phone: string,
+    body: { intro: string; closing: string; properties: { record_id: string; details: string }[] },
+  ): Promise<PropertyBatchShareResult> =>
+    apiClient.post(`/property-share/clients/${encodeURIComponent(phone)}/send-properties`, body),
 };

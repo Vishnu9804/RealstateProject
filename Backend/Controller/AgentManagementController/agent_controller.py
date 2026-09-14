@@ -9,6 +9,7 @@ Route order matters here: "/handoff-templates" must be declared before
 declaration order, not by literal-vs-parameter specificity.
 """
 
+from datetime import datetime, timezone
 from typing import List, Optional
 
 from fastapi import APIRouter, HTTPException
@@ -41,6 +42,18 @@ class VisitCompleteRequest(BaseModel):
     client_phone: str
     property_record_id: str
     notes: Optional[str] = None
+
+
+class VisitScheduleRequest(BaseModel):
+    """The matches dialog's Assigned tab "Set visit time" / edit-time
+    action — which active visit, and the time it is now booked for. The
+    frontend always sends an ISO instant with its offset (toISOString()); a
+    bare time with no offset is read as UTC rather than left to whatever
+    the database session's timezone happens to be."""
+
+    client_phone: str
+    property_record_id: str
+    scheduled_at: Optional[datetime] = None
 
 
 @router.get("", response_model=list[AgentSummary])
@@ -88,12 +101,34 @@ def complete_visit(agent_id: str, body: VisitCompleteRequest) -> VisitRecord:
     return visit
 
 
+@router.patch("/{agent_id}/visits/schedule", response_model=AssignedClientSummary)
+def update_visit_schedule(agent_id: str, body: VisitScheduleRequest) -> AssignedClientSummary:
+    """Sets or changes one active visit's booked time — a single UPDATE (see
+    agent_store.update_visit_schedule). Sends nothing: telling the agent and
+    the client is a separate, optional step the operator can skip (see
+    whatsapp_inquiry_controller.send_visit_messages)."""
+    scheduled_at = body.scheduled_at
+    if scheduled_at is not None and scheduled_at.tzinfo is None:
+        scheduled_at = scheduled_at.replace(tzinfo=timezone.utc)
+    updated = agent_store.update_visit_schedule(agent_id, body.client_phone, body.property_record_id, scheduled_at)
+    if updated is None:
+        raise HTTPException(status_code=404, detail="No active visit found for that agent/client/property.")
+    return updated
+
+
 @router.post("/{agent_id}/visits/{visit_id}/reopen", response_model=AssignedClientSummary)
 def reopen_visit(agent_id: str, visit_id: str) -> AssignedClientSummary:
     """The Agents page's "Mark as still active" action — undoes one
     completed visit, moving it back out of history and into this agent's
     active visits (see agent_store.reopen_visit)."""
-    reopened = agent_store.reopen_visit(agent_id, visit_id)
+    try:
+        reopened = agent_store.reopen_visit(agent_id, visit_id)
+    except agent_store.VisitConflictError:
+        raise HTTPException(
+            status_code=409,
+            detail="This client already has an active visit to this property (e.g. a re-visit). "
+            "Complete or clear that one first.",
+        )
     if reopened is None:
         raise HTTPException(status_code=404, detail="No completed visit found to reopen.")
     return reopened

@@ -12,6 +12,7 @@ export interface PropertyContentFields {
   address?: string | null;
   carpet_area_sqft?: number | null;
   carpet_area_unit?: string | null;
+  super_built?: string | null;
   price_text?: string | null;
   price_amount_inr?: number | null;
   price_per_unit_text?: string | null;

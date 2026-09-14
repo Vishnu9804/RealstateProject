@@ -33,12 +33,14 @@ somebody it was not meant for.
 
 from __future__ import annotations
 
-from typing import Optional
+import base64
+import binascii
+from typing import List, Optional, Sequence, Tuple
 
 from Middleware import step_logger
-from Model.PropertySharingModel.share_result import ShareResult, ShareTarget
+from Model.PropertySharingModel.share_result import PropertyBatchShareResult, ShareResult, ShareTarget
 from Service.BrokerRequirementService import requirement_store
-from Service.WhatsAppDataFetchingService import whatsapp_connection_manager
+from Service.WhatsAppDataFetchingService import property_vector_store, whatsapp_connection_manager
 from Service.WhatsAppInquiryHandlingService import client_store, inquiry_connection_store, outbound_messenger
 from Service.WhatsAppInquiryHandlingService.phone_utils import normalize_phone
 
@@ -113,6 +115,119 @@ def send_for_client(phone: str, message: str) -> Optional[ShareResult]:
     sent = outbound_messenger.send_text(client.phone, message, connection_id=connection_id)
     _log("client", client.phone, client.phone, from_number, sent)
     return ShareResult(sent=sent, to_phone=client.phone, from_number=from_number)
+
+
+# Photos sent per property. A listing can hold many; beyond this the chat
+# turns into a photo dump and the send takes minutes.
+MAX_PHOTOS_PER_PROPERTY = 10
+# WhatsApp's caption limit. Longer details still go out, as a text message
+# straight after the photos instead of as their caption.
+_MAX_CAPTION_LENGTH = 1024
+
+
+def send_properties_to_client(
+    phone: str,
+    intro: str,
+    closing: str,
+    properties: Sequence[Tuple[str, str]],
+) -> Optional[PropertyBatchShareResult]:
+    """Sends a client their shortlist as SEPARATE messages, in order:
+
+      1. `intro` (skipped when blank);
+      2. per (record_id, details) — its photos, with `details` as the caption
+         of the last photo so the details and the photos read as one message;
+         just `details` as text when the property has no photos;
+      3. `closing` (skipped when blank).
+
+    Text is passed through verbatim, same reasoning as send_for_client. None
+    when no client record exists for this number."""
+    client = client_store.get_client_by_phone(phone)
+    if client is None:
+        return None
+    connection_id = inquiry_connection_store.get(client.phone)
+    from_number = whatsapp_connection_manager.get_sender_number(prefer_role=_PREFER_ROLE, connection_id=connection_id)
+    result = PropertyBatchShareResult(sent=False, to_phone=client.phone, from_number=from_number)
+
+    # Nothing connected: every send would fail one by one — report it at once.
+    if whatsapp_connection_manager.get_sender_client(prefer_role=_PREFER_ROLE, connection_id=connection_id) is None:
+        result.properties_failed = len(properties)
+        _log("client", client.phone, client.phone, from_number, False)
+        return result
+
+    all_sent = True
+    if intro.strip():
+        all_sent = outbound_messenger.send_text(client.phone, intro, connection_id=connection_id) and all_sent
+
+    for record_id, details in properties:
+        delivered, photos = _send_one_property(client.phone, record_id, details, connection_id)
+        result.photos_sent += photos
+        if delivered:
+            result.properties_sent += 1
+        else:
+            result.properties_failed += 1
+            all_sent = False
+
+    if closing.strip():
+        all_sent = outbound_messenger.send_text(client.phone, closing, connection_id=connection_id) and all_sent
+
+    result.sent = all_sent
+    _log("client", client.phone, client.phone, from_number, all_sent)
+    return result
+
+
+def _send_one_property(phone: str, record_id: str, details: str, connection_id: Optional[str]) -> Tuple[bool, int]:
+    """(details delivered, photos delivered) for one property."""
+    photos = _property_photos(record_id)
+    if not photos:
+        return outbound_messenger.send_text(phone, details, connection_id=connection_id), 0
+
+    caption_fits = len(details) <= _MAX_CAPTION_LENGTH
+    photos_sent = 0
+    for index, photo in enumerate(photos):
+        is_last = index == len(photos) - 1
+        caption = details if (is_last and caption_fits) else None
+        if outbound_messenger.send_image(phone, photo, caption, connection_id=connection_id):
+            photos_sent += 1
+            if caption is not None:
+                return True, photos_sent
+    # Either the details were too long for a caption, or the captioned photo
+    # did not go out — the details must still arrive, right after the photos.
+    return outbound_messenger.send_text(phone, details, connection_id=connection_id), photos_sent
+
+
+def _property_photos(record_id: str) -> List[bytes]:
+    """The property's photos as raw bytes, at most MAX_PHOTOS_PER_PROPERTY.
+    Looks in the property database first, then Builder Projects (the
+    matches dialog can list either)."""
+    images = property_vector_store.get_property_images(record_id)
+    if images is None:
+        from Service.BuilderProjectService import builder_project_store
+
+        images = builder_project_store.get_images(record_id)
+    photos: List[bytes] = []
+    for value in images or []:
+        decoded = _decode_data_url(value)
+        if decoded:
+            photos.append(decoded)
+        if len(photos) >= MAX_PHOTOS_PER_PROPERTY:
+            break
+    return photos
+
+
+def _decode_data_url(value: str) -> Optional[bytes]:
+    """Photos are stored as base64 data URLs (Database/models.py's
+    PropertyRow.image_urls). Anything else is skipped rather than failing
+    the whole send."""
+    if not isinstance(value, str) or not value.startswith("data:"):
+        return None
+    header, separator, payload = value.partition(",")
+    if not separator or ";base64" not in header:
+        return None
+    try:
+        return base64.b64decode(payload)
+    except (binascii.Error, ValueError):
+        step_logger.warn("[Share] Skipped a property photo that could not be decoded.")
+        return None
 
 
 def _log(kind: str, subject: str, to_phone: str, from_number: Optional[str], sent: bool) -> None:

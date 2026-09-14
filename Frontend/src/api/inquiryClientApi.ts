@@ -12,6 +12,24 @@ import type { InquiryClientRecord, InquiryStatusResponse, ManualLinkResponse } f
 export interface HandoffPropertyRef {
   record_id: string;
   label: string;
+  /** ISO instant the visit is booked for; omitted/null when the operator
+   *  skipped picking a time in the visit planner. */
+  scheduled_at?: string | null;
+}
+
+/** Mirrors whatsapp_inquiry_controller.py's VisitMessagesRequest — the
+ *  "tell them about the new visit time" step after a time is set or
+ *  changed. A blank message is simply not sent. */
+export interface VisitMessagesRequest {
+  agent_phone: string | null;
+  agent_message: string | null;
+  client_message: string | null;
+}
+
+/** null = not attempted (blank message); true/false = whether it went out. */
+export interface VisitMessagesResult {
+  agent_sent: boolean | null;
+  client_sent: boolean | null;
 }
 
 export interface AgentHandoffMessage {
@@ -51,6 +69,30 @@ export interface HandoffSendResult {
   client: InquiryClientRecord | null;
 }
 
+/** Mirrors whatsapp_inquiry_controller.py's ClientDetailsRequest — the
+ *  Inquiries page's own Add/Edit client dialog (components/ClientFormDialog.tsx).
+ *  On an edit only the keys actually present are applied, so the dialog
+ *  sends just what changed; `photo_url` is touched only when sent (null
+ *  removes the photo). */
+export interface ClientDetailsBody {
+  name?: string | null;
+  email?: string | null;
+  purpose?: string | null;
+  property_type?: string | null;
+  bhk?: string | null;
+  budget_min_inr?: number | null;
+  budget_max_inr?: number | null;
+  preferred_areas?: string | null;
+  additional_requirements?: string | null;
+  /** A data URL, already resized in the browser (lib/imageProcessing.ts). */
+  photo_url?: string | null;
+}
+
+export interface ClientCreateBody extends ClientDetailsBody {
+  /** Any reasonable spelling — the backend normalizes it to E.164. */
+  phone: string;
+}
+
 export const inquiryClientApi = {
   getStatus: (): Promise<InquiryStatusResponse> => apiClient.get("/whatsapp-inquiry/status"),
   getClients: (limit = 500): Promise<InquiryClientRecord[]> =>
@@ -59,11 +101,31 @@ export const inquiryClientApi = {
     apiClient.get(`/whatsapp-inquiry/clients/${encodeURIComponent(phone)}`),
 
   /** Mints the same registration-form link the WhatsApp welcome message
-   *  sends, for a phone number typed in by staff (the Inquiries page's
-   *  "+ Add" button) — see whatsapp_inquiry_controller.create_manual_link.
-   *  Throws ApiError(400) if `phone` isn't a valid phone number. */
+   *  sends, for a phone number typed in by staff — see
+   *  whatsapp_inquiry_controller.create_manual_link. No longer used by the
+   *  Inquiries page's Add/Edit (those save through createClient/updateClient
+   *  below, without leaving the page). Throws ApiError(400) if `phone` isn't
+   *  a valid phone number. */
   createManualLink: (phone: string): Promise<ManualLinkResponse> =>
     apiClient.post("/whatsapp-inquiry/manual-link", { phone }),
+
+  /** The Inquiries page's "Add" dialog. Throws ApiError(400) for a phone
+   *  that isn't a valid number and ApiError(409) when that number already
+   *  has a client record (Edit is how that one changes). */
+  createClient: (body: ClientCreateBody): Promise<InquiryClientRecord> =>
+    apiClient.post("/whatsapp-inquiry/clients", body),
+
+  /** The Inquiries page's "Edit" dialog — send only what changed. Throws
+   *  ApiError(409) when a requirement would change while this client has a
+   *  site visit out with an agent (name, email and photo never do). */
+  updateClient: (phone: string, body: ClientDetailsBody): Promise<InquiryClientRecord> =>
+    apiClient.patch(`/whatsapp-inquiry/clients/${encodeURIComponent(phone)}`, body),
+
+  /** One client's photo — never part of the client list (see
+   *  InquiryClientRecord.has_photo). Go through lib/clientPhotoCache.ts
+   *  rather than calling this directly. */
+  getClientPhoto: (phone: string): Promise<{ photo_url: string | null }> =>
+    apiClient.get(`/whatsapp-inquiry/clients/${encodeURIComponent(phone)}/photo`),
 
   /** AgentManagement feature: a lightweight "has this client been handed
    *  off to anyone" signal (drives the Inquiries table's Status pill only)
@@ -81,6 +143,12 @@ export const inquiryClientApi = {
    *  through) and records that the hand-off happened. */
   sendHandoff: (phone: string, body: HandoffSendRequest): Promise<HandoffSendResult> =>
     apiClient.post(`/whatsapp-inquiry/clients/${encodeURIComponent(phone)}/handoff-sent`, body),
+
+  /** Sends the visit-time messages (agent + client) over WhatsApp. Touches
+   *  no database table — the time was already saved by
+   *  agentApi.updateVisitSchedule before this was offered. */
+  sendVisitMessages: (phone: string, body: VisitMessagesRequest): Promise<VisitMessagesResult> =>
+    apiClient.post(`/whatsapp-inquiry/clients/${encodeURIComponent(phone)}/visit-messages`, body),
 
   /** Calls off every site visit currently out with an agent for this
    *  client and messages each agent involved once. Leaves the client,

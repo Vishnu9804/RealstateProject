@@ -4,7 +4,7 @@ import { agentApi } from "../api/agentApi";
 import { propertyApi } from "../api/propertyApi";
 import type { AgentSummary, AssignedClientSummary, VisitRecord } from "../api/types";
 import { friendlyError } from "../lib/apiError";
-import { formatCompactInr, relativeTime } from "../lib/formatters";
+import { formatCompactInr, formatVisitTime, relativeTime } from "../lib/formatters";
 import { setCachedPropertyList } from "../lib/propertyListCache";
 import PropertyReadOnlyDialog from "./PropertyReadOnlyDialog";
 import { useToast } from "./ui/Toast";
@@ -243,6 +243,11 @@ function ActiveVisitRow({
             {client.assigned_at && (
               <span className="row-flex" style={{ gap: 4 }}>
                 <IconClock size={12} /> Assigned {relativeTime(new Date(client.assigned_at))}
+              </span>
+            )}
+            {client.scheduled_at && (
+              <span className="row-flex" style={{ gap: 4 }}>
+                <IconClock size={12} /> Visit {formatVisitTime(client.scheduled_at)}
               </span>
             )}
           </div>

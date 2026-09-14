@@ -66,6 +66,20 @@ def _get_engine():
             connect_args={"connect_timeout": 60},
         )
         _session_factory = sessionmaker(bind=_engine, expire_on_commit=False)
+        # Measures every statement locally (duration + the real byte size of
+        # what came back) so the Dashboard's Neon DB tab can say which
+        # operation spent the CU-hours and the Network Transfer. It never
+        # queries anything itself — see that service's docstring. Wrapped
+        # because monitoring must never be able to stop the database from
+        # working: if attaching fails, the app carries on unmeasured.
+        try:
+            from Service.NeonUsageService import neon_usage_service
+
+            neon_usage_service.attach_to_engine(_engine)
+        except Exception as exc:  # noqa: BLE001
+            from Middleware import step_logger
+
+            step_logger.error(f"Could not attach Neon usage tracking (the database is unaffected): {exc!r}")
     return _engine
 
 
@@ -266,6 +280,11 @@ def init_db() -> None:
     # own.
     from Database import soldout_property_models  # noqa: F401
 
+    # Same again for the Builder Projects page's own table — a brand-new
+    # table, so create_all builds it (unique index on record_id included)
+    # and no ALTER TABLE companion is needed.
+    from Database import builder_project_models  # noqa: F401
+
     # Same import-for-side-effect reasoning, for the client-records tables:
     # ClientBase is a second declarative base (kept separate from Base so
     # the two features' models can never accidentally collide), but both
@@ -298,6 +317,10 @@ def init_db() -> None:
             text("ALTER TABLE properties ADD COLUMN IF NOT EXISTS price_per_unit_amount_inr FLOAT")
         )
         connection.execute(text("ALTER TABLE properties ADD COLUMN IF NOT EXISTS carpet_area_unit VARCHAR"))
+        # The human-entered "Super built" area (StructuredProperty.super_built).
+        # Nullable, no default: a metadata-only change on Postgres, and every
+        # existing row simply reads "not set".
+        connection.execute(text("ALTER TABLE properties ADD COLUMN IF NOT EXISTS super_built VARCHAR"))
         connection.execute(text("ALTER TABLE properties ADD COLUMN IF NOT EXISTS record_id VARCHAR"))
         connection.execute(
             text("ALTER TABLE properties ADD COLUMN IF NOT EXISTS listing_type VARCHAR NOT NULL DEFAULT 'Sale'")
@@ -462,6 +485,19 @@ def init_db() -> None:
         # were ever sent for them.
         connection.execute(text("ALTER TABLE clients ADD COLUMN IF NOT EXISTS assigned_agent_id VARCHAR"))
         connection.execute(text("ALTER TABLE clients ADD COLUMN IF NOT EXISTS handoff_sent_at TIMESTAMPTZ"))
+        # pending_action has been part of ClientRow since the inquiry
+        # feature's first version, so create_all always put it there and it
+        # never needed an ALTER of its own. But this database is shared with
+        # other branches of the project, and a branch that has no such
+        # column reshaped `clients` without it — after which every client
+        # read here failed ("column clients.pending_action does not exist").
+        # Nullable, no default: restoring it is a metadata-only change, and
+        # invisible to any code that doesn't use it.
+        connection.execute(text("ALTER TABLE clients ADD COLUMN IF NOT EXISTS pending_action VARCHAR"))
+        # The client photo staff add from the Inquiries page (ClientRow.photo_url).
+        # Nullable, no default: metadata-only, and every existing client reads
+        # "no photo" — which is exactly what ClientRow.has_photo computes.
+        connection.execute(text("ALTER TABLE clients ADD COLUMN IF NOT EXISTS photo_url TEXT"))
         # Which property a completed visit was actually about — added after
         # agent_visits already existed in production, so both are nullable
         # for rows written before this column existed.
@@ -472,6 +508,18 @@ def init_db() -> None:
         # nullable-for-old-rows treatment as the two columns just above.
         connection.execute(text("ALTER TABLE agent_visits ADD COLUMN IF NOT EXISTS budget_min_inr FLOAT"))
         connection.execute(text("ALTER TABLE agent_visits ADD COLUMN IF NOT EXISTS budget_max_inr FLOAT"))
+        # The booked site-visit time (Database/agent_assignment_models.py's
+        # scheduled_at) and its snapshot on completion. Nullable, no default,
+        # so on Postgres each is a metadata-only change — no table rewrite,
+        # and existing rows simply read "no time set".
+        connection.execute(text("ALTER TABLE agent_assignments ADD COLUMN IF NOT EXISTS scheduled_at TIMESTAMPTZ"))
+        connection.execute(text("ALTER TABLE agent_visits ADD COLUMN IF NOT EXISTS scheduled_at TIMESTAMPTZ"))
+        # Visit-day reminder / next-day follow-up bookkeeping
+        # (Service/AgentManagementService/visit_reminder_service.py).
+        # Nullable, no default — metadata-only, and existing rows read
+        # "not sent yet".
+        connection.execute(text("ALTER TABLE agent_assignments ADD COLUMN IF NOT EXISTS reminder_sent_for TIMESTAMPTZ"))
+        connection.execute(text("ALTER TABLE agent_visits ADD COLUMN IF NOT EXISTS followup_sent_at TIMESTAMPTZ"))
     with engine.begin() as connection:
         # When a property's Instagram reel link was last set/changed — what
         # the poller's "most recently linked reels" list orders by (see
@@ -489,6 +537,10 @@ def init_db() -> None:
         connection.execute(
             text("ALTER TABLE broker_requirements ADD COLUMN IF NOT EXISTS source_connection_id VARCHAR")
         )
+        # The sold-out snapshot's copy of PropertyRow.super_built — see
+        # soldout_property_repository._PROPERTY_COLUMNS, whose INSERT ... SELECT
+        # carries it across. Nullable, so existing sold-out rows read "not set".
+        connection.execute(text("ALTER TABLE soldout_properties ADD COLUMN IF NOT EXISTS super_built VARCHAR"))
         # Per-client watermark for the daily incremental rescore — see
         # ClientRow.matches_computed_at. Left NULL for existing clients,
         # which correctly means "never scored incrementally yet", so each

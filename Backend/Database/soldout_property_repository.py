@@ -60,6 +60,7 @@ _PROPERTY_COLUMNS = (
     "address",
     "carpet_area_sqft",
     "carpet_area_unit",
+    "super_built",
     "price_text",
     "price_amount_inr",
     "price_per_unit_text",

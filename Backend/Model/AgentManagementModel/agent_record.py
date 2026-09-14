@@ -38,8 +38,12 @@ class AssignedClientSummary(BaseModel):
     # When this specific visit became active — the Agents page's per-agent
     # dialog lists active visits oldest-first, using this. Optional only
     # for the in-memory fallback's pre-existing rows; every real write
-    # (record_assignment, reopen_visit) always sets it.
+    # (record_assignments, reopen_visit) always sets it.
     assigned_at: Optional[datetime] = None
+    # When the site visit is booked for — see Database/
+    # agent_assignment_models.py's scheduled_at. None until someone picks a
+    # time in the matches dialog's visit planner.
+    scheduled_at: Optional[datetime] = None
 
 
 class AgentSummary(AgentRecord):

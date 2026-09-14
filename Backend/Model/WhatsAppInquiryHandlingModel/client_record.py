@@ -41,5 +41,12 @@ class ClientRecord(BaseModel):
     assigned_agent_id: Optional[str] = None
     handoff_sent_at: Optional[datetime] = None
 
+    # Whether staff have added a photo of this client. READ-ONLY: derived
+    # from Database/client_models.py's ClientRow.has_photo on every read, and
+    # ignored by every write — the photo itself changes only through
+    # client_store.upsert_client's explicit update_photo, and is fetched on
+    # its own (client_store.get_client_photo), never carried here.
+    has_photo: bool = False
+
     created_at: Optional[datetime] = None
     updated_at: Optional[datetime] = None

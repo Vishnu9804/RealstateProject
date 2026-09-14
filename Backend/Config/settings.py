@@ -140,6 +140,14 @@ class Settings(BaseSettings):
     instagram_daily_comment_limit: int = Field(default=10, ge=0)
     instagram_daily_dm_limit: int = Field(default=10, ge=0)
 
+    # Whether the Settings page may change the selected areas
+    # (ALLOW_AREA_CHANGE in .env). False by default: the area list decides
+    # which captured properties are Main vs Outsider, so editing it is locked
+    # unless explicitly switched on. Enforced by the API itself
+    # (Controller/WhatsAppDataFetchingController/area_filter_controller.py),
+    # not only hidden in the UI. Read once at startup — restart after changing.
+    allow_area_change: bool = False
+
     @model_validator(mode="after")
     def _fill_lan_defaults(self) -> "Settings":
         """Auto-detects this machine's LAN IP once, at startup, and uses it

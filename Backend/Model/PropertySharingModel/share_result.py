@@ -33,3 +33,16 @@ class ShareResult(BaseModel):
     sent: bool
     to_phone: str
     from_number: Optional[str] = None
+
+
+class PropertyBatchShareResult(BaseModel):
+    """What sending a client their properties one message each actually
+    did. `sent` is True only when EVERY message (opening, each property,
+    closing) went out; the counts say how far a partial send got."""
+
+    sent: bool
+    to_phone: str
+    from_number: Optional[str] = None
+    properties_sent: int = 0
+    properties_failed: int = 0
+    photos_sent: int = 0

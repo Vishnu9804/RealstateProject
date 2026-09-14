@@ -67,6 +67,7 @@ from Database.session import is_database_configured
 from Middleware import step_logger
 from Model.WhatsAppDataFetchingModel.whatsapp_message import WhatsAppChatMessage
 from Service.BrokerRequirementService import requirement_filter_service, requirement_pipeline_service
+from Service.BuilderProjectService import builder_project_service
 from Service.WhatsAppDataFetchingService import (
     area_filter_service,
     property_pipeline_service,
@@ -142,6 +143,11 @@ def get_status() -> dict:
         # to poll the database to notice a sale.
         "soldout_property_count": soldout_property_service.get_sold_out_count(),
         "soldout_version": soldout_property_service.get_sold_out_version(),
+        # And the Builder Projects page's own list — answered from that
+        # feature's in-memory cache (builder_project_store.version), so this
+        # costs no database work and the page never polls on its own.
+        "builder_project_count": builder_project_service.get_builder_project_count(),
+        "builder_projects_version": builder_project_service.get_builder_projects_version(),
     }
 
 

@@ -29,3 +29,8 @@ venv/
 # OS
 .DS_Store
 Thumbs.db
+
+# Runtime-generated usage stats (rewritten on every backend run)
+NeonUsage/
+LLMUsage/
+KnowledgeBase/area_knowledge_stats.json

@@ -21,7 +21,7 @@ from typing import List, Optional
 
 from pgvector.sqlalchemy import Vector
 from sqlalchemy import DateTime, Float, Integer, String, Text, func
-from sqlalchemy.orm import DeclarativeBase, Mapped, mapped_column
+from sqlalchemy.orm import DeclarativeBase, Mapped, column_property, mapped_column
 
 from Service.WhatsAppDataFetchingService.embedding_service import EMBEDDING_DIMENSIONS
 
@@ -105,6 +105,31 @@ class ClientRow(ClientBase):
     # mark_handoff_sent) — audit trail for "was this client's site-visit
     # hand-off message ever sent", not touched by anything else.
     handoff_sent_at: Mapped[Optional[datetime]] = mapped_column(DateTime(timezone=True), nullable=True)
+
+    # --- a photo of the client, added by staff ---
+    # One data URL (resized client-side, like a property's photos), set ONLY
+    # from the Inquiries page's own Add/Edit dialog (Service/
+    # WhatsAppInquiryHandlingService/manual_client_service.py). The client is
+    # never asked for one: the public requirements form has no photo field,
+    # and FormSubmissionRequest has nowhere to carry one.
+    #
+    # Deliberately NOT in Database/client_repository.py's _COLUMNS. Every
+    # other caller of upsert_client (the public form, the WhatsApp pipeline,
+    # a website enquiry, the agent hand-off) builds a fresh ClientRecord and
+    # writes every one of those columns from it — a photo in that list would
+    # be silently wiped by the next of those writes. It is written only when
+    # upsert_client is explicitly told to (update_photo=True).
+    #
+    # deferred=True for the same cost reason as requirement_embedding below:
+    # a photo is tens to hundreds of KB, and the Inquiries page loads up to
+    # 500 clients at once. It is fetched only by the one query that wants it
+    # (client_repository.get_client_photo), when someone opens that client.
+    photo_url: Mapped[Optional[str]] = mapped_column(Text, nullable=True, deferred=True)
+    # Whether photo_url is set — computed by Postgres inside the same SELECT
+    # (`photo_url IS NOT NULL`), so every client read knows about the photo
+    # without a single byte of it crossing the wire. Read-only by nature:
+    # nothing can assign it, so no write path can put it out of step.
+    has_photo: Mapped[bool] = column_property(photo_url.is_not(None))
 
     # --- Client-Property Matching feature ---
     # The SAME embedding model/process as PropertyRow.embedding

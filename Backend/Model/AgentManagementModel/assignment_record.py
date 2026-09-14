@@ -19,4 +19,6 @@ class ActiveAssignment(BaseModel):
     budget_max_inr: Optional[float] = None
     property_record_id: str
     property_label: str
+    # When the visit is booked for; None = agent chosen, time not fixed yet.
+    scheduled_at: Optional[datetime] = None
     created_at: Optional[datetime] = None

@@ -2,12 +2,14 @@ import { useCallback, useEffect, useMemo, useState } from "react";
 import { createPortal } from "react-dom";
 import { useNavigate } from "react-router-dom";
 import { agentApi } from "../api/agentApi";
+import { ApiError } from "../api/client";
 import { inquiryClientApi } from "../api/inquiryClientApi";
 import { landingLeadApi } from "../api/landingLeadApi";
 import { matchingApi } from "../api/matchingApi";
 import { propertyApi } from "../api/propertyApi";
 import type {
   AgentSummary,
+  AssignedClientSummary,
   ClientMatchResult,
   InquiryClientRecord,
   MatchBucket,
@@ -23,15 +25,21 @@ import {
   setCachedCompletedVisits,
   setCachedMatchResult,
 } from "../lib/clientMatchCache";
-import { formatCarpetArea, formatPrice, formatPricePerUnit, relativeTime } from "../lib/formatters";
-import type { AgentAssignment } from "../lib/handoffTemplate";
+import { formatCarpetArea, formatPrice, formatPricePerUnit, formatVisitTime, relativeTime } from "../lib/formatters";
+import {
+  buildVisitTimeMessages,
+  propertyLabel,
+  type AgentAssignment,
+  type HandoffPropertyLike,
+} from "../lib/handoffTemplate";
 import { sourceDetail, sourceLabel } from "../lib/propertyFilters";
 import { getCachedPropertyList, patchCachedProperty, setCachedPropertyList } from "../lib/propertyListCache";
 import type { SharePropertyLike } from "../lib/propertyShareTemplate";
 import HandoffDialog from "./HandoffDialog";
-import MultiAssignDialog, { type SelectableProperty } from "./MultiAssignDialog";
 import PropertyReadOnlyDialog from "./PropertyReadOnlyDialog";
 import ShareClientPropertiesDialog from "./ShareClientPropertiesDialog";
+import VisitMessagesDialog from "./VisitMessagesDialog";
+import VisitPlannerDialog from "./VisitPlannerDialog";
 import ConfirmDialog from "./ui/ConfirmDialog";
 import { useToast } from "./ui/Toast";
 import { Badge, Button, Copyable, EmptyState, Note, Segmented, SkeletonRows } from "./ui/Primitives";
@@ -40,6 +48,7 @@ import {
   IconBuilding,
   IconCheck,
   IconClock,
+  IconEdit,
   IconInbox,
   IconMessage,
   IconMove,
@@ -68,13 +77,14 @@ import {
 export type PropertyCategory = "main" | "outsider";
 
 /** What the dialog's top row can be showing — the two review drawers
- *  above, or the Completed view, which is not a drawer at all (a property
- *  there already had its visit; which drawer it happens to sit in on the
- *  Properties page stopped being the relevant fact about it the moment
- *  that happened). Segmented's own `null` state (see ui/Primitives.tsx's
- *  own comment on it) is exactly "a different control currently owns the
- *  view", which is precisely what's true while this reads "completed". */
-export type DialogView = PropertyCategory | "completed";
+ *  above, the Assigned view (every site visit currently out with an agent
+ *  for this client, re-visits included), or the Completed view. Neither of
+ *  the last two is a drawer: which drawer a property sits in on the
+ *  Properties page is not the relevant fact about a visit. Segmented's own
+ *  `null` state (see ui/Primitives.tsx's own comment on it) is exactly "a
+ *  different control currently owns the view", which is precisely what's
+ *  true while this reads "assigned" or "completed". */
+export type DialogView = PropertyCategory | "assigned" | "completed";
 
 /** What onChanged can tell its caller about the change it reports, so the
  *  caller can show the new figure straight away instead of waiting for its
@@ -171,7 +181,66 @@ export interface DialogItem {
   fromWebsiteInquiry: boolean;
 }
 
-type AssignFlow = { step: "pick" } | { step: "handoff"; assignments: AgentAssignment[] } | null;
+/** One site visit currently out with an agent for THIS client — the
+ *  Assigned tab's unit, read straight off the agent list the dialog already
+ *  loads (AgentSummary.active_clients), so it costs no request of its own. */
+interface ActiveVisit {
+  agent: AgentSummary;
+  active: AssignedClientSummary;
+}
+
+/** The visit planner's answer for one ticked property: which agent and,
+ *  optionally, when. Held here, on the card, until "Assign & send" — no
+ *  request is made until then. */
+interface VisitPlan {
+  agentId: string;
+  scheduledAt: string | null;
+}
+
+/** Which small planner dialog is open, and for what. */
+type PlannerState =
+  | { kind: "assign"; recordId: string }
+  | { kind: "revisit"; recordId: string; agentId: string | null; scheduledAt: string | null }
+  | { kind: "reschedule"; visit: ActiveVisit }
+  | null;
+
+/** The hand-off messages step. A re-visit remembers what the planner
+ *  picked, so "Change assignment" can reopen the planner right where it
+ *  was. */
+type AssignFlow =
+  | { kind: "assign"; assignments: AgentAssignment[] }
+  | { kind: "revisit"; recordId: string; agentId: string; scheduledAt: string | null; assignments: AgentAssignment[] }
+  | null;
+
+/** The "tell them about the new time?" step after a time is saved. */
+interface TimeMessagesState {
+  agent: AgentSummary;
+  scheduledAt: string;
+  rescheduled: boolean;
+  agentMessage: string;
+  clientMessage: string;
+}
+
+function timeOf(iso: string | null): number {
+  return iso ? new Date(iso).getTime() : 0;
+}
+
+/** A hand-off-shaped property for a re-visit whose full record is not in
+ *  the loaded list (e.g. beyond the list's size cap) — just the label the
+ *  completed visit already snapshotted, which is all the message needs. */
+function snapshotProperty(recordId: string, label: string | null): HandoffPropertyLike {
+  return {
+    record_id: recordId,
+    property_type: null,
+    bhk: null,
+    society_name: label,
+    area_name: null,
+    carpet_area_sqft: null,
+    carpet_area_unit: null,
+    contact_name: null,
+    contact_phone: null,
+  };
+}
 
 /* ========================================================================
    The dialog
@@ -184,9 +253,12 @@ type AssignFlow = { step: "pick" } | { step: "handoff"; assignments: AgentAssign
  * focused dialog over the client list the operator was already reading.
  *
  * The shape of the screen mirrors how the work actually goes: pick the
- * drawer you're working out of (Main / Outsider), read down
- * the properties in it strongest-first, tick the ones worth showing, and
- * hand them off — without ever losing your place in the Inquiries table.
+ * drawer you're working out of (Main / Outsider), read down the properties
+ * in it strongest-first, tick the ones worth showing — each tick opens the
+ * small visit planner (agent, then an optional time) — and hand them off,
+ * without ever losing your place in the Inquiries table. The Assigned tab
+ * then holds every visit out with an agent (set or change its time there),
+ * and the Completed tab every visit already made (book a re-visit there).
  */
 export default function ClientMatchesDialog({
   phone,
@@ -265,6 +337,11 @@ export default function ClientMatchesDialog({
 
   const [category, setCategory] = useState<DialogView>(initialView ?? "main");
   const [selectedIds, setSelectedIds] = useState<Set<string>>(new Set());
+  // Agent + optional time per ticked property — see VisitPlan.
+  const [plans, setPlans] = useState<Record<string, VisitPlan>>({});
+  const [planner, setPlanner] = useState<PlannerState>(null);
+  const [savingSchedule, setSavingSchedule] = useState(false);
+  const [timeMessages, setTimeMessages] = useState<TimeMessagesState | null>(null);
   const [openItemId, setOpenItemId] = useState<string | null>(null);
   const [viewingCompletedId, setViewingCompletedId] = useState<string | null>(null);
   const [assignFlow, setAssignFlow] = useState<AssignFlow>(null);
@@ -275,6 +352,24 @@ export default function ClientMatchesDialog({
   const [shareOpen, setShareOpen] = useState(false);
   const [clearOpen, setClearOpen] = useState(false);
   const [clearing, setClearing] = useState(false);
+
+  // Every change to the agent list — a fetch, or a local patch after a
+  // hand-off / time change / clear — is mirrored into the shared cache
+  // here, once, so AgentsPage and the next dialog opened start from it.
+  useEffect(() => {
+    if (agents) setCachedAgents(agents);
+  }, [agents]);
+
+  /** The one re-read every visit action needs: assigning, re-visiting,
+   *  changing a time and clearing only ever change the agents' active
+   *  visits, so this — not the dialog's full five-request load() — is what
+   *  runs after them. */
+  const reloadAgents = useCallback(() => {
+    agentApi
+      .getAgents()
+      .then(setAgents)
+      .catch(() => {});
+  }, []);
 
   const load = useCallback(() => {
     setError(null);
@@ -312,17 +407,11 @@ export default function ClientMatchesDialog({
       .catch((err) => setError((previous) => previous ?? friendlyError(err)))
       .finally(() => setLoadingMeta(false));
 
-    // Ungated on purpose — see loadingMeta's own comment above. Updates
-    // the shared cache too, so AgentsPage/SelectPropertyPage/the next
-    // ClientMatchesDialog opened all benefit from whichever of them
-    // fetched most recently.
-    agentApi
-      .getAgents()
-      .then((agentList) => {
-        setAgents(agentList);
-        setCachedAgents(agentList);
-      })
-      .catch(() => {});
+    // Ungated on purpose — see loadingMeta's own comment above. The shared
+    // cache is updated by the effect above, so AgentsPage/
+    // SelectPropertyPage/the next ClientMatchesDialog opened all benefit
+    // from whichever of them fetched most recently.
+    reloadAgents();
 
     // Also ungated, and allowed to fail quietly: it only feeds the Web
     // Site Property Inquiry section below, which simply stays empty if
@@ -347,18 +436,24 @@ export default function ClientMatchesDialog({
       })
       .catch(() => {})
       .finally(() => setLoadingProperties(false));
-  }, [phone]);
+  }, [phone, reloadAgents]);
 
   // `properties`/`loadingProperties` above already seed from the cache
   // directly (their own useState initializers) — this just fires the
-  // mandatory background refresh every one of load()'s four fetches
-  // always performs, regardless of what was cached.
+  // mandatory background refresh every one of load()'s fetches always
+  // performs, regardless of what was cached.
   useEffect(() => {
     load();
   }, [load]);
 
   const nestedOpen =
-    openItemId !== null || viewingCompletedId !== null || assignFlow !== null || clearOpen || shareOpen;
+    openItemId !== null ||
+    viewingCompletedId !== null ||
+    assignFlow !== null ||
+    clearOpen ||
+    shareOpen ||
+    planner !== null ||
+    timeMessages !== null;
 
   useEffect(() => {
     const onKeyDown = (event: KeyboardEvent) => {
@@ -376,37 +471,93 @@ export default function ClientMatchesDialog({
     return map;
   }, [properties]);
 
-  /** Which agent (if any) is actively handling each property FOR THIS
-   *  CLIENT — keyed per property, since one client's properties can be
-   *  split across several agents. */
-  const assignedAgentByProperty = useMemo(() => {
-    const map = new Map<string, AgentSummary>();
-    for (const agent of agents ?? []) {
-      for (const active of agent.active_clients) {
-        if (active.phone === phone) map.set(active.property_record_id, agent);
-      }
+  const matchById = useMemo(() => {
+    const map = new Map<string, MatchedProperty>();
+    for (const list of [result?.high ?? [], result?.medium ?? [], result?.low ?? []]) {
+      for (const match of list) map.set(match.record_id, match);
     }
     return map;
+  }, [result]);
+
+  /** Every site visit currently out with an agent for THIS client —
+   *  first visits and re-visits alike. Booked visits come first, soonest
+   *  first; ones still waiting for a time follow, oldest assignment first. */
+  const activeVisits = useMemo<ActiveVisit[]>(() => {
+    const list: ActiveVisit[] = [];
+    for (const agent of agents ?? []) {
+      for (const active of agent.active_clients) {
+        if (active.phone === phone) list.push({ agent, active });
+      }
+    }
+    return list.sort((a, b) => {
+      const aWhen = a.active.scheduled_at ? timeOf(a.active.scheduled_at) : Number.POSITIVE_INFINITY;
+      const bWhen = b.active.scheduled_at ? timeOf(b.active.scheduled_at) : Number.POSITIVE_INFINITY;
+      if (aWhen !== bWhen) return aWhen < bWhen ? -1 : 1;
+      return timeOf(a.active.assigned_at) - timeOf(b.active.assigned_at);
+    });
   }, [agents, phone]);
+
+  /** The active visit (if any) for each property FOR THIS CLIENT — keyed
+   *  per property, since one client's properties can be split across
+   *  several agents. */
+  const activeByProperty = useMemo(() => {
+    const map = new Map<string, ActiveVisit>();
+    for (const visit of activeVisits) {
+      if (!map.has(visit.active.property_record_id)) map.set(visit.active.property_record_id, visit);
+    }
+    return map;
+  }, [activeVisits]);
+
+  /** Which agent (if any) is actively handling each property for this
+   *  client. */
+  const assignedAgentByProperty = useMemo(() => {
+    const map = new Map<string, AgentSummary>();
+    for (const [recordId, visit] of activeByProperty) map.set(recordId, visit.agent);
+    return map;
+  }, [activeByProperty]);
+
+  const agentsById = useMemo(() => new Map((agents ?? []).map((agent) => [agent.agent_id, agent])), [agents]);
 
   const manualIdSet = useMemo(() => new Set(manualPropertyIds ?? []), [manualPropertyIds]);
   const websiteIdSet = useMemo(() => new Set(websitePropertyIds), [websitePropertyIds]);
 
-  /** One entry per property that already has a completed visit — deduped
-   *  down from the raw visit list (a property visited, reopened, then
-   *  visited again would otherwise appear twice), keeping whichever visit
-   *  is newest since completedVisits already arrives newest-first from
-   *  the backend. Everything downstream (the exclusion below, the
-   *  Completed section, the header badge) reads off this map, so there is
-   *  exactly one place that decides what "N completed" counts. */
+  /** Every completed visit, grouped per property and ordered oldest-first
+   *  within each group — so a property visited twice (a first visit, then a
+   *  re-visit) is ONE card listing visit 1 and visit 2, never two cards.
+   *  Everything downstream (the exclusion below, the Completed section,
+   *  the header badge, the re-visit numbering) reads off this map, so there
+   *  is exactly one place that decides what "N completed" counts. */
   const completedByProperty = useMemo(() => {
-    const map = new Map<string, VisitRecord>();
+    const map = new Map<string, VisitRecord[]>();
     for (const visit of completedVisits ?? []) {
       if (!visit.property_record_id) continue; // pre-existing rows with nothing to attribute this to
-      if (!map.has(visit.property_record_id)) map.set(visit.property_record_id, visit);
+      const group = map.get(visit.property_record_id);
+      if (group) group.push(visit);
+      else map.set(visit.property_record_id, [visit]);
     }
+    for (const group of map.values()) group.sort((a, b) => timeOf(a.completed_at) - timeOf(b.completed_at));
     return map;
   }, [completedVisits]);
+
+  /** 2 for a property visited once already, 3 after two visits…; null for
+   *  a property this client has never completed a visit to. */
+  const revisitNumberFor = useCallback(
+    (recordId: string): number | null => {
+      const visits = completedByProperty.get(recordId);
+      return visits && visits.length > 0 ? visits.length + 1 : null;
+    },
+    [completedByProperty],
+  );
+
+  /** A property's display title from whatever is freshest, falling back to
+   *  a label a visit already snapshotted. */
+  const titleFor = useCallback(
+    (recordId: string, fallback: string | null): string => {
+      const source = propertiesById.get(recordId) ?? matchById.get(recordId);
+      return (source && (source.society_name || source.property_type)) || fallback || "Property";
+    },
+    [propertiesById, matchById],
+  );
 
   /** Every card this dialog can show, already sectioned and categorised.
    *  A manually-added property that ALSO scored keeps its score badge but
@@ -476,11 +627,22 @@ export default function ClientMatchesDialog({
     return [...byId.values()];
   }, [result, manualPropertyIds, manualIdSet, propertiesById, completedByProperty, websiteIdSet]);
 
+  const itemsById = useMemo(() => new Map(items.map((item) => [item.recordId, item])), [items]);
+
+  // A ticked property that has since dropped off the list (moved, removed,
+  // sold) can't be planned any more — close its planner rather than leave
+  // an invisible layer swallowing Escape.
+  useEffect(() => {
+    if (planner?.kind === "assign" && !itemsById.has(planner.recordId)) setPlanner(null);
+  }, [planner, itemsById]);
+
   const countByCategory = useMemo(() => {
     const counts: Record<PropertyCategory, number> = { main: 0, outsider: 0 };
     for (const item of items) counts[item.category] += 1;
     return counts;
   }, [items]);
+
+  const inDrawer = category === "main" || category === "outsider";
 
   const visibleItems = useMemo(() => items.filter((item) => item.category === category), [items, category]);
 
@@ -510,21 +672,19 @@ export default function ClientMatchesDialog({
 
   const openItem = useMemo(() => items.find((item) => item.recordId === openItemId) ?? null, [items, openItemId]);
 
-  const selectedProperties = useMemo<SelectableProperty[]>(
-    () =>
-      items
-        .filter((item) => selectedIds.has(item.recordId))
-        .map((item) => ({
-          property: item.handoff,
-          source: item.section === "manual" ? "manual" : item.section === "website" ? "enquired" : "matched",
-        })),
-    [items, selectedIds],
+  /** Ticked cards that can actually be handed off — an already-assigned
+   *  property is never sent a second time (its checkbox is hidden for the
+   *  same reason), even if it was ticked a moment before its assignment
+   *  arrived from another screen. */
+  const assignableItems = useMemo(
+    () => items.filter((item) => selectedIds.has(item.recordId) && !assignedAgentByProperty.has(item.recordId)),
+    [items, selectedIds, assignedAgentByProperty],
   );
 
   /** The same ticked cards the assignment flow uses, in the shape a
    *  WhatsApp share message needs. Built from `items` (not from
    *  selectedIds directly) so a property that has dropped off the list can
-   *  never end up in a message — exactly the guarantee selectedProperties
+   *  never end up in a message — exactly the guarantee assignableItems
    *  above gives the hand-off. */
   const selectedShareProperties = useMemo<SharePropertyLike[]>(
     () => items.filter((item) => selectedIds.has(item.recordId)).map((item) => item.handoff),
@@ -545,17 +705,197 @@ export default function ClientMatchesDialog({
     [items, assignedAgentByProperty],
   );
 
-  /** Newest-first, one card per property — see completedByProperty's own
-   *  comment for how duplicates are resolved. */
-  const completedList = useMemo(() => [...completedByProperty.values()], [completedByProperty]);
+  /** One card per property, the property whose latest visit is newest
+   *  first — see completedByProperty's own comment for the grouping. */
+  const completedList = useMemo(
+    () =>
+      [...completedByProperty.entries()]
+        .map(([recordId, visits]) => ({ recordId, visits }))
+        .sort((a, b) => timeOf(b.visits[b.visits.length - 1].completed_at) - timeOf(a.visits[a.visits.length - 1].completed_at)),
+    [completedByProperty],
+  );
 
-  function toggleSelected(recordId: string) {
-    setSelectedIds((previous) => {
-      const next = new Set(previous);
-      if (next.has(recordId)) next.delete(recordId);
-      else next.add(recordId);
-      return next;
+  const firstVisits = useMemo(
+    () => activeVisits.filter((visit) => revisitNumberFor(visit.active.property_record_id) === null),
+    [activeVisits, revisitNumberFor],
+  );
+  const reVisits = useMemo(
+    () => activeVisits.filter((visit) => revisitNumberFor(visit.active.property_record_id) !== null),
+    [activeVisits, revisitNumberFor],
+  );
+
+  const displayName = client?.name || clientName || phone;
+
+  function clearSelection() {
+    setSelectedIds(new Set());
+    setPlans({});
+  }
+
+  /** Ticking a card selects it AND opens the small visit planner for it
+   *  (agent, then an optional time). Closing the planner without choosing
+   *  keeps the card ticked with no agent — it can still go out through
+   *  "Send details on WhatsApp", and "Assign & send" asks for the agent
+   *  when it gets to it. Unticking drops whatever was planned for it. */
+  function handleToggleSelect(recordId: string) {
+    if (selectedIds.has(recordId)) {
+      setSelectedIds((previous) => {
+        const next = new Set(previous);
+        next.delete(recordId);
+        return next;
+      });
+      setPlans((previous) => {
+        if (!(recordId in previous)) return previous;
+        const next = { ...previous };
+        delete next[recordId];
+        return next;
+      });
+      return;
+    }
+    setSelectedIds((previous) => new Set(previous).add(recordId));
+    setPlanner({ kind: "assign", recordId });
+  }
+
+  /** Straight to the hand-off messages — the agents (and times) were
+   *  already picked card by card. If any ticked card still lacks a usable
+   *  plan (no agent, an agent since removed, or a time that has passed),
+   *  its planner opens instead, one card at a time. */
+  function handleAssignAndSend() {
+    const now = Date.now();
+    for (const item of assignableItems) {
+      const plan = plans[item.recordId];
+      const problem = !plan || !agentsById.has(plan.agentId)
+        ? "doesn't have an agent yet"
+        : plan.scheduledAt && timeOf(plan.scheduledAt) <= now
+          ? "has a visit time that has already passed"
+          : null;
+      if (problem) {
+        toast.push({ tone: "info", title: "One more pick first", message: `${propertyLabel(item.handoff)} ${problem}.` });
+        setPlanner({ kind: "assign", recordId: item.recordId });
+        return;
+      }
+    }
+
+    const byAgent = new Map<string, AgentAssignment>();
+    for (const item of assignableItems) {
+      const plan = plans[item.recordId];
+      const agent = agentsById.get(plan.agentId)!;
+      let entry = byAgent.get(agent.agent_id);
+      if (!entry) {
+        entry = { agent, properties: [], visitMeta: {} };
+        byAgent.set(agent.agent_id, entry);
+      }
+      entry.properties.push(item.handoff);
+      entry.visitMeta![item.recordId] = { scheduledAt: plan.scheduledAt, revisitNumber: null };
+    }
+    if (byAgent.size > 0) setAssignFlow({ kind: "assign", assignments: [...byAgent.values()] });
+  }
+
+  /** Puts just-handed-off visits on screen immediately (orange cards, the
+   *  Assigned tab, a Completed card's "Re-visit with X"), before the
+   *  confirming re-read of the agent list lands — which also means a
+   *  second click can't book the same visit twice in that gap. */
+  function addActiveLocally(assignments: AgentAssignment[]) {
+    const assignedAt = new Date().toISOString();
+    setAgents((previous) => {
+      if (!previous) return previous;
+      return previous.map((agent) => {
+        const assignment = assignments.find((a) => a.agent.agent_id === agent.agent_id);
+        if (!assignment) return agent;
+        const additions: AssignedClientSummary[] = assignment.properties
+          .filter((p) => !agent.active_clients.some((a) => a.phone === phone && a.property_record_id === p.record_id))
+          .map((p) => ({
+            phone,
+            name: client?.name ?? null,
+            budget_min_inr: client?.budget_min_inr ?? null,
+            budget_max_inr: client?.budget_max_inr ?? null,
+            property_record_id: p.record_id,
+            property_label: propertyLabel(p),
+            assigned_at: assignedAt,
+            scheduled_at: assignment.visitMeta?.[p.record_id]?.scheduledAt ?? null,
+          }));
+        return additions.length > 0 ? { ...agent, active_clients: [...agent.active_clients, ...additions] } : agent;
+      });
     });
+  }
+
+  function handleRevisitConfirm(recordId: string, agentId: string, scheduledAt: string | null) {
+    const agent = agentsById.get(agentId);
+    // The hand-off step needs the client record to address its messages;
+    // without it there would be nothing to show (the Revisit button is
+    // disabled until it loads, so this is only a guard).
+    if (!agent || !client) {
+      setPlanner(null);
+      return;
+    }
+    const visits = completedByProperty.get(recordId) ?? [];
+    const latest = visits[visits.length - 1] ?? null;
+    const property: HandoffPropertyLike =
+      propertiesById.get(recordId) ?? matchById.get(recordId) ?? snapshotProperty(recordId, latest?.property_label ?? null);
+    setPlanner(null);
+    setAssignFlow({
+      kind: "revisit",
+      recordId,
+      agentId,
+      scheduledAt,
+      assignments: [{ agent, properties: [property], visitMeta: { [recordId]: { scheduledAt, revisitNumber: visits.length + 1 } } }],
+    });
+  }
+
+  /** The Assigned tab's time change: ONE write (see
+   *  agentApi.updateVisitSchedule), the returned visit patched into the
+   *  local agent list instead of re-reading it, then the optional
+   *  "tell them" step. The time is saved before that step opens, so
+   *  skipping it never loses the time. */
+  async function handleSaveSchedule(visit: ActiveVisit, scheduledAt: string) {
+    const recordId = visit.active.property_record_id;
+    setSavingSchedule(true);
+    try {
+      const updated = await agentApi.updateVisitSchedule(visit.agent.agent_id, {
+        client_phone: phone,
+        property_record_id: recordId,
+        scheduled_at: scheduledAt,
+      });
+      setAgents((previous) =>
+        previous?.map((agent) =>
+          agent.agent_id !== visit.agent.agent_id
+            ? agent
+            : {
+                ...agent,
+                active_clients: agent.active_clients.map((active) =>
+                  active.phone === phone && active.property_record_id === recordId ? updated : active,
+                ),
+              },
+        ) ?? previous,
+      );
+      setPlanner(null);
+      const messages = buildVisitTimeMessages({
+        clientName: client?.name || clientName || null,
+        clientPhone: phone,
+        agentName: visit.agent.name,
+        agentPhone: visit.agent.phone,
+        propertyLabel: titleFor(recordId, visit.active.property_label),
+        scheduledAt,
+        previousScheduledAt: visit.active.scheduled_at,
+        revisitNumber: revisitNumberFor(recordId),
+      });
+      setTimeMessages({
+        agent: visit.agent,
+        scheduledAt,
+        rescheduled: visit.active.scheduled_at !== null,
+        agentMessage: messages.agent,
+        clientMessage: messages.client,
+      });
+    } catch (err) {
+      toast.push({ tone: "bad", title: "Could not save the visit time", message: friendlyError(err) });
+      // Gone meanwhile (completed or cleared from another screen) — drop
+      // the stale card rather than leave a planner pointing at nothing.
+      if (err instanceof ApiError && err.status === 404) {
+        setPlanner(null);
+        reloadAgents();
+      }
+    } finally {
+      setSavingSchedule(false);
+    }
   }
 
   async function handleRefresh() {
@@ -618,8 +958,8 @@ export default function ClientMatchesDialog({
 
   /**
    * Calls off every site visit currently out with an agent for this client
-   * and messages each agent involved once — the backend does both (see
-   * whatsapp_inquiry_controller.clear_assignments).
+   * (re-visits included) and messages each agent involved once — the
+   * backend does both (see whatsapp_inquiry_controller.clear_assignments).
    *
    * Only ACTIVE assignments go. Completed visits are permanent history and
    * stay exactly where they are, which is the whole difference between
@@ -639,9 +979,18 @@ export default function ClientMatchesDialog({
             : "This client had no active site visits.",
       });
       onChanged?.();
-      // Re-read so every card drops its "Assigned to X" badge immediately
-      // rather than on some later poll.
-      void load();
+      // Every card drops its "Assigned to X" badge immediately; the
+      // re-read of the agent list confirms it. Nothing else changed, so
+      // nothing else is re-read.
+      setAgents((previous) =>
+        previous?.map((agent) =>
+          agent.active_clients.some((active) => active.phone === phone)
+            ? { ...agent, active_clients: agent.active_clients.filter((active) => active.phone !== phone) }
+            : agent,
+        ) ?? previous,
+      );
+      if (category === "assigned") setCategory("main");
+      reloadAgents();
     } catch (err) {
       toast.push({ tone: "bad", title: "Could not clear the assignments", message: friendlyError(err) });
     } finally {
@@ -659,6 +1008,12 @@ export default function ClientMatchesDialog({
         next.delete(recordId);
         return next;
       });
+      setPlans((previous) => {
+        if (!(recordId in previous)) return previous;
+        const next = { ...previous };
+        delete next[recordId];
+        return next;
+      });
       setOpenItemId((previous) => (previous === recordId ? null : previous));
       onChanged?.();
     } catch (err) {
@@ -672,10 +1027,48 @@ export default function ClientMatchesDialog({
 
   // Composite flags matching the section each actually feeds — see the
   // four loading* state declarations' own comment for why they're split.
+  // The Assigned tab needs no flag: it only exists once the agent list it
+  // is built from has arrived, and its cards fall back to the visit's own
+  // snapshot while property records load.
   const mainSectionLoading = loadingMatches || loadingMeta || loadingProperties;
   const completedSectionLoading = loadingCompleted || loadingMeta || loadingProperties;
-  const sectionLoading = category === "completed" ? completedSectionLoading : mainSectionLoading;
+  const sectionLoading =
+    category === "completed" ? completedSectionLoading : category === "assigned" ? false : mainSectionLoading;
   const allSettled = !loadingMatches && !loadingCompleted && !loadingMeta && !loadingProperties;
+
+  const renderMatchCard = (item: DialogItem) => {
+    const plan = plans[item.recordId];
+    const planAgent = plan ? agentsById.get(plan.agentId) ?? null : null;
+    return (
+      <PropertyMatchCard
+        key={item.recordId}
+        item={item}
+        selected={selectedIds.has(item.recordId)}
+        onToggleSelect={() => handleToggleSelect(item.recordId)}
+        onOpen={() => setOpenItemId(item.recordId)}
+        assigned={activeByProperty.get(item.recordId) ?? null}
+        plan={planAgent ? { agentName: planAgent.name, scheduledAt: plan.scheduledAt } : null}
+        onPlan={() => setPlanner({ kind: "assign", recordId: item.recordId })}
+      />
+    );
+  };
+
+  const renderActiveCard = (visit: ActiveVisit) => {
+    const recordId = visit.active.property_record_id;
+    return (
+      <AssignedVisitCard
+        key={`${visit.agent.agent_id}-${recordId}`}
+        visit={visit}
+        property={propertiesById.get(recordId) ?? null}
+        match={matchById.get(recordId) ?? null}
+        revisitNumber={revisitNumberFor(recordId)}
+        onOpen={() => (itemsById.has(recordId) ? setOpenItemId(recordId) : setViewingCompletedId(recordId))}
+        onEditTime={() => setPlanner({ kind: "reschedule", visit })}
+      />
+    );
+  };
+
+  const plannerItem = planner?.kind === "assign" ? itemsById.get(planner.recordId) ?? null : null;
 
   return createPortal(
     <>
@@ -689,7 +1082,7 @@ export default function ClientMatchesDialog({
           className="detail-modal detail-modal--wide anim-rise"
           role="dialog"
           aria-modal="true"
-          aria-label={`Properties matched for ${client?.name || clientName || phone}`}
+          aria-label={`Properties matched for ${displayName}`}
         >
           <div className="detail-modal__head">
             <div style={{ minWidth: 0 }}>
@@ -701,7 +1094,7 @@ export default function ClientMatchesDialog({
                   {total} propert{total === 1 ? "y" : "ies"}
                 </Badge>
                 {assignedCount > 0 && (
-                  <Badge tone="ok">
+                  <Badge tone="orange">
                     {assignedCount} assigned
                     {assignedCount < total ? ` · ${total - assignedCount} remaining` : ""}
                   </Badge>
@@ -726,13 +1119,24 @@ export default function ClientMatchesDialog({
           <div className="matches-dialog__tabs">
             <Segmented<PropertyCategory>
               ariaLabel="Which properties to show"
-              value={category === "completed" ? null : category}
+              value={inDrawer ? (category as PropertyCategory) : null}
               onChange={setCategory}
               options={(["main", "outsider"] as PropertyCategory[]).map((key) => ({
                 value: key,
                 label: `${CATEGORY_LABEL[key]}${countByCategory[key] ? ` (${countByCategory[key]})` : ""}`,
               }))}
             />
+            {activeVisits.length > 0 && (
+              <button
+                type="button"
+                className={`pill-orange${category === "assigned" ? " pill-orange--active" : ""}`}
+                onClick={() => setCategory(category === "assigned" ? "main" : "assigned")}
+                aria-pressed={category === "assigned"}
+              >
+                <IconUserCheck size={12} strokeWidth={2.2} />
+                {activeVisits.length} assigned
+              </button>
+            )}
             {completedList.length > 0 && (
               <button
                 type="button"
@@ -769,13 +1173,13 @@ export default function ClientMatchesDialog({
             )}
 
             {!mainSectionLoading &&
-              category !== "completed" &&
+              inDrawer &&
               (result?.has_requirements || total > 0 || completedList.length > 0) &&
               sections.length === 0 &&
               websiteItems.length === 0 && (
                 <EmptyState
                   icon={<IconInbox size={36} />}
-                  title={`Nothing in ${CATEGORY_LABEL[category]}`}
+                  title={`Nothing in ${CATEGORY_LABEL[category as PropertyCategory]}`}
                   body={
                     total > 0
                       ? "Every property found for this client is filed under one of the other tabs above."
@@ -784,6 +1188,40 @@ export default function ClientMatchesDialog({
                 />
               )}
 
+            {/* ---- Assigned: every visit out with an agent ---- */}
+            {category === "assigned" && activeVisits.length === 0 && (
+              <EmptyState
+                icon={<IconInbox size={36} />}
+                title="No assigned visits"
+                body="Nothing is out with an agent for this client right now. Tick a property under Main or Outsider to assign one."
+              />
+            )}
+            {category === "assigned" && firstVisits.length > 0 && (
+              <div className="stack stack-3">
+                <div className="matches-dialog__section-head">
+                  <span className="section-head__eyebrow" style={{ marginBottom: 0 }}>
+                    Site visits
+                  </span>
+                  <span className="matches-dialog__section-count">{firstVisits.length}</span>
+                  <span className="matches-dialog__rule" />
+                </div>
+                <div className="matches-grid">{firstVisits.map(renderActiveCard)}</div>
+              </div>
+            )}
+            {category === "assigned" && reVisits.length > 0 && (
+              <div className="stack stack-3">
+                <div className="matches-dialog__section-head">
+                  <span className="section-head__eyebrow" style={{ marginBottom: 0 }}>
+                    Re-visits
+                  </span>
+                  <span className="matches-dialog__section-count">{reVisits.length}</span>
+                  <span className="matches-dialog__rule" />
+                </div>
+                <div className="matches-grid">{reVisits.map(renderActiveCard)}</div>
+              </div>
+            )}
+
+            {/* ---- Completed: one card per property, every visit listed ---- */}
             {!completedSectionLoading && category === "completed" && completedList.length === 0 && (
               <EmptyState
                 icon={<IconInbox size={36} />}
@@ -802,25 +1240,29 @@ export default function ClientMatchesDialog({
                   <span className="matches-dialog__rule" />
                 </div>
                 <div className="matches-grid">
-                  {completedList.map((visit) => (
+                  {completedList.map(({ recordId, visits }) => (
                     <CompletedPropertyCard
-                      key={visit.visit_id}
-                      visit={visit}
-                      property={visit.property_record_id ? propertiesById.get(visit.property_record_id) ?? null : null}
-                      onOpen={() => visit.property_record_id && setViewingCompletedId(visit.property_record_id)}
+                      key={recordId}
+                      visits={visits}
+                      property={propertiesById.get(recordId) ?? null}
+                      onOpen={() => setViewingCompletedId(recordId)}
+                      activeVisit={activeByProperty.get(recordId) ?? null}
+                      canRevisit={client !== null}
+                      onRevisit={() => setPlanner({ kind: "revisit", recordId, agentId: null, scheduledAt: null })}
                     />
                   ))}
                 </div>
               </div>
             )}
 
-            {!mainSectionLoading && pendingManualCount > 0 && category !== "completed" && (
+            {/* ---- Main / Outsider ---- */}
+            {!mainSectionLoading && pendingManualCount > 0 && inDrawer && (
               <Note tone="info" icon={<IconClock size={16} />}>
                 Loading {pendingManualCount} hand-picked propert{pendingManualCount === 1 ? "y" : "ies"}…
               </Note>
             )}
 
-            {!mainSectionLoading && category !== "completed" && manualSection && (
+            {!mainSectionLoading && inDrawer && manualSection && (
               <div className="stack stack-3">
                 <div className="matches-dialog__section-head">
                   <span className="section-head__eyebrow" style={{ marginBottom: 0 }}>
@@ -829,18 +1271,7 @@ export default function ClientMatchesDialog({
                   <span className="matches-dialog__section-count">{manualSection.items.length}</span>
                   <span className="matches-dialog__rule" />
                 </div>
-                <div className="matches-grid">
-                  {manualSection.items.map((item) => (
-                    <PropertyMatchCard
-                      key={item.recordId}
-                      item={item}
-                      selected={selectedIds.has(item.recordId)}
-                      onToggleSelect={() => toggleSelected(item.recordId)}
-                      onOpen={() => setOpenItemId(item.recordId)}
-                      assignedAgent={assignedAgentByProperty.get(item.recordId) ?? null}
-                    />
-                  ))}
-                </div>
+                <div className="matches-grid">{manualSection.items.map(renderMatchCard)}</div>
               </div>
             )}
 
@@ -849,7 +1280,7 @@ export default function ClientMatchesDialog({
                 above (High/Medium/Low/Manually added) when it has one;
                 the only ones that DON'T are website enquiries that never
                 scored or got hand-picked, whose only home is here. */}
-            {!mainSectionLoading && category !== "completed" && websiteItems.length > 0 && (
+            {!mainSectionLoading && inDrawer && websiteItems.length > 0 && (
               <div className="stack stack-3">
                 <div className="matches-dialog__section-head">
                   <span className="section-head__eyebrow" style={{ marginBottom: 0 }}>
@@ -858,44 +1289,22 @@ export default function ClientMatchesDialog({
                   <span className="matches-dialog__section-count">{websiteItems.length}</span>
                   <span className="matches-dialog__rule" />
                 </div>
-                <div className="matches-grid">
-                  {websiteItems.map((item) => (
-                    <PropertyMatchCard
-                      key={item.recordId}
-                      item={item}
-                      selected={selectedIds.has(item.recordId)}
-                      onToggleSelect={() => toggleSelected(item.recordId)}
-                      onOpen={() => setOpenItemId(item.recordId)}
-                      assignedAgent={assignedAgentByProperty.get(item.recordId) ?? null}
-                    />
-                  ))}
-                </div>
+                <div className="matches-grid">{websiteItems.map(renderMatchCard)}</div>
               </div>
             )}
 
             {!mainSectionLoading &&
-              category !== "completed" &&
+              inDrawer &&
               bucketSections.map((section) => (
-              <div key={section.key} className="stack stack-3">
-                <div className="matches-dialog__section-head">
-                  <span className="section-head__eyebrow" style={{ marginBottom: 0 }}>
-                    {SECTION_LABEL[section.key]}
-                  </span>
-                  <span className="matches-dialog__section-count">{section.items.length}</span>
-                  <span className="matches-dialog__rule" />
-                </div>
-                <div className="matches-grid">
-                  {section.items.map((item) => (
-                    <PropertyMatchCard
-                      key={item.recordId}
-                      item={item}
-                      selected={selectedIds.has(item.recordId)}
-                      onToggleSelect={() => toggleSelected(item.recordId)}
-                      onOpen={() => setOpenItemId(item.recordId)}
-                      assignedAgent={assignedAgentByProperty.get(item.recordId) ?? null}
-                    />
-                  ))}
+                <div key={section.key} className="stack stack-3">
+                  <div className="matches-dialog__section-head">
+                    <span className="section-head__eyebrow" style={{ marginBottom: 0 }}>
+                      {SECTION_LABEL[section.key]}
+                    </span>
+                    <span className="matches-dialog__section-count">{section.items.length}</span>
+                    <span className="matches-dialog__rule" />
                   </div>
+                  <div className="matches-grid">{section.items.map(renderMatchCard)}</div>
                 </div>
               ))}
           </div>
@@ -914,15 +1323,11 @@ export default function ClientMatchesDialog({
               Add property
             </Button>
             {/* Only offered when there is something to call off — a
-                button that can only ever say "nothing to clear" is noise. */}
-            {assignedCount > 0 && (
-              <Button
-                variant="ghost"
-                icon={<IconTrash size={15} />}
-                onClick={() => setClearOpen(true)}
-                busy={clearing}
-              >
-                Clear assignments ({assignedCount})
+                button that can only ever say "nothing to clear" is noise.
+                Counts every active visit, re-visits included. */}
+            {activeVisits.length > 0 && (
+              <Button variant="ghost" icon={<IconTrash size={15} />} onClick={() => setClearOpen(true)} busy={clearing}>
+                Clear assignments ({activeVisits.length})
               </Button>
             )}
             <Button variant="ghost" onClick={onClose}>
@@ -944,10 +1349,10 @@ export default function ClientMatchesDialog({
               <Button
                 variant="primary"
                 icon={<IconUserCheck size={15} />}
-                onClick={() => setAssignFlow({ step: "pick" })}
-                disabled={!client || selectedIds.size === 0}
+                onClick={handleAssignAndSend}
+                disabled={!client || assignableItems.length === 0}
               >
-                Assign &amp; send ({selectedIds.size})
+                Assign &amp; send ({assignableItems.length})
               </Button>
             </span>
           </div>
@@ -961,7 +1366,14 @@ export default function ClientMatchesDialog({
           moving={movingId === openItem.recordId}
           removing={removingManualId === openItem.recordId}
           selected={selectedIds.has(openItem.recordId)}
-          onToggleSelect={() => toggleSelected(openItem.recordId)}
+          onToggleSelect={() => {
+            // Ticking from here hands straight over to the planner (which
+            // closes this view, so the two never stack); unticking just
+            // unticks.
+            const wasSelected = selectedIds.has(openItem.recordId);
+            handleToggleSelect(openItem.recordId);
+            if (!wasSelected) setOpenItemId(null);
+          }}
           onMove={(target) => handleMove(openItem, target)}
           onRemoveManual={openItem.section === "manual" ? () => handleRemoveManual(openItem.recordId) : undefined}
           onClose={() => setOpenItemId(null)}
@@ -983,9 +1395,9 @@ export default function ClientMatchesDialog({
           body={
             <div className="stack stack-3">
               <p className="section-head__sub" style={{ margin: 0 }}>
-                {assignedCount} propert{assignedCount === 1 ? "y is" : "ies are"} currently out with an agent for{" "}
-                <strong>{client?.name || clientName || phone}</strong>. Clearing removes{" "}
-                {assignedCount === 1 ? "that assignment" : "all of those assignments"} and messages every agent
+                {activeVisits.length} site visit{activeVisits.length === 1 ? " is" : "s are"} currently out with an agent for{" "}
+                <strong>{displayName}</strong>. Clearing removes{" "}
+                {activeVisits.length === 1 ? "that assignment" : "all of those assignments"} and messages every agent
                 involved on WhatsApp to say the visits are cancelled.
               </p>
               <p className="section-head__sub" style={{ margin: 0 }}>
@@ -1008,45 +1420,122 @@ export default function ClientMatchesDialog({
           // message, so there is deliberately no onChanged() or reload
           // here — see handleClearAssignments for what a state-changing
           // action does instead.
-          onSent={() => setSelectedIds(new Set())}
+          onSent={clearSelection}
         />
       )}
 
-      {assignFlow?.step === "pick" && client && (
-        <MultiAssignDialog
-          client={client}
-          agents={agents ?? []}
-          selected={selectedProperties}
-          onClose={() => setAssignFlow(null)}
-          onContinue={(assignments) => setAssignFlow({ step: "handoff", assignments })}
+      {plannerItem && (
+        <VisitPlannerDialog
+          key={`assign-${plannerItem.recordId}`}
+          mode="assign"
+          clientName={displayName}
+          propertyLabel={propertyLabel(plannerItem.handoff)}
+          propertyArea={plannerItem.handoff.area_name}
+          wantedAreas={client?.preferred_areas ?? null}
+          agents={agents}
+          initialAgentId={plans[plannerItem.recordId]?.agentId ?? null}
+          initialScheduledAt={plans[plannerItem.recordId]?.scheduledAt ?? null}
+          revisitNumber={null}
+          onConfirm={(agentId, scheduledAt) => {
+            setPlans((previous) => ({ ...previous, [plannerItem.recordId]: { agentId, scheduledAt } }));
+            setPlanner(null);
+          }}
+          onClose={() => setPlanner(null)}
         />
       )}
 
-      {assignFlow?.step === "handoff" && client && (
+      {planner?.kind === "revisit" && (
+        <VisitPlannerDialog
+          key={`revisit-${planner.recordId}`}
+          mode="revisit"
+          clientName={displayName}
+          propertyLabel={titleFor(planner.recordId, completedByProperty.get(planner.recordId)?.[0]?.property_label ?? null)}
+          propertyArea={(propertiesById.get(planner.recordId) ?? matchById.get(planner.recordId))?.area_name ?? null}
+          wantedAreas={client?.preferred_areas ?? null}
+          agents={agents}
+          initialAgentId={planner.agentId}
+          initialScheduledAt={planner.scheduledAt}
+          revisitNumber={revisitNumberFor(planner.recordId)}
+          onConfirm={(agentId, scheduledAt) => handleRevisitConfirm(planner.recordId, agentId, scheduledAt)}
+          onClose={() => setPlanner(null)}
+        />
+      )}
+
+      {planner?.kind === "reschedule" && (
+        <VisitPlannerDialog
+          key={`reschedule-${planner.visit.agent.agent_id}-${planner.visit.active.property_record_id}`}
+          mode="reschedule"
+          clientName={displayName}
+          propertyLabel={titleFor(planner.visit.active.property_record_id, planner.visit.active.property_label)}
+          propertyArea={null}
+          wantedAreas={null}
+          agents={[planner.visit.agent]}
+          initialAgentId={planner.visit.agent.agent_id}
+          initialScheduledAt={planner.visit.active.scheduled_at}
+          revisitNumber={revisitNumberFor(planner.visit.active.property_record_id)}
+          busy={savingSchedule}
+          onConfirm={(_agentId, scheduledAt) => {
+            if (scheduledAt) void handleSaveSchedule(planner.visit, scheduledAt);
+          }}
+          onClose={() => !savingSchedule && setPlanner(null)}
+        />
+      )}
+
+      {timeMessages && (
+        <VisitMessagesDialog
+          clientPhone={phone}
+          clientName={client?.name || clientName || null}
+          agentName={timeMessages.agent.name}
+          agentPhone={timeMessages.agent.phone}
+          rescheduled={timeMessages.rescheduled}
+          whenLabel={formatVisitTime(timeMessages.scheduledAt)}
+          agentMessage={timeMessages.agentMessage}
+          clientMessage={timeMessages.clientMessage}
+          onClose={() => setTimeMessages(null)}
+        />
+      )}
+
+      {assignFlow && client && (
         <HandoffDialog
           client={client}
           assignments={assignFlow.assignments}
+          revisit={assignFlow.kind === "revisit"}
           onClose={() => setAssignFlow(null)}
-          onPickDifferentAgent={() => setAssignFlow({ step: "pick" })}
-          onSent={(updated) => {
-            // Outstanding properties this hand-off put out with an agent
-            // for the first time — re-sending one that was already
-            // assigned doesn't raise the count, same as the server's own
-            // set-based MatchCounts.assigned.
-            const outstandingIds = new Set(items.map((item) => item.recordId));
-            const sentIds = new Set(
-              assignFlow.assignments.flatMap((assignment) => assignment.properties.map((p) => p.record_id)),
-            );
-            const newlyAssigned = [...sentIds].filter(
-              (id) => outstandingIds.has(id) && !assignedAgentByProperty.has(id),
-            ).length;
-            setClient(updated);
-            setSelectedIds(new Set());
+          onPickDifferentAgent={() => {
+            // A normal hand-off goes back to the cards, whose agents and
+            // times are edited in place; a re-visit reopens its planner
+            // with what was picked.
+            if (assignFlow.kind === "revisit") {
+              setPlanner({
+                kind: "revisit",
+                recordId: assignFlow.recordId,
+                agentId: assignFlow.agentId,
+                scheduledAt: assignFlow.scheduledAt,
+              });
+            }
             setAssignFlow(null);
-            onChanged?.({ newlyAssigned });
-            // Re-read the agents so every just-assigned property turns
-            // green here immediately rather than on some later poll.
-            void load();
+          }}
+          onSent={(updated) => {
+            setClient(updated);
+            addActiveLocally(assignFlow.assignments);
+            if (assignFlow.kind === "assign") {
+              // Outstanding properties this hand-off put out with an agent
+              // for the first time — re-sending one that was already
+              // assigned doesn't raise the count, same as the server's own
+              // set-based MatchCounts.assigned. A re-visit is never an
+              // outstanding property (it's already completed), so it never
+              // moves the Inquiries table's counts and reports nothing.
+              const sentIds = new Set(
+                assignFlow.assignments.flatMap((assignment) => assignment.properties.map((p) => p.record_id)),
+              );
+              const newlyAssigned = [...sentIds].filter(
+                (id) => itemsById.has(id) && !assignedAgentByProperty.has(id),
+              ).length;
+              clearSelection();
+              onChanged?.({ newlyAssigned });
+            }
+            setAssignFlow(null);
+            reloadAgents();
           }}
         />
       )}
@@ -1082,8 +1571,14 @@ function summariseRequirements(client: InquiryClientRecord | null, phone: string
   return parts.length > 0 ? `${phone} · ${parts.join(" · ")}` : phone;
 }
 
+function formatCompletedDate(iso: string | null): string | null {
+  return iso
+    ? new Date(iso).toLocaleString("en-IN", { day: "2-digit", month: "short", year: "numeric", hour: "numeric", minute: "2-digit" })
+    : null;
+}
+
 /* ========================================================================
-   Card
+   Cards
    ======================================================================== */
 
 function PropertyMatchCard({
@@ -1091,13 +1586,20 @@ function PropertyMatchCard({
   selected,
   onToggleSelect,
   onOpen,
-  assignedAgent,
+  assigned,
+  plan,
+  onPlan,
 }: {
   item: DialogItem;
   selected: boolean;
   onToggleSelect: () => void;
   onOpen: () => void;
-  assignedAgent: AgentSummary | null;
+  /** The active visit for this property, when it's already out with an
+   *  agent — the card turns orange and loses its checkbox. */
+  assigned: ActiveVisit | null;
+  /** What the visit planner picked for this ticked card, if anything. */
+  plan: { agentName: string; scheduledAt: string | null } | null;
+  onPlan: () => void;
 }) {
   const source = item.property ?? item.match!;
   const title = source.society_name || source.property_type || "Property";
@@ -1105,17 +1607,12 @@ function PropertyMatchCard({
 
   return (
     <div
-      className={[
-        "match-card",
-        selected && "match-card--selected",
-        assignedAgent && "match-card--assigned",
-      ]
-        .filter(Boolean)
-        .join(" ")}
+      className={["match-card", selected && "match-card--selected", assigned && "match-card--assigned"].filter(Boolean).join(" ")}
       role="button"
       tabIndex={0}
       onClick={onOpen}
       onKeyDown={(event) => {
+        if (event.target !== event.currentTarget) return;
         if (event.key === "Enter" || event.key === " ") {
           event.preventDefault();
           onOpen();
@@ -1126,7 +1623,7 @@ function PropertyMatchCard({
           select, so the toggle simply doesn't render rather than sitting
           there disabled (see the dialog's own Select button below, hidden
           the same way). */}
-      {!assignedAgent && (
+      {!assigned && (
         <button
           type="button"
           className={`select-toggle match-card__check${selected ? " select-toggle--add" : ""}`}
@@ -1188,12 +1685,45 @@ function PropertyMatchCard({
             say so without duplicating the same words twice on one card. */}
         {item.fromWebsiteInquiry && item.section !== "website" && <Badge tone="accent">Website enquiry</Badge>}
         {item.match?.is_partial_match && <Badge tone="info">Partial data</Badge>}
-        {assignedAgent && (
-          <Badge tone="ok">
-            <IconUserCheck size={11} /> Assigned to {assignedAgent.name}
+        {assigned && (
+          <Badge tone="orange">
+            <IconUserCheck size={11} /> Assigned to {assigned.agent.name}
           </Badge>
         )}
+        {assigned?.active.scheduled_at && (
+          <span className="fact">
+            <IconClock size={12} /> {formatVisitTime(assigned.active.scheduled_at)}
+          </span>
+        )}
       </div>
+
+      {/* The visit planner's pick, right on the ticked card — "Agent X
+          selected" plus the time, or a prompt to choose one. */}
+      {selected && !assigned && (
+        <div className="match-card__plan">
+          <span className="match-card__plan-text">
+            <IconUserCheck size={12} />
+            {plan ? (
+              <>
+                Agent <strong>{plan.agentName}</strong> selected
+                <span className="faint"> · {plan.scheduledAt ? formatVisitTime(plan.scheduledAt) : "no time yet"}</span>
+              </>
+            ) : (
+              <span className="faint">No agent chosen yet</span>
+            )}
+          </span>
+          <button
+            type="button"
+            className="match-card__plan-btn"
+            onClick={(event) => {
+              event.stopPropagation();
+              onPlan();
+            }}
+          >
+            {plan ? "Change" : "Choose agent"}
+          </button>
+        </div>
+      )}
 
       {item.match?.reason && <div className="match-card__reason">{item.match.reason}</div>}
 
@@ -1205,51 +1735,187 @@ function PropertyMatchCard({
   );
 }
 
-/** One completed visit's card — no checkbox (a visited property isn't
- *  part of the next hand-off round) and no bucket/score badge (its fit is
- *  no longer the point; that it was already shown and visited is). Falls
- *  back to the visit's own snapshotted property_label/budget when the
- *  full PropertyRecord hasn't loaded yet or the property was since
- *  deleted, the same graceful-degradation the match cards use. */
-export function CompletedPropertyCard({
+/** One visit on the Assigned tab — the same card shape as Main's, orange
+ *  throughout, with who is taking it and when. The time is the card's one
+ *  action: "Set visit time" until there is one, then the time itself,
+ *  clickable to change it. A re-visit is dashed and says which visit it is. */
+function AssignedVisitCard({
   visit,
   property,
+  match,
+  revisitNumber,
   onOpen,
+  onEditTime,
 }: {
-  visit: VisitRecord;
+  visit: ActiveVisit;
   property: PropertyRecord | null;
+  match: MatchedProperty | null;
+  revisitNumber: number | null;
   onOpen: () => void;
+  onEditTime: () => void;
 }) {
-  const title = property?.society_name || property?.property_type || visit.property_label || "Property";
-  const location = [property?.area_name, property?.address].filter(Boolean).join(" · ");
-  const clickable = visit.property_record_id !== null;
-  const completedDate = visit.completed_at
-    ? new Date(visit.completed_at).toLocaleString("en-IN", { day: "2-digit", month: "short", year: "numeric", hour: "numeric", minute: "2-digit" })
-    : null;
+  const source = property ?? match;
+  const title = (source && (source.society_name || source.property_type)) || visit.active.property_label || "Property";
+  const location = [source?.area_name, property?.address ?? match?.address].filter(Boolean).join(" · ");
+  const when = visit.active.scheduled_at;
+  const passed = when !== null && timeOf(when) < Date.now();
 
   return (
     <div
-      className="match-card match-card--assigned"
-      role={clickable ? "button" : undefined}
-      tabIndex={clickable ? 0 : undefined}
-      onClick={clickable ? onOpen : undefined}
-      onKeyDown={
-        clickable
-          ? (event) => {
-              if (event.key === "Enter" || event.key === " ") {
-                event.preventDefault();
-                onOpen();
-              }
-            }
-          : undefined
-      }
-      style={{ cursor: clickable ? "pointer" : "default" }}
+      className={`match-card match-card--assigned${revisitNumber ? " match-card--revisit" : ""}`}
+      role="button"
+      tabIndex={0}
+      onClick={onOpen}
+      onKeyDown={(event) => {
+        if (event.target !== event.currentTarget) return;
+        if (event.key === "Enter" || event.key === " ") {
+          event.preventDefault();
+          onOpen();
+        }
+      }}
     >
       <div className="match-card__head">
         <div style={{ minWidth: 0 }}>
           <div className="pcard__title cell-truncate">{title}</div>
           {location && <div className="pcard__sub cell-truncate">{location}</div>}
         </div>
+        {match && (
+          <span className={`match-card__score match-card__score--${match.bucket}`}>{Math.round(match.score * 100)}%</span>
+        )}
+      </div>
+
+      {source && (
+        <div className="match-card__facts">
+          {(source.property_type || source.bhk) && (
+            <span className="fact">
+              <IconBuilding size={12} />
+              {[source.bhk, source.property_type].filter(Boolean).join(" ")}
+            </span>
+          )}
+          {source.area_name && (
+            <span className="fact">
+              <IconPin size={12} />
+              {source.area_name}
+            </span>
+          )}
+          {source.carpet_area_sqft !== null && (
+            <span className="fact">
+              <IconRuler size={12} />
+              {formatCarpetArea(source.carpet_area_sqft, source.carpet_area_unit)}
+            </span>
+          )}
+        </div>
+      )}
+
+      <div className="match-card__badges">
+        <Badge tone="orange">
+          <IconUserCheck size={11} /> With {visit.agent.name}
+        </Badge>
+        {revisitNumber && (
+          <Badge tone="info">
+            <IconRefresh size={11} /> Re-visit · visit #{revisitNumber}
+          </Badge>
+        )}
+      </div>
+
+      <div className="match-card__foot">
+        {when ? (
+          <button
+            type="button"
+            className={`visit-when${passed ? " visit-when--past" : ""}`}
+            title={passed ? "This time has passed — click to change it" : "Change the visit time"}
+            onClick={(event) => {
+              event.stopPropagation();
+              onEditTime();
+            }}
+          >
+            <IconClock size={13} /> {formatVisitTime(when)} <IconEdit size={12} />
+          </button>
+        ) : (
+          <Button
+            size="sm"
+            icon={<IconClock size={13} />}
+            onClick={(event) => {
+              event.stopPropagation();
+              onEditTime();
+            }}
+          >
+            Set visit time
+          </Button>
+        )}
+        {source && <span className="pcard__price">{formatPrice(source.price_text, source.price_amount_inr)}</span>}
+      </div>
+    </div>
+  );
+}
+
+/** One property's completed visits — a single card however many times it
+ *  was visited. No checkbox and no score badge (its fit is no longer the
+ *  point; that it was already shown and visited is). One visit reads as it
+ *  always did; two or more are listed as a numbered history, visit 1 first,
+ *  each with its own date, agent and notes. The Revisit button (top right)
+ *  books another visit; while one is out, a badge says so instead. Falls
+ *  back to the visits' own snapshotted property_label when the full
+ *  PropertyRecord hasn't loaded yet or the property was since deleted. */
+export function CompletedPropertyCard({
+  visits,
+  property,
+  onOpen,
+  activeVisit,
+  canRevisit,
+  onRevisit,
+}: {
+  /** Oldest first; never empty. */
+  visits: VisitRecord[];
+  property: PropertyRecord | null;
+  onOpen: () => void;
+  /** The re-visit currently out for this property, if any. */
+  activeVisit: ActiveVisit | null;
+  /** False until the client record has loaded — the re-visit hand-off
+   *  needs it, exactly as "Assign & send" does. */
+  canRevisit: boolean;
+  onRevisit: () => void;
+}) {
+  const latest = visits[visits.length - 1];
+  const title = property?.society_name || property?.property_type || latest.property_label || "Property";
+  const location = [property?.area_name, property?.address].filter(Boolean).join(" · ");
+  const single = visits.length === 1;
+  const completedDate = formatCompletedDate(latest.completed_at);
+
+  return (
+    <div
+      className="match-card match-card--completed"
+      role="button"
+      tabIndex={0}
+      onClick={onOpen}
+      onKeyDown={(event) => {
+        if (event.target !== event.currentTarget) return;
+        if (event.key === "Enter" || event.key === " ") {
+          event.preventDefault();
+          onOpen();
+        }
+      }}
+    >
+      <div className="match-card__head">
+        <div style={{ minWidth: 0 }}>
+          <div className="pcard__title cell-truncate">{title}</div>
+          {location && <div className="pcard__sub cell-truncate">{location}</div>}
+        </div>
+        {!activeVisit && (
+          <Button
+            size="sm"
+            variant="ghost"
+            className="match-card__revisit"
+            icon={<IconRefresh size={13} />}
+            disabled={!canRevisit}
+            onClick={(event) => {
+              event.stopPropagation();
+              onRevisit();
+            }}
+          >
+            Revisit
+          </Button>
+        )}
       </div>
 
       {property && (
@@ -1277,14 +1943,40 @@ export function CompletedPropertyCard({
 
       <div className="match-card__badges">
         <Badge tone="ok">
-          <IconCheck size={11} /> Completed by {visit.agent_name}
+          <IconCheck size={11} /> {single ? `Completed by ${latest.agent_name}` : `Visited ${visits.length} times`}
         </Badge>
+        {activeVisit && (
+          <Badge tone="orange">
+            <IconRefresh size={11} /> Re-visit with {activeVisit.agent.name}
+          </Badge>
+        )}
       </div>
 
-      {visit.notes && <div className="match-card__reason">{visit.notes}</div>}
+      {single ? (
+        latest.notes && <div className="match-card__reason">{latest.notes}</div>
+      ) : (
+        <ol className="visit-history">
+          {visits.map((visit, index) => {
+            const date = formatCompletedDate(visit.completed_at);
+            return (
+              <li key={visit.visit_id} className="visit-history__item">
+                <span className="visit-history__num">{index + 1}</span>
+                <div className="visit-history__body">
+                  <div className="visit-history__when">
+                    {date ? `Completed ${date}` : "Completed"} · {visit.agent_name}
+                  </div>
+                  {visit.notes && <div className="visit-history__notes">{visit.notes}</div>}
+                </div>
+              </li>
+            );
+          })}
+        </ol>
+      )}
 
       <div className="match-card__foot">
-        <span className="faint small">{completedDate ? `Completed ${completedDate}` : "Completed"}</span>
+        <span className="faint small">
+          {single ? (completedDate ? `Completed ${completedDate}` : "Completed") : `${visits.length} visits`}
+        </span>
         {property && <span className="pcard__price">{formatPrice(property.price_text, property.price_amount_inr)}</span>}
       </div>
     </div>
@@ -1362,7 +2054,7 @@ export function PropertyMatchDetailDialog({
               </Badge>
               {item.section === "manual" && <Badge tone="info">Manually added</Badge>}
               {assignedAgent && (
-                <Badge tone="ok">
+                <Badge tone="orange">
                   <IconUserCheck size={11} /> Assigned to {assignedAgent.name}
                 </Badge>
               )}

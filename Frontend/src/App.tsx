@@ -2,6 +2,7 @@ import { BrowserRouter, Route, Routes } from "react-router-dom";
 import Layout from "./components/Layout";
 import AgentsPage from "./pages/AgentsPage";
 import BrokerRequirementsPage from "./pages/BrokerRequirementsPage";
+import BuilderProjectsPage from "./pages/BuilderProjectsPage";
 import ClientMatchesPage from "./pages/ClientMatchesPage";
 import ConnectionPage from "./pages/ConnectionPage";
 import DashboardPage from "./pages/DashboardPage";
@@ -44,6 +45,7 @@ export default function App() {
               <Route index element={<ConnectionPage />} />
               <Route path="dashboard" element={<DashboardPage />} />
               <Route path="requirements" element={<BrokerRequirementsPage />} />
+              <Route path="builder-projects" element={<BuilderProjectsPage />} />
               <Route path="landing-page" element={<LandingPagePage />} />
               <Route path="inquiries" element={<InquiryClientsPage />} />
               <Route path="inquiries/:phone/matches" element={<ClientMatchesPage />} />

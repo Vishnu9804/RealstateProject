@@ -35,6 +35,7 @@ const CLIENT_KEY = "__client__";
 export default function HandoffDialog({
   client,
   assignments,
+  revisit = false,
   onClose,
   onPickDifferentAgent,
   onSent,
@@ -42,8 +43,14 @@ export default function HandoffDialog({
   client: InquiryClientRecord;
   /** One entry per distinct agent involved in this hand-off round —
    *  almost always length 1, but can be more when different properties
-   *  (matched and/or manually-added) were assigned to different agents. */
+   *  (matched and/or manually-added) were assigned to different agents.
+   *  Each may carry per-property visit times / re-visit numbers
+   *  (AgentAssignment.visitMeta), which are written into the messages and
+   *  recorded with the visit. */
   assignments: AgentAssignment[];
+  /** A re-visit of a property this client has already seen (the Completed
+   *  tab's Revisit button) — wording only. */
+  revisit?: boolean;
   onClose: () => void;
   onPickDifferentAgent: () => void;
   onSent: (client: InquiryClientRecord) => void;
@@ -73,7 +80,10 @@ export default function HandoffDialog({
     () =>
       templates
         ? assignments.map((assignment) => {
-            const rendered = renderTemplate(templates.agent_template, buildAgentTokens(client, assignment.properties));
+            const rendered = renderTemplate(
+              templates.agent_template,
+              buildAgentTokens(client, assignment.properties, assignment.visitMeta),
+            );
             // `message` is what will actually be sent: the operator's edit
             // when there is one, the freshly rendered template otherwise.
             return { assignment, rendered, message: edits[assignment.agent.agent_id] ?? rendered };
@@ -122,7 +132,11 @@ export default function HandoffDialog({
           agent_id: assignment.agent.agent_id,
           agent_phone: assignment.agent.phone,
           message,
-          properties: assignment.properties.map((p) => ({ record_id: p.record_id, label: propertyLabel(p) })),
+          properties: assignment.properties.map((p) => ({
+            record_id: p.record_id,
+            label: propertyLabel(p),
+            scheduled_at: assignment.visitMeta?.[p.record_id]?.scheduledAt ?? null,
+          })),
         })),
         client_message: clientMessage,
       });
@@ -173,7 +187,7 @@ export default function HandoffDialog({
       <div className="detail-modal anim-rise" role="dialog" aria-modal="true" aria-label="WhatsApp hand-off" style={{ maxWidth: 980 }}>
         <div className="detail-modal__head">
           <div style={{ minWidth: 0 }}>
-            <div className="detail-modal__eyebrow">Step 5 — Hand over</div>
+            <div className="detail-modal__eyebrow">{revisit ? "Re-visit — Hand over" : "Step 5 — Hand over"}</div>
             <h2 className="detail-modal__title">{assignments.length === 1 ? "Two WhatsApp messages, one click" : `${assignments.length + 1} WhatsApp messages, one click`}</h2>
             <div className="detail-modal__sub">
               {assignments.map((a) => a.agent.name).join(" and ")} get{assignments.length === 1 ? "s" : ""} the brief and the shortlist. {client.name || "The client"} gets a name and a number.
@@ -246,7 +260,7 @@ export default function HandoffDialog({
  *  glance and always recoverable — without them, an operator who typed into
  *  the wrong box would have to abandon the whole flow and redo the
  *  assignment to get the original wording back. */
-function MessagePreview({
+export function MessagePreview({
   label,
   name,
   message,

@@ -530,6 +530,14 @@ code {
   padding: 10px 14px;
   border-bottom: 1px solid var(--border);
   vertical-align: middle;
+  /* One line per value; the column widens and .table-scroll scrolls. */
+  white-space: nowrap;
+}
+
+/* A full-width expanded detail row holds free-form content, not one value —
+   it keeps normal wrapping. */
+.table td[colspan] {
+  white-space: normal;
 }
 
 .table tbody tr:last-child td {

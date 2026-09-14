@@ -134,6 +134,10 @@ export const COLUMNS: Column[] = [
   { key: "type", label: "Type", filterKey: "type" },
   { key: "listingType", label: "Sale/Rent", filterKey: "listingType" },
   { key: "carpet", label: "Carpet area", sort: "area", numeric: true, filterKey: "carpet" },
+  // Free text a person typed ("1850 sq ft") — see PropertyRecord.super_built.
+  // No filter or sort: like Society/Address it is near-unique text, and the
+  // search box already searches it.
+  { key: "superBuilt", label: "Super built" },
   { key: "price", label: "Price", sort: "price", numeric: true, filterKey: "price" },
   { key: "priceUnit", label: "Price/unit", sort: "priceUnit", numeric: true, filterKey: "priceUnit" },
   { key: "contact", label: "Contact" },
@@ -144,7 +148,7 @@ export const COLUMNS: Column[] = [
 /** Ascending/descending read differently per column type — "A → Z" for a
  *  name, "Low → High" for money — and a generic label makes the reader
  *  translate before they can choose. */
-const SORT_LABELS: Record<SortKey, { asc: string; desc: string }> = {
+export const SORT_LABELS: Record<SortKey, { asc: string; desc: string }> = {
   time: { asc: "Oldest first", desc: "Newest first" },
   price: { asc: "Low → High", desc: "High → Low" },
   priceUnit: { asc: "Low → High", desc: "High → Low" },
@@ -439,6 +443,7 @@ export default function DashboardPage() {
         property.sender_saved_name,
         property.bhk,
         property.property_type,
+        property.super_built,
       ]
         .filter(Boolean)
         .join(" ")
@@ -1430,6 +1435,9 @@ function PropertyTable({
                     <td className="cell-num" style={{ textAlign: "right" }}>
                       {formatCarpetArea(property.carpet_area_sqft, property.carpet_area_unit)}
                     </td>
+                    <td className="cell-truncate" title={property.super_built ?? undefined}>
+                      <Highlight text={property.super_built ?? "—"} query={query} />
+                    </td>
                     <td
                       className="cell-num cell-strong"
                       style={{ textAlign: "right" }}
@@ -1557,6 +1565,12 @@ function PropertyCards({
                 <span className="fact">
                   <IconRuler size={12} />
                   {formatCarpetArea(property.carpet_area_sqft, property.carpet_area_unit)}
+                </span>
+              )}
+              {property.super_built && (
+                <span className="fact" title="Super built">
+                  <IconRuler size={12} />
+                  Super built {property.super_built}
                 </span>
               )}
               {property.area_name && (
@@ -1860,6 +1874,12 @@ export function PropertyDetailDialog({
                   {formatCarpetArea(property.carpet_area_sqft, property.carpet_area_unit)}
                 </span>
               )}
+              {property.super_built && (
+                <span className="fact" title="Super built">
+                  <IconRuler size={12} />
+                  Super built {property.super_built}
+                </span>
+              )}
             </div>
           </div>
           <button type="button" className="toast__close" onClick={onClose} aria-label="Close">
@@ -2140,7 +2160,7 @@ function ReviewBadge({ property }: { property: PropertyRecord }) {
  *  divs floating in the page's own left gutter, not inside the table, see
  *  PropertyTable), one slot per row in the same order, so it just scrolls
  *  with the page like everything else — no JS position syncing. */
-function PropertyIndicators({ property }: { property: PropertyRecord }) {
+export function PropertyIndicators({ property }: { property: Pick<PropertyRecord, "image_count" | "instagram_reel_url"> }) {
   // image_count, not image_urls.length — this list's properties never carry
   // real photos (see propertyApi.getProperties), but the count is always
   // accurate.

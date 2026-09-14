@@ -119,7 +119,18 @@ export function sourceDetail(property: PropertyRecord): string {
 
 /* -------------------------------------------------------------- definitions */
 
-export const FILTER_DEFS: ColumnFilterDef[] = [
+/** The fields the content-only filters below read — carried under the same
+ *  names by a PropertyRecord and a BuilderProjectRecord alike, which is what
+ *  lets the Builder Projects page filter with these exact definitions (see
+ *  lib/builderProjectFilters.ts). */
+export type PropertyContentFilterable = Pick<
+  PropertyRecord,
+  "area_name" | "bhk" | "property_type" | "listing_type" | "carpet_area_sqft" | "price_amount_inr" | "price_per_unit_amount_inr"
+>;
+
+/** Every property filter that reads the property's own content — i.e. all
+ *  of them except Source, which only a WhatsApp capture has. */
+export const CONTENT_FILTER_DEFS: ColumnFilterDef<PropertyContentFilterable>[] = [
   { key: "locality", label: "Area", kind: "values", optionOf: (property) => property.area_name },
   { key: "bhk", label: "BHK", kind: "values", optionOf: (property) => property.bhk },
   { key: "type", label: "Type", kind: "values", optionOf: (property) => property.property_type },
@@ -151,6 +162,10 @@ export const FILTER_DEFS: ColumnFilterDef[] = [
     parse: parseCompactInr,
     unitHint: "e.g. 50L, 1.2cr, 700k",
   },
+];
+
+export const FILTER_DEFS: ColumnFilterDef[] = [
+  ...CONTENT_FILTER_DEFS,
   { key: "source", label: "Source", kind: "values", optionOf: sourceLabel, detailOf: sourceDetail },
 ];
 

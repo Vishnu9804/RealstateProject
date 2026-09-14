@@ -61,4 +61,14 @@ class AgentVisitRow(ClientBase):
     # types in once at completion time, not data anything else computes on.
     notes: Mapped[Optional[str]] = mapped_column(Text, nullable=True)
 
+    # Snapshot of the active assignment's booked visit time, same reasoning
+    # as the budget snapshot above: a later "Mark as still active" recreates
+    # the assignment with the time it had rather than silently dropping it.
+    scheduled_at: Mapped[Optional[datetime]] = mapped_column(DateTime(timezone=True), nullable=True)
+
+    # When the automatic 24-hours-later follow-up WhatsApp went to the
+    # client (Service/AgentManagementService/visit_reminder_service.py).
+    # Null = not sent yet.
+    followup_sent_at: Mapped[Optional[datetime]] = mapped_column(DateTime(timezone=True), nullable=True)
+
     completed_at: Mapped[datetime] = mapped_column(DateTime(timezone=True), server_default=func.now())

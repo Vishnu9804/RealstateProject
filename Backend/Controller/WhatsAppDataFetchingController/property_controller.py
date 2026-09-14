@@ -29,6 +29,9 @@ class PropertyContentFields(BaseModel):
     address: Optional[str] = None
     carpet_area_sqft: Optional[float] = None
     carpet_area_unit: Optional[str] = None
+    # Human-only, like instagram_reel_url — never asked of the LLM (see
+    # StructuredProperty.super_built).
+    super_built: Optional[str] = None
     price_text: Optional[str] = None
     price_amount_inr: Optional[float] = None
     price_per_unit_text: Optional[str] = None

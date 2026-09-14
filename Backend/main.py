@@ -78,6 +78,7 @@ if sys.platform == "win32":
 from Controller.AgentManagementController.agent_controller import router as agent_router
 from Controller.BrokerRequirementController.broker_requirement_controller import router as broker_requirement_router
 from Controller.BrokerRequirementController.requirement_matching_controller import router as requirement_matching_router
+from Controller.BuilderProjectController.builder_project_controller import router as builder_project_router
 from Controller.ClientPropertyMatchingController.matching_controller import router as matching_router
 from Controller.WhatsAppDataFetchingController.area_filter_controller import router as area_filter_router
 from Controller.WhatsAppDataFetchingController.area_knowledge_controller import router as area_knowledge_router
@@ -99,7 +100,7 @@ from Database.session import init_db, is_database_configured
 from Middleware.logging_config import configure_logging
 from Middleware.public_rate_limit import PublicRateLimitMiddleware
 from Middleware import step_logger
-from Service.AgentManagementService import handoff_template_service
+from Service.AgentManagementService import handoff_template_service, visit_reminder_service
 from Service.PropertySharingService import property_share_template_service
 from Service.ClientPropertyMatchingService import scheduled_recompute_service
 from Service.WhatsAppDataFetchingService import area_filter_service, area_knowledge_service, display_settings_service, whatsapp_service
@@ -227,6 +228,10 @@ async def lifespan(_app: FastAPI):
     # a client last had their requirements changed still get matched against
     # them. Inert until the first 6 AM IST tick, so safe to start unconditionally.
     scheduled_recompute_service.start_daily_recompute_in_background()
+    # Site-visit WhatsApp reminder (9 AM IST on the visit day) and next-day
+    # follow-up to the client. Sleeps until something is due, so it does not
+    # poll the database — see visit_reminder_service's own docstring.
+    visit_reminder_service.start_in_background()
     yield
     # The WhatsApp/Instagram clients above run on daemon threads blocked
     # inside native (cgo) calls into the whatsmeow/neonize Go library —
@@ -326,6 +331,7 @@ app.include_router(display_settings_router, prefix="/api")
 app.include_router(property_router, prefix="/api")
 app.include_router(soldout_property_router, prefix="/api")
 app.include_router(broker_requirement_router, prefix="/api")
+app.include_router(builder_project_router, prefix="/api")
 app.include_router(whatsapp_inquiry_router, prefix="/api")
 app.include_router(property_share_router, prefix="/api")
 app.include_router(inquiry_form_router, prefix="/api")

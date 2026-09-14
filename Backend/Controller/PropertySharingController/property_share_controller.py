@@ -12,11 +12,13 @@ Controller/AgentManagementController/agent_controller.py: "/templates" is
 declared before any "/{...}" path so it can never be captured as an id.
 """
 
+from typing import List
+
 from fastapi import APIRouter, HTTPException
 from pydantic import BaseModel, Field
 
 from Model.PropertySharingModel.property_share_templates import PropertyShareTemplates
-from Model.PropertySharingModel.share_result import ShareResult, ShareTarget
+from Model.PropertySharingModel.share_result import PropertyBatchShareResult, ShareResult, ShareTarget
 from Service.PropertySharingService import property_share_service, property_share_template_service
 
 router = APIRouter(prefix="/property-share", tags=["property-share"])
@@ -82,6 +84,39 @@ def send_for_client(phone: str, body: ShareSendRequest) -> ShareResult:
     WhatsApp at all, from the first number selected for client inquiries on
     the Connection page. Same sent=false-on-failure contract as above."""
     result = property_share_service.send_for_client(phone, body.message)
+    if result is None:
+        raise HTTPException(status_code=404, detail="No client found for that phone number.")
+    return result
+
+
+class ClientPropertyDetails(BaseModel):
+    record_id: str = Field(min_length=1)
+    # The property's details exactly as approved in the send dialog.
+    details: str = Field(min_length=1)
+
+
+class ClientPropertiesSendRequest(BaseModel):
+    """The client shortlist split into separate WhatsApp messages: an
+    opening message, one message per property (its photos first, the
+    details as their caption), and a closing message. Opening and closing
+    may be blank, in which case they are not sent."""
+
+    intro: str = ""
+    closing: str = ""
+    properties: List[ClientPropertyDetails] = Field(min_length=1)
+
+
+@router.post("/clients/{phone}/send-properties", response_model=PropertyBatchShareResult)
+def send_properties_to_client(phone: str, body: ClientPropertiesSendRequest) -> PropertyBatchShareResult:
+    """What the Inquiries → Matches "Send details on WhatsApp" dialog uses:
+    every property in its own message, photos included. Same sender rule
+    and sent=false-on-failure contract as /send above."""
+    result = property_share_service.send_properties_to_client(
+        phone,
+        body.intro,
+        body.closing,
+        [(item.record_id, item.details) for item in body.properties],
+    )
     if result is None:
         raise HTTPException(status_code=404, detail="No client found for that phone number.")
     return result

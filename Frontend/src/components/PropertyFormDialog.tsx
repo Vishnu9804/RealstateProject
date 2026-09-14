@@ -11,13 +11,59 @@ import PropertyImagesField from "./PropertyImagesField";
 /**
  * The Properties page's Add/Edit dialog — the same field set either way
  * (everything the LLM structuring stage would otherwise fill in, plus
- * instagram_reel_url, which only a human ever sets). Every field is
- * optional: there is nothing here that blocks Save.
+ * instagram_reel_url and super_built, which only a human ever sets). Every
+ * field is optional: there is nothing here that blocks Save.
+ *
+ * Also the Builder Projects page's Add/Edit dialog: a builder project has
+ * exactly these fields under exactly these names (see Backend/Model/
+ * BuilderProjectModel/builder_project.py), so that page passes its own
+ * endpoints as `api` and its own `noun` rather than keeping a second copy
+ * of this form in step by hand.
  *
  * Cancel and the header's X both discard the in-progress edit without
  * calling the backend — onClose is the only thing either one does, and
  * neither is wired to onSave.
  */
+
+/** What the dialog reads off the record it edits: the content fields plus
+ *  the record's id and photo bookkeeping. A PropertyRecord and a
+ *  BuilderProjectRecord both carry exactly these. */
+export type EditableContentRecord = Pick<
+  PropertyRecord,
+  | "record_id"
+  | "property_type"
+  | "bhk"
+  | "society_name"
+  | "area_name"
+  | "address"
+  | "carpet_area_sqft"
+  | "carpet_area_unit"
+  | "super_built"
+  | "price_text"
+  | "price_amount_inr"
+  | "price_per_unit_text"
+  | "price_per_unit_amount_inr"
+  | "listing_type"
+  | "contact_name"
+  | "contact_phone"
+  | "description"
+  | "instagram_reel_url"
+  | "image_urls"
+  | "image_count"
+>;
+
+/** Where the dialog saves to and loads photos from. */
+export interface ContentFormApi<T extends EditableContentRecord> {
+  create: (body: PropertyContentFields) => Promise<T>;
+  update: (recordId: string, body: PropertyContentFields) => Promise<T>;
+  getImages: (recordId: string) => Promise<{ image_urls: string[] }>;
+}
+
+const PROPERTY_FORM_API: ContentFormApi<PropertyRecord> = {
+  create: propertyApi.createProperty,
+  update: propertyApi.updateProperty,
+  getImages: propertyApi.getPropertyImages,
+};
 
 interface FormState {
   property_type: string;
@@ -27,6 +73,7 @@ interface FormState {
   address: string;
   carpet_area_sqft: string;
   carpet_area_unit: string;
+  super_built: string;
   price_text: string;
   price_amount_inr: string;
   price_per_unit_text: string;
@@ -47,6 +94,7 @@ const BLANK_FORM: FormState = {
   address: "",
   carpet_area_sqft: "",
   carpet_area_unit: "",
+  super_built: "",
   price_text: "",
   price_amount_inr: "",
   price_per_unit_text: "",
@@ -59,7 +107,7 @@ const BLANK_FORM: FormState = {
   image_urls: [],
 };
 
-function toFormState(property: PropertyRecord): FormState {
+function toFormState(property: EditableContentRecord): FormState {
   return {
     property_type: property.property_type ?? "",
     bhk: property.bhk ?? "",
@@ -68,6 +116,7 @@ function toFormState(property: PropertyRecord): FormState {
     address: property.address ?? "",
     carpet_area_sqft: property.carpet_area_sqft?.toString() ?? "",
     carpet_area_unit: property.carpet_area_unit ?? "",
+    super_built: property.super_built ?? "",
     price_text: property.price_text ?? "",
     price_amount_inr: property.price_amount_inr?.toString() ?? "",
     price_per_unit_text: property.price_per_unit_text ?? "",
@@ -104,6 +153,7 @@ function toPayload(form: FormState, includeImages: boolean): PropertyContentFiel
     address: text(form.address),
     carpet_area_sqft: num(form.carpet_area_sqft),
     carpet_area_unit: text(form.carpet_area_unit),
+    super_built: text(form.super_built),
     price_text: text(form.price_text),
     price_amount_inr: num(form.price_amount_inr),
     price_per_unit_text: text(form.price_per_unit_text),
@@ -147,20 +197,31 @@ function Field({
   );
 }
 
-export default function PropertyFormDialog({
+export default function PropertyFormDialog<T extends EditableContentRecord = PropertyRecord>({
   mode,
   property,
   onClose,
   onSaved,
+  // The cast is the price of a generic default: the Properties endpoints
+  // return PropertyRecords, which is exactly what T is whenever a caller
+  // does not pass an api of its own (T then defaults to PropertyRecord).
+  api = PROPERTY_FORM_API as unknown as ContentFormApi<T>,
+  noun = "property",
 }: {
   mode: "add" | "edit";
-  property?: PropertyRecord;
+  property?: T;
   onClose: () => void;
-  onSaved: (property: PropertyRecord, mode: "add" | "edit") => void;
+  onSaved: (property: T, mode: "add" | "edit") => void;
+  /** Where to save and load photos. Defaults to the Properties endpoints. */
+  api?: ContentFormApi<T>;
+  /** What the record is called in this dialog's wording ("property",
+   *  "builder project"). */
+  noun?: string;
 }) {
   const toast = useToast();
   const [form, setForm] = useState<FormState>(property ? toFormState(property) : BLANK_FORM);
   const [saving, setSaving] = useState(false);
+  const Noun = noun.charAt(0).toUpperCase() + noun.slice(1);
 
   // Whether this dialog is actually holding the property's photos.
   //
@@ -181,11 +242,11 @@ export default function PropertyFormDialog({
     if (!property) return;
     setLoadingImages(true);
     try {
-      const { image_urls } = await propertyApi.getPropertyImages(property.record_id);
+      const { image_urls } = await api.getImages(property.record_id);
       setForm((prev) => ({ ...prev, image_urls }));
       setImagesLoaded(true);
     } catch (err) {
-      toast.push({ tone: "bad", title: "Couldn't load this property's photos", message: friendlyError(err) });
+      toast.push({ tone: "bad", title: `Couldn't load this ${noun}'s photos`, message: friendlyError(err) });
     } finally {
       setLoadingImages(false);
     }
@@ -228,16 +289,15 @@ export default function PropertyFormDialog({
     setSaving(true);
     try {
       const payload = toPayload(form, imagesLoaded);
-      const saved =
-        mode === "add" ? await propertyApi.createProperty(payload) : await propertyApi.updateProperty(property!.record_id, payload);
+      const saved = mode === "add" ? await api.create(payload) : await api.update(property!.record_id, payload);
       toast.push({
         tone: "ok",
-        title: mode === "add" ? "Property added" : "Property updated",
+        title: mode === "add" ? `${Noun} added` : `${Noun} updated`,
         message: saved.society_name ?? saved.area_name ?? "Saved.",
       });
       onSaved(saved, mode);
     } catch (err) {
-      toast.push({ tone: "bad", title: "Couldn't save this property", message: friendlyError(err) });
+      toast.push({ tone: "bad", title: `Couldn't save this ${noun}`, message: friendlyError(err) });
     } finally {
       setSaving(false);
     }
@@ -245,12 +305,12 @@ export default function PropertyFormDialog({
 
   return createPortal(
     <div className="modal-scrim" onMouseDown={(event) => event.target === event.currentTarget && !saving && onClose()}>
-      <div className="detail-modal anim-rise" role="dialog" aria-modal="true" aria-label={mode === "add" ? "Add property" : "Edit property"}>
+      <div className="detail-modal anim-rise" role="dialog" aria-modal="true" aria-label={mode === "add" ? `Add ${noun}` : `Edit ${noun}`}>
         <div className="detail-modal__head">
           <div style={{ minWidth: 0 }}>
-            <div className="detail-modal__eyebrow">{mode === "add" ? "New property" : "Edit property"}</div>
+            <div className="detail-modal__eyebrow">{mode === "add" ? `New ${noun}` : `Edit ${noun}`}</div>
             <h2 className="detail-modal__title cell-truncate">
-              {mode === "add" ? "Add a property" : (property?.society_name ?? property?.area_name ?? "Edit property")}
+              {mode === "add" ? `Add a ${noun}` : (property?.society_name ?? property?.area_name ?? `Edit ${noun}`)}
             </h2>
             <div className="detail-modal__sub">Every field here is optional — fill in only what you know.</div>
           </div>
@@ -262,10 +322,10 @@ export default function PropertyFormDialog({
         <div className="detail-modal__body">
           <div className="stack stack-4">
             <Field
-              label="Property photos"
+              label={`${Noun} photos`}
               hint={
                 imagesLoaded
-                  ? "Optional — add photos of this property."
+                  ? `Optional — add photos of this ${noun}.`
                   : "Photos aren't loaded yet. Load them to view, reorder or remove them — your other edits save fine either way."
               }
             >
@@ -322,6 +382,9 @@ export default function PropertyFormDialog({
                   <option value="vigha">vigha</option>
                 </select>
               </Field>
+              <Field label="Super built" hint="As you'd write it — e.g. 1850 sq ft">
+                <input className="input" value={form.super_built} onChange={(e) => set("super_built", e.target.value)} placeholder="e.g. 1850 sq ft" />
+              </Field>
 
               <Field label="Price (as written)" hint="e.g. 45L, 1.25cr, 15k/month">
                 <input className="input" value={form.price_text} onChange={(e) => set("price_text", e.target.value)} placeholder="e.g. 45L" />
@@ -345,7 +408,7 @@ export default function PropertyFormDialog({
 
               <Field
                 label="Instagram reel link"
-                hint="If this property was posted as an Instagram reel, paste its link — comments and shares of that reel get matched back to this property."
+                hint={`If this ${noun} was posted as an Instagram reel, paste its link — comments and shares of that reel get matched back to this ${noun}.`}
                 span
               >
                 <div className="input-wrap">
@@ -375,7 +438,7 @@ export default function PropertyFormDialog({
           </Button>
           <span style={{ marginLeft: "auto" }}>
             <Button variant="primary" onClick={handleSave} busy={saving}>
-              {mode === "add" ? "Add property" : "Save changes"}
+              {mode === "add" ? `Add ${noun}` : "Save changes"}
             </Button>
           </span>
         </div>

@@ -118,6 +118,24 @@ export function parseSqft(raw: string): number | null {
 }
 
 /**
+ * A booked site-visit time, the way it's read out to a person: "Tue, 15 Sept
+ * 2026, 4:30 pm". Always the browser's own timezone — the operator picked
+ * the time in that timezone, and every WhatsApp message quoting it is
+ * rendered right here, so the time they chose is the time that gets sent.
+ */
+export function formatVisitTime(iso: string): string {
+  return new Date(iso).toLocaleString("en-IN", {
+    weekday: "short",
+    day: "numeric",
+    month: "short",
+    year: "numeric",
+    hour: "numeric",
+    minute: "2-digit",
+    hour12: true,
+  });
+}
+
+/**
  * "just now" / "3m ago" for the last-refreshed indicator.
  *
  * A wall-clock time there ("14:52:07") forces the reader to look at their

@@ -41,11 +41,16 @@ def get_client_by_phone(phone: str) -> Optional[ClientRecord]:
         return _to_pydantic(row) if row is not None else None
 
 
-def upsert_client(record: ClientRecord) -> ClientRecord:
+def upsert_client(record: ClientRecord, photo_url: Optional[str] = None, update_photo: bool = False) -> ClientRecord:
     """Insert-or-update by phone number — phone is the primary key, so this
     is the ONLY write path into the client table, and it's always
     idempotent: submitting the same phone number twice updates one row,
-    never creates a second one (requirement: duplicate prevention)."""
+    never creates a second one (requirement: duplicate prevention).
+
+    The photo is written only when `update_photo` is True (`photo_url=None`
+    then clears it) — see ClientRow.photo_url for why it can never ride
+    along with the other columns. In the same transaction as the rest of the
+    write, so a save of details plus a photo lands whole or not at all."""
     with get_client_session() as session:
         row = session.get(ClientRow, record.phone)
         if row is None:
@@ -68,9 +73,24 @@ def upsert_client(record: ClientRecord) -> ClientRecord:
                 setattr(row, name, max(getattr(row, name) or 0, getattr(record, name) or 0))
                 continue
             setattr(row, name, getattr(record, name))
+        if update_photo:
+            # Assigned, never read: photo_url is deferred, and assigning to a
+            # deferred attribute does not load the old value first. The
+            # refresh below re-reads has_photo (computed by Postgres) and
+            # leaves photo_url itself unloaded.
+            row.photo_url = photo_url
         session.flush()
         session.refresh(row)
         return _to_pydantic(row)
+
+
+def get_client_photo(phone: str) -> Tuple[bool, Optional[str]]:
+    """(found, photo_url) for one client — the only query that moves photo
+    data, run only when someone opens that client's details or Edit dialog.
+    `found` tells "no such client" apart from "a client with no photo"."""
+    with get_client_session() as session:
+        found = session.execute(select(ClientRow.photo_url).where(ClientRow.phone == phone)).first()
+        return (True, found[0]) if found is not None else (False, None)
 
 
 def delete_client(phone: str) -> bool:
@@ -185,4 +205,6 @@ def set_matches_computed_at(watermarks: Dict[str, datetime]) -> None:
 
 def _to_pydantic(row: ClientRow) -> ClientRecord:
     data = {name: getattr(row, name) for name in _COLUMNS}
-    return ClientRecord(**data, created_at=row.created_at, updated_at=row.updated_at)
+    # has_photo is a SQL expression loaded with the row (ClientRow.has_photo),
+    # so reading it here costs no query and never touches the photo itself.
+    return ClientRecord(**data, has_photo=bool(row.has_photo), created_at=row.created_at, updated_at=row.updated_at)

@@ -24,6 +24,8 @@
   --amber-500: #f59e0b;
   --rose-400: #fb7185;
   --rose-500: #f43f5e;
+  --orange-400: #fb923c;
+  --orange-500: #f97316;
 
   --accent: var(--violet-500);
   --accent-soft: color-mix(in oklab, var(--accent) 18%, transparent);
@@ -100,6 +102,10 @@
   --warn: var(--amber-400);
   --bad: var(--rose-400);
   --info: var(--cyan-400);
+  /* "Out with an agent" — a site visit assigned but not done yet. Its own
+     colour, distinct from --warn's amber (medium matches) and --ok's green
+     (completed), so the three states never read as one another. */
+  --assigned: var(--orange-400);
 
   --grid-line: rgba(140, 160, 255, 0.055);
   --scrim: rgba(4, 5, 12, 0.72);
@@ -140,6 +146,7 @@
   --warn: #b45309;
   --bad: #e11d48;
   --info: #0891b2;
+  --assigned: #c2410c;
 
   --grid-line: rgba(80, 100, 190, 0.07);
   --scrim: rgba(226, 231, 245, 0.7);

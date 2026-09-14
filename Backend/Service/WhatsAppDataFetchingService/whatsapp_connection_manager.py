@@ -129,6 +129,44 @@ def _connection_session_db_path(connection_id: str) -> str:
     return os.path.join(_SESSION_DIR, f"connection_{connection_id}.db")
 
 
+# This machine's own session folders — a roster path under one of these is
+# always this machine's, even if the folder itself was deleted (it is simply
+# recreated and the number re-pairs, exactly as before).
+_OWN_SESSION_DIRS = {
+    os.path.normcase(os.path.normpath(_SESSION_DIR)),
+    os.path.normcase(os.path.normpath(os.path.dirname(_LEGACY_INQUIRY_SESSION_DB))),
+}
+
+
+def _session_path_on_this_machine(connection_id: str, stored_path: Optional[str]) -> Optional[str]:
+    """Where this connection's WhatsApp session lives on THIS computer, or
+    None if it doesn't live here at all.
+
+    The roster is kept in the database (whatsapp_connections_store), and
+    that database can be shared by more than one computer running this
+    backend. A roster entry saved by another computer carries that
+    computer's absolute session path — a folder that doesn't exist here, on
+    a drive or under a user that may not exist here either. Trying to start
+    it failed with FileNotFoundError and retried forever, and it could never
+    have worked anyway: the session file (the WhatsApp login itself) is on
+    the other computer.
+
+      - A path in one of this machine's own session folders, or in any
+        folder that exists here: used exactly as stored (unchanged).
+      - Otherwise, if this machine has its own session file for this
+        connection id (the project folder was moved or renamed): that file.
+      - Otherwise: None — the connection belongs to another computer."""
+    if not stored_path:
+        return _connection_session_db_path(connection_id)
+    folder = os.path.dirname(stored_path)
+    if os.path.normcase(os.path.normpath(folder)) in _OWN_SESSION_DIRS or os.path.isdir(folder):
+        return stored_path
+    local_path = _connection_session_db_path(connection_id)
+    if os.path.exists(local_path):
+        return local_path
+    return None
+
+
 def _normalize_digits(raw: str) -> str:
     return "".join(ch for ch in raw if ch.isdigit())
 
@@ -163,6 +201,11 @@ class _Connection:
 _lock = threading.Lock()
 _connections: Dict[str, _Connection] = {}
 _pending_connection_id: Optional[str] = None
+# Roster entries that belong to another computer sharing this database (see
+# `_session_path_on_this_machine`) — never started here, but written back
+# untouched on every save, so saving this machine's roster never deletes the
+# other computer's numbers from it.
+_foreign_roster_entries: Dict[str, dict] = {}
 
 _start_lock = threading.Lock()
 _last_start_time = 0.0
@@ -322,7 +365,15 @@ def _load_or_migrate_roster() -> List[dict]:
 
 def _restore_connection(entry: dict) -> None:
     connection_id = entry["connection_id"]
-    session_db_path = entry.get("session_db_path") or _connection_session_db_path(connection_id)
+    session_db_path = _session_path_on_this_machine(connection_id, entry.get("session_db_path"))
+    if session_db_path is None:
+        with _lock:
+            _foreign_roster_entries[connection_id] = dict(entry)
+        step_logger.warn(
+            f"Connection {connection_id} was linked on a different computer (its WhatsApp session file isn't on "
+            "this one) — not starting it here. It stays in the saved roster for that computer."
+        )
+        return
     client = _build_client(connection_id, session_db_path)
     # Union the new single-selection key with the OLD (pre-merge) separate
     # property/requirement keys, so a roster saved by an older version of
@@ -620,6 +671,11 @@ def _persist_roster() -> None:
             for conn in _connections.values()
             if not conn.is_pending
         ]
+        # Another computer's numbers, exactly as they were loaded — see
+        # `_foreign_roster_entries`.
+        roster.extend(
+            dict(entry) for connection_id, entry in _foreign_roster_entries.items() if connection_id not in _connections
+        )
     whatsapp_connections_store.save(roster)
 
 

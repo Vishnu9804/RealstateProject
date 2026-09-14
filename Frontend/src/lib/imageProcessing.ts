@@ -10,11 +10,24 @@
 const MAX_DIMENSION = 1600;
 const JPEG_QUALITY = 0.82;
 
-export async function fileToPropertyImage(file: File): Promise<string> {
+/** A client's photo is only ever shown as a portrait-sized avatar or a
+ *  small preview (see ClientFormDialog and ClientAvatar), never full-screen
+ *  like a property's — so it is kept much smaller than a property photo. */
+const CLIENT_PHOTO_MAX_DIMENSION = 800;
+
+export function fileToPropertyImage(file: File): Promise<string> {
+  return fileToResizedDataUrl(file, MAX_DIMENSION);
+}
+
+export function fileToClientPhoto(file: File): Promise<string> {
+  return fileToResizedDataUrl(file, CLIENT_PHOTO_MAX_DIMENSION);
+}
+
+async function fileToResizedDataUrl(file: File, maxDimension: number): Promise<string> {
   try {
     const bitmap = await createImageBitmap(file);
     try {
-      const scale = Math.min(1, MAX_DIMENSION / Math.max(bitmap.width, bitmap.height));
+      const scale = Math.min(1, maxDimension / Math.max(bitmap.width, bitmap.height));
       const width = Math.max(1, Math.round(bitmap.width * scale));
       const height = Math.max(1, Math.round(bitmap.height * scale));
 

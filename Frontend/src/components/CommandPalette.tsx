@@ -3,6 +3,7 @@ import { useLocation, useNavigate } from "react-router-dom";
 import { useTheme } from "./ui/Theme";
 import {
   IconArrowRight,
+  IconBuilding,
   IconGrid,
   IconInbox,
   IconLink,
@@ -93,6 +94,14 @@ export default function CommandPalette({
         group: "Navigate",
         icon: <IconInbox size={16} />,
         run: () => navigate("/requirements"),
+      },
+      {
+        id: "nav-builder-projects",
+        label: "Go to Builder Projects",
+        hint: "Projects you add by hand",
+        group: "Navigate",
+        icon: <IconBuilding size={16} />,
+        run: () => navigate("/builder-projects"),
       },
       {
         id: "nav-settings",

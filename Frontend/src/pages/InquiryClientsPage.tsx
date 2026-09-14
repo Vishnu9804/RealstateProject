@@ -21,6 +21,8 @@ import { formatCompactInr, relativeTime } from "../lib/formatters";
 import { getCachedClients, setCachedClients } from "../lib/inquiryListCache";
 import { useToast } from "../components/ui/Toast";
 import ClientMatchesDialog, { type DialogView } from "../components/ClientMatchesDialog";
+import ClientFormDialog from "../components/ClientFormDialog";
+import ClientAvatar from "../components/ClientAvatar";
 import ConfirmDialog from "../components/ui/ConfirmDialog";
 import {
   Badge,
@@ -39,6 +41,7 @@ import {
   IconCheck,
   IconClock,
   IconEdit,
+  IconImage,
   IconInbox,
   IconMessage,
   IconPin,
@@ -159,88 +162,57 @@ export default function InquiryClientsPage() {
   // Main and making the operator switch tabs themselves.
   const [matchesInitialView, setMatchesInitialView] = useState<DialogView>("main");
 
-  // Per-row actions. `editBlocked` holds the phone whose Edit was refused
-  // because that client still has live assignments — cleared when the
-  // explanatory dialog is dismissed.
-  const [editBlocked, setEditBlocked] = useState<string | null>(null);
-  const [editBusyPhone, setEditBusyPhone] = useState<string | null>(null);
+  // Per-row actions. Delete keeps its confirmation dialog; Add and Edit
+  // open the client form dialog below.
   const [deleteTarget, setDeleteTarget] = useState<InquiryClientRecord | null>(null);
   const [deleteBusy, setDeleteBusy] = useState(false);
 
-  // "+ Add" — manually register a client who hasn't messaged in yet (a
-  // walk-in, a phone call, a referral). Mints the exact same token-
-  // authenticated registration form link the WhatsApp welcome message
-  // sends, and opens it in a new tab — from there it's indistinguishable
-  // from the normal flow: fill it in on the client's behalf, or hand/send
-  // that link to the client so they fill it in themselves.
-  const [addOpen, setAddOpen] = useState(false);
-  const [addPhone, setAddPhone] = useState("");
-  const [addBusy, setAddBusy] = useState(false);
-  const [addError, setAddError] = useState<string | null>(null);
-
-  function openAddDialog() {
-    setAddPhone("");
-    setAddError(null);
-    setAddOpen(true);
-  }
-
-  async function handleCreateManualLink() {
-    if (!addPhone.trim()) {
-      setAddError("Enter a phone number.");
-      return;
-    }
-    setAddBusy(true);
-    setAddError(null);
-    try {
-      const result = await inquiryClientApi.createManualLink(addPhone.trim());
-      window.open(result.url, "_blank", "noopener,noreferrer");
-      setAddOpen(false);
-      toast.push({
-        tone: "ok",
-        title: "Form opened",
-        message: `Registration form opened for ${result.phone} in a new tab.`,
-      });
-    } catch (err) {
-      setAddError(friendlyError(err));
-    } finally {
-      setAddBusy(false);
-    }
-  }
+  // "Add" and "Edit" — one tall dialog on this page (components/
+  // ClientFormDialog.tsx), filled in right here. Both used to open the
+  // public site's requirements form in a new tab through a freshly minted
+  // form link; now nothing leaves this page and nothing is sent to the
+  // client. Add covers a walk-in, a phone call or a referral; Edit opens
+  // pre-filled with everything on file, photo included.
+  const [clientForm, setClientForm] = useState<
+    { mode: "add" } | { mode: "edit"; client: InquiryClientRecord } | null
+  >(null);
 
   /**
-   * Edit = the same token-authenticated requirements form the "+ Add"
-   * button and every WhatsApp welcome message open, for a client who
-   * already exists — so it arrives pre-filled with what we have on file,
-   * and submitting it re-runs matching through the one code path that has
-   * always done that (client_store.upsert_client's auto-recompute).
+   * Edit = the client form dialog, pre-filled with what we hold. Saving a
+   * changed requirement re-runs matching through the one code path that
+   * has always done that (client_store.upsert_client's auto-recompute).
    *
-   * Refused while ANY of this client's properties is still out with an
-   * agent: re-scoring rewrites the High/Medium/Low buckets underneath
-   * visits that are already booked in someone's calendar, so the
-   * assignments have to be cleared (and those agents told) first.
-   * Manually-added and website-enquiry properties are never touched by a
-   * recompute either way — only the scored buckets change.
+   * While ANY of this client's properties is still out with an agent, the
+   * requirement fields open read-only: re-scoring rewrites the High/Medium/
+   * Low buckets underneath visits already booked in someone's calendar, so
+   * those assignments have to be cleared (and the agents told) first. Name,
+   * email and photo never re-run matching, so they stay editable — and the
+   * backend holds the same line on save whatever this page believed.
    */
-  async function handleEdit(client: InquiryClientRecord) {
-    const counts = countsFor(client.phone);
-    if (counts !== null && counts.assigned > 0) {
-      setEditBlocked(client.phone);
-      return;
+  function handleEdit(client: InquiryClientRecord) {
+    setClientForm({ mode: "edit", client });
+  }
+
+  /** Folds a saved client straight into the list — the backend already
+   *  returned the record as stored, so there is nothing to refetch. The
+   *  shared list cache keeps the version it was last fetched at, so the next
+   *  status tick still re-reads the list once and confirms it; the record's
+   *  new updated_at is also what makes the counts effect below re-read its
+   *  Matches. */
+  function applySavedClient(saved: InquiryClientRecord, mode: "add" | "edit") {
+    const list = clients ?? [];
+    const next =
+      mode === "add"
+        ? [saved, ...list.filter((c) => c.phone !== saved.phone)]
+        : list.map((c) => (c.phone === saved.phone ? saved : c));
+    setClients(next);
+    setCachedClients(next, lastClientsVersion.current ?? "");
+    if (mode === "add") {
+      seenPhones.current?.add(saved.phone);
+      setFreshPhones(new Set([saved.phone]));
+      window.setTimeout(() => setFreshPhones(new Set()), 2600);
     }
-    setEditBusyPhone(client.phone);
-    try {
-      const result = await inquiryClientApi.createManualLink(client.phone);
-      window.open(result.url, "_blank", "noopener,noreferrer");
-      toast.push({
-        tone: "ok",
-        title: "Form opened",
-        message: `${client.name || client.phone}'s requirements form opened in a new tab.`,
-      });
-    } catch (err) {
-      toast.push({ tone: "bad", title: "Could not open the form", message: friendlyError(err) });
-    } finally {
-      setEditBusyPhone(null);
-    }
+    setClientForm(null);
   }
 
   async function handleDelete() {
@@ -499,7 +471,7 @@ export default function InquiryClientsPage() {
               </>
             ) : null}
           </span>
-          <Button icon={<IconPlus size={15} />} variant="primary" onClick={openAddDialog}>
+          <Button icon={<IconPlus size={15} />} variant="primary" onClick={() => setClientForm({ mode: "add" })}>
             Add
           </Button>
           <Button
@@ -618,86 +590,28 @@ export default function InquiryClientsPage() {
               countsFor={countsFor}
               onEdit={handleEdit}
               onDelete={setDeleteTarget}
-              editBusyPhone={editBusyPhone}
             />
           )}
 
-      {addOpen && (
-        <ConfirmDialog
-          title="Add a client manually"
-          confirmLabel="Open form"
-          busy={addBusy}
-          onConfirm={handleCreateManualLink}
-          onClose={() => !addBusy && setAddOpen(false)}
-          body={
-            <div className="stack stack-3">
-              <p className="section-head__sub" style={{ margin: 0 }}>
-                For a walk-in, phone call, or referral who hasn't messaged the
-                inquiry WhatsApp number yet. This opens the exact same
-                registration form a WhatsApp welcome message links to, in a
-                new tab — fill it in yourself, or send that link to the
-                client so they can fill it in.
-              </p>
-              <div className="field">
-                <label className="field__label" htmlFor="manual-add-phone">
-                  Client's WhatsApp number
-                </label>
-                <input
-                  id="manual-add-phone"
-                  type="tel"
-                  className="input"
-                  autoFocus
-                  value={addPhone}
-                  onChange={(e) => setAddPhone(e.target.value)}
-                  onKeyDown={(e) => {
-                    if (e.key === "Enter") {
-                      e.preventDefault();
-                      void handleCreateManualLink();
-                    }
-                  }}
-                  placeholder="e.g. 9876543210"
-                  disabled={addBusy}
-                />
-              </div>
-              {addError && (
-                <Note tone="bad" icon={<IconAlert size={16} />}>
-                  {addError}
-                </Note>
-              )}
-            </div>
+      {clientForm && (
+        <ClientFormDialog
+          mode={clientForm.mode}
+          client={clientForm.mode === "edit" ? clientForm.client : undefined}
+          assignedCount={clientForm.mode === "edit" ? (countsFor(clientForm.client.phone)?.assigned ?? 0) : 0}
+          onOpenProperties={
+            clientForm.mode === "edit"
+              ? () => {
+                  const phone = clientForm.client.phone;
+                  setClientForm(null);
+                  setMatchesInitialView("main");
+                  setMatchesPhone(phone);
+                }
+              : undefined
           }
+          onClose={() => setClientForm(null)}
+          onSaved={applySavedClient}
         />
       )}
-
-      {editBlocked && (() => {
-        const client = allClients.find((c) => c.phone === editBlocked);
-        const counts = countsFor(editBlocked);
-        return (
-          <ConfirmDialog
-            title="Clear the current assignments first"
-            confirmLabel="Open properties"
-            cancelLabel="Close"
-            onConfirm={() => {
-              const phone = editBlocked;
-              setEditBlocked(null);
-              setMatchesInitialView("main");
-              setMatchesPhone(phone);
-            }}
-            onClose={() => setEditBlocked(null)}
-            body={
-              <p className="section-head__sub" style={{ margin: 0 }}>
-                {client?.name || editBlocked} still has{" "}
-                <strong>
-                  {counts?.assigned ?? 0} propert{(counts?.assigned ?? 0) === 1 ? "y" : "ies"}
-                </strong>{" "}
-                out with an agent for a site visit. Editing the requirements re-runs matching, which would
-                rewrite the property list underneath visits that are already booked — clear those assignments
-                from the properties dialog first, then edit.
-              </p>
-            }
-          />
-        );
-      })()}
 
       {deleteTarget && (
         <ConfirmDialog
@@ -767,7 +681,6 @@ function ClientTable({
   countsFor,
   onEdit,
   onDelete,
-  editBusyPhone,
 }: {
   clients: InquiryClientRecord[];
   query: string;
@@ -776,12 +689,11 @@ function ClientTable({
   freshPhones: Set<string>;
   onViewMatches: (phone: string, view: DialogView) => void;
   countsFor: (phone: string) => ClientPropertyCounts | null;
-  /** Opens this client's pre-filled requirements form — refused by the
-   *  caller while any of their properties is still out with an agent. */
+  /** Opens this client's pre-filled Edit dialog — requirements read-only
+   *  while any of their properties is still out with an agent. */
   onEdit: (client: InquiryClientRecord) => void;
   /** Raises the delete confirmation; the caller owns the actual delete. */
   onDelete: (client: InquiryClientRecord) => void;
-  editBusyPhone: string | null;
 }) {
   return (
     <div className="table-frame anim-rise">
@@ -831,6 +743,14 @@ function ClientTable({
                     title={client.name ?? undefined}
                   >
                     <Highlight text={client.name ?? "—"} query={query} />
+                    {/* A marker, never the photo itself — the list carries
+                        only has_photo, so this page never moves image data
+                        until a client is opened. */}
+                    {client.has_photo && (
+                      <span className="client-photo-mark" title="Has a photo">
+                        <IconImage size={12} />
+                      </span>
+                    )}
                   </td>
                   <td className="cell-truncate">
                     <Copyable text={client.phone} />
@@ -882,7 +802,6 @@ function ClientTable({
                         size="sm"
                         variant="ghost"
                         icon={<IconEdit size={14} />}
-                        busy={editBusyPhone === client.phone}
                         onClick={() => onEdit(client)}
                         title="Edit this client's requirements"
                       >
@@ -909,7 +828,14 @@ function ClientTable({
       {expandedPhone && (() => {
         const client = clients.find((c) => c.phone === expandedPhone);
         return client ? (
-          <ClientDetailDialog client={client} onClose={() => setExpandedPhone(null)} />
+          <ClientDetailDialog
+            client={client}
+            onClose={() => setExpandedPhone(null)}
+            onEdit={(target) => {
+              setExpandedPhone(null);
+              onEdit(target);
+            }}
+          />
         ) : null;
       })()}
     </div>
@@ -918,7 +844,15 @@ function ClientTable({
 
 /* ------------------------------------------------------------- dialogs */
 
-function ClientDetailDialog({ client, onClose }: { client: InquiryClientRecord; onClose: () => void }) {
+function ClientDetailDialog({
+  client,
+  onClose,
+  onEdit,
+}: {
+  client: InquiryClientRecord;
+  onClose: () => void;
+  onEdit: (client: InquiryClientRecord) => void;
+}) {
   useEffect(() => {
     const onKeyDown = (event: KeyboardEvent) => {
       if (event.key === "Escape") {
@@ -934,10 +868,13 @@ function ClientDetailDialog({ client, onClose }: { client: InquiryClientRecord; 
     <div className="modal-scrim" onMouseDown={(event) => event.target === event.currentTarget && onClose()}>
       <div className="detail-modal anim-rise" role="dialog" aria-modal="true" aria-label="Client details">
         <div className="detail-modal__head">
-          <div style={{ minWidth: 0 }}>
-            <div className="detail-modal__eyebrow">Client</div>
-            <h2 className="detail-modal__title cell-truncate">{client.name ?? client.phone}</h2>
-            <div className="detail-modal__sub cell-truncate">{client.phone}</div>
+          <div className="row-flex" style={{ gap: 14, minWidth: 0, flexWrap: "nowrap" }}>
+            <ClientAvatar client={client} size={64} />
+            <div style={{ minWidth: 0 }}>
+              <div className="detail-modal__eyebrow">Client</div>
+              <h2 className="detail-modal__title cell-truncate">{client.name ?? client.phone}</h2>
+              <div className="detail-modal__sub cell-truncate">{client.phone}</div>
+            </div>
           </div>
           <button type="button" className="toast__close" onClick={onClose} aria-label="Close">
             <IconX size={15} />
@@ -950,6 +887,11 @@ function ClientDetailDialog({ client, onClose }: { client: InquiryClientRecord; 
           <Button variant="ghost" onClick={onClose}>
             Close
           </Button>
+          <span style={{ marginLeft: "auto" }}>
+            <Button variant="ghost" icon={<IconEdit size={14} />} onClick={() => onEdit(client)}>
+              Edit
+            </Button>
+          </span>
         </div>
       </div>
     </div>,

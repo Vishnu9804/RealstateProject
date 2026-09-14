@@ -569,6 +569,11 @@ export default function LandingPagePage() {
                         <td className="cell-num" style={{ textAlign: "right" }}>
                           {formatCarpetArea(property.carpet_area_sqft, property.carpet_area_unit)}
                         </td>
+                        {/* COLUMNS is shared with the Properties page, so every
+                            column it declares needs its cell here too. */}
+                        <td className="cell-truncate" title={property.super_built ?? undefined}>
+                          {property.super_built ?? "—"}
+                        </td>
                         <td
                           className="cell-num cell-strong"
                           style={{ textAlign: "right" }}

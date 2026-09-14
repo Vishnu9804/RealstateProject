@@ -1,5 +1,5 @@
 import type { AgentSummary, InquiryClientRecord } from "../api/types";
-import { formatCompactInr } from "./formatters";
+import { formatCompactInr, formatVisitTime } from "./formatters";
 
 export const BUSINESS_NAME = "Estate Signal";
 
@@ -19,11 +19,26 @@ export interface HandoffPropertyLike {
   contact_phone: string | null;
 }
 
+/** What the matches dialog's visit planner decided for one property on top
+ *  of "which agent": when the visit is booked for, and whether it is a
+ *  re-visit of a property this client has already seen. */
+export interface VisitMeta {
+  /** ISO instant; null = the operator skipped picking a time. */
+  scheduledAt: string | null;
+  /** 2 for the first re-visit, 3 for the one after…; null for a first visit. */
+  revisitNumber: number | null;
+}
+
 /** One agent's slice of a hand-off: which properties (matched and/or
  *  manually-added, mixed freely) are assigned to them. */
 export interface AgentAssignment {
   agent: AgentSummary;
   properties: HandoffPropertyLike[];
+  /** Per-property visit details keyed by record_id. A property with no
+   *  entry is a first visit with no time fixed — exactly what every
+   *  hand-off looked like before the visit planner existed, so messages
+   *  for it read exactly as they always did. */
+  visitMeta?: Record<string, VisitMeta>;
 }
 
 /** Fills in `{token_name}` placeholders — any token not present in
@@ -52,7 +67,7 @@ export function propertyLabel(property: HandoffPropertyLike): string {
   return property.society_name || property.property_type || "Property";
 }
 
-function describeProperty(property: HandoffPropertyLike, index: number): string[] {
+function describeProperty(property: HandoffPropertyLike, index: number, meta: VisitMeta | undefined): string[] {
   const location = [property.society_name, property.area_name].filter(Boolean).join(", ");
   const size = property.carpet_area_sqft ? `${Math.round(property.carpet_area_sqft)} ${property.carpet_area_unit ?? "sqft"}` : null;
   const details = [property.bhk, size].filter(Boolean).join(" · ");
@@ -61,6 +76,11 @@ function describeProperty(property: HandoffPropertyLike, index: number): string[
   if (property.contact_name || property.contact_phone) {
     lines.push(`   Listed by: ${[property.contact_name, property.contact_phone].filter(Boolean).join(" ")}`);
   }
+  // Carried inside {matches} rather than as tokens of their own, so a
+  // template customized on the Settings page before these existed still
+  // tells the agent when to be there and that it is a re-visit.
+  if (meta?.revisitNumber) lines.push(`   🔁 Re-visit (visit #${meta.revisitNumber})`);
+  if (meta?.scheduledAt) lines.push(`   📅 Visit: ${formatVisitTime(meta.scheduledAt)}`);
   return lines;
 }
 
@@ -69,11 +89,15 @@ function describeProperty(property: HandoffPropertyLike, index: number): string[
  *  (matched and manually-added properties are listed exactly the same
  *  way; an agent has no reason to care which source a property came
  *  from). */
-export function buildAgentTokens(client: InquiryClientRecord, properties: HandoffPropertyLike[]): Record<string, string> {
+export function buildAgentTokens(
+  client: InquiryClientRecord,
+  properties: HandoffPropertyLike[],
+  visitMeta?: Record<string, VisitMeta>,
+): Record<string, string> {
   const requirement = [client.bhk, client.property_type].filter(Boolean).join(" ") || "Property";
   const purpose = client.purpose ? ` (${client.purpose})` : "";
 
-  const propertyLines = properties.flatMap(describeProperty);
+  const propertyLines = properties.flatMap((property, index) => describeProperty(property, index, visitMeta?.[property.record_id]));
 
   return {
     client_name: client.name || "Unnamed",
@@ -103,6 +127,22 @@ export function buildClientTokens(client: InquiryClientRecord, agent: AgentSumma
   };
 }
 
+/** "📅 Site visit schedule:" plus one line per property that has a booked
+ *  time or is a re-visit — empty when none do, so a hand-off with no times
+ *  and no re-visits produces exactly the message it always did. */
+function scheduleLines(assignments: AgentAssignment[]): string[] {
+  const lines: string[] = [];
+  for (const { properties, visitMeta } of assignments) {
+    for (const property of properties) {
+      const meta = visitMeta?.[property.record_id];
+      if (!meta || (!meta.scheduledAt && !meta.revisitNumber)) continue;
+      const when = meta.scheduledAt ? formatVisitTime(meta.scheduledAt) : "time to be confirmed";
+      lines.push(`• ${propertyLabel(property)}${meta.revisitNumber ? " (re-visit)" : ""} — ${when}`);
+    }
+  }
+  return lines.length > 0 ? ["📅 Site visit schedule:", ...lines] : [];
+}
+
 /**
  * Builds the one message the CLIENT receives, covering every agent
  * involved in this hand-off round. The customizable Settings-page
@@ -114,11 +154,18 @@ export function buildClientTokens(client: InquiryClientRecord, agent: AgentSumma
  * "{agent_name}" to substitute, so this composes a plain, clear message
  * naming each agent and what they're handling instead of stretching the
  * single-agent template to fit a shape it wasn't designed for.
+ *
+ * Booked visit times are appended as their own short block rather than
+ * being a template token, for the same reason as describeProperty's visit
+ * lines: a template saved before times existed must still carry them.
  */
 export function buildClientMessage(client: InquiryClientRecord, assignments: AgentAssignment[], clientTemplate: string): string {
+  const schedule = scheduleLines(assignments);
+
   if (assignments.length === 1) {
     const { agent, properties } = assignments[0];
-    return renderTemplate(clientTemplate, buildClientTokens(client, agent, properties.length));
+    const rendered = renderTemplate(clientTemplate, buildClientTokens(client, agent, properties.length));
+    return schedule.length > 0 ? `${rendered}\n\n${schedule.join("\n")}` : rendered;
   }
 
   const totalProperties = assignments.reduce((sum, a) => sum + a.properties.length, 0);
@@ -133,6 +180,61 @@ export function buildClientMessage(client: InquiryClientRecord, assignments: Age
   assignments.forEach(({ agent, properties }) => {
     lines.push(`👤 ${agent.name} (📞 ${agent.phone}) — ${properties.map(propertyLabel).join(", ")}`);
   });
+  if (schedule.length > 0) lines.push("", ...schedule);
   lines.push("", "Each of them will call you shortly to fix a convenient time.", "", "You can reply to this chat any time to change your requirement.", `— ${BUSINESS_NAME}`);
   return lines.join("\n");
+}
+
+/** Everything the "tell them about the visit time" messages need. */
+export interface VisitTimeMessageInput {
+  clientName: string | null;
+  clientPhone: string;
+  agentName: string;
+  agentPhone: string;
+  propertyLabel: string;
+  scheduledAt: string;
+  /** The time this replaces; null when the visit had no time before. */
+  previousScheduledAt: string | null;
+  revisitNumber: number | null;
+}
+
+/**
+ * The two messages offered right after a visit time is set or changed on
+ * the matches dialog's Assigned tab — one for the agent, one for the
+ * client. Plain composed text rather than a Settings template: they are
+ * short, factual, and always shown in an editable box before anything is
+ * sent, so the operator adjusts the wording right there when they need to.
+ */
+export function buildVisitTimeMessages(input: VisitTimeMessageInput): { agent: string; client: string } {
+  const when = formatVisitTime(input.scheduledAt);
+  const earlier = input.previousScheduledAt ? formatVisitTime(input.previousScheduledAt) : null;
+  const visitWord = input.revisitNumber ? `re-visit (visit #${input.revisitNumber})` : "site visit";
+
+  const agent = [
+    earlier ? "🔁 Site visit rescheduled" : "📅 Site visit time fixed",
+    "",
+    `Client: ${input.clientName || "Unnamed"}`,
+    `📞 ${input.clientPhone}`,
+    `Property: ${input.propertyLabel}${input.revisitNumber ? ` — re-visit (visit #${input.revisitNumber})` : ""}`,
+    `When: ${when}`,
+    ...(earlier ? [`Earlier time: ${earlier}`] : []),
+    "",
+    earlier ? "Please plan for the new time." : "Please be there on time and take the client around.",
+  ].join("\n");
+
+  const client = [
+    `Hi ${input.clientName || "there"} 👋`,
+    "",
+    earlier
+      ? `Your ${visitWord} for ${input.propertyLabel} has been moved to:`
+      : `Your ${visitWord} for ${input.propertyLabel} is fixed for:`,
+    `📅 ${when}`,
+    "",
+    `${input.agentName} (📞 ${input.agentPhone}) will take you around.`,
+    "",
+    "Reply to this chat any time if you need to change it.",
+    `— ${BUSINESS_NAME}`,
+  ].join("\n");
+
+  return { agent, client };
 }

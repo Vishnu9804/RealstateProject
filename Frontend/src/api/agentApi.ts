@@ -19,6 +19,14 @@ export interface VisitCompleteRequest {
   notes?: string | null;
 }
 
+/** Mirrors agent_controller.py's VisitScheduleRequest — which active visit,
+ *  and the ISO instant it is now booked for. */
+export interface VisitScheduleRequest {
+  client_phone: string;
+  property_record_id: string;
+  scheduled_at: string | null;
+}
+
 export const agentApi = {
   /** Every agent plus the clients currently assigned to them and their
    *  completed-visit history — see Backend/Service/AgentManagementService/
@@ -39,6 +47,13 @@ export const agentApi = {
    *  came from (budget included) — see agent_store.reopen_visit. */
   reopenVisit: (agentId: string, visitId: string): Promise<AssignedClientSummary> =>
     apiClient.post(`/agents/${encodeURIComponent(agentId)}/visits/${encodeURIComponent(visitId)}/reopen`, {}),
+
+  /** Sets or changes one active visit's booked time — a single write on
+   *  the backend, returning the updated visit so the caller can patch its
+   *  own copy instead of re-reading every agent. Sends no message; that is
+   *  inquiryClientApi.sendVisitMessages, a separate, skippable step. */
+  updateVisitSchedule: (agentId: string, body: VisitScheduleRequest): Promise<AssignedClientSummary> =>
+    apiClient.patch(`/agents/${encodeURIComponent(agentId)}/visits/schedule`, body),
 
   /** Settings page's editable hand-off message templates. */
   getHandoffTemplates: (): Promise<HandoffTemplates> => apiClient.get("/agents/handoff-templates"),

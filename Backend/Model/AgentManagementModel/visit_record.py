@@ -25,4 +25,7 @@ class VisitRecord(BaseModel):
     budget_min_inr: Optional[float] = None
     budget_max_inr: Optional[float] = None
     notes: Optional[str] = None
+    # The time this visit had been booked for, snapshotted from the active
+    # assignment at completion (same reasoning as the budget above).
+    scheduled_at: Optional[datetime] = None
     completed_at: Optional[datetime] = None

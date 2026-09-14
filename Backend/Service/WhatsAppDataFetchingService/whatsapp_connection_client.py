@@ -127,6 +127,27 @@ class WhatsAppConnectionClient:
                 self._force_reconnect_after_dead_websocket()
             return False
 
+    def send_image(self, phone: str, image: bytes, caption: Optional[str] = None) -> bool:
+        """Sends one photo, optionally with `caption` as its text — WhatsApp
+        shows the two as ONE message. Same never-raises, False-on-failure
+        contract as send_text."""
+        if self._client is None:
+            step_logger.error(f"Cannot send WhatsApp image via {self.connection_id}: not connected yet.")
+            return False
+        digits = "".join(ch for ch in phone if ch.isdigit())
+        if not digits:
+            step_logger.error(f"Cannot send WhatsApp image via {self.connection_id}: {phone!r} has no digits.")
+            return False
+        try:
+            message = self._client.build_image_message(image, caption=caption or None)
+            self._client.send_message(build_jid(digits), message)
+            return True
+        except Exception as exc:  # noqa: BLE001
+            step_logger.error(f"Failed to send WhatsApp image to {phone} via {self.connection_id}: {exc!r}")
+            if "not connected" in str(exc).lower():
+                self._force_reconnect_after_dead_websocket()
+            return False
+
     def _force_reconnect_after_dead_websocket(self) -> None:
         """See WhatsAppInquiryClient's identical method (the module this
         replaces) for the full explanation: a send can fail with "websocket

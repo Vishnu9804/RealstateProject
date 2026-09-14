@@ -85,7 +85,16 @@ _REQUIREMENT_FIELDS = (
     "budget_max_inr",
     "preferred_areas",
     "additional_requirements",
+    "property_sizes",
 )
+
+# Bounds on the multi-select property type and its per-type sizes. Far above
+# anything the form itself can send (it offers ten types and caps each size
+# at 80 characters) — they exist only so a hand-crafted request to this
+# public endpoint can't park an arbitrarily large value on a client row.
+_MAX_PROPERTY_TYPES = 12
+_MAX_PROPERTY_TYPE_LENGTH = 40
+_MAX_PROPERTY_SIZE_LENGTH = 80
 
 
 def get_prefill(channel: Channel, identity: str) -> FormPrefillResponse:
@@ -281,15 +290,57 @@ def _send_in_background(send, description: str) -> None:
 
 
 def _extract_requirement_fields(submission: FormSubmissionRequest) -> dict:
-    """Every field but budget_*_inr is free text, where a blank string
-    means "clear this field" (see FormSubmissionRequest's docstring), so it
-    gets normalized to None; the two budget fields are already numbers
-    (or None) with no such distinction to make."""
+    """Every field but budget_*_inr and property_sizes is free text, where a
+    blank string means "clear this field" (see FormSubmissionRequest's
+    docstring), so it gets normalized to None; the two budget fields are
+    already numbers (or None) with no such distinction to make.
+
+    property_type may now name several types ("Flat, Bungalow"), and
+    property_sizes carries an optional size for each — cleaned together, so
+    a size is only ever kept for a type that was actually picked."""
     fields = {field: getattr(submission, field) for field in _REQUIREMENT_FIELDS}
     for field in fields:
-        if field not in ("budget_min_inr", "budget_max_inr"):
+        if field not in ("budget_min_inr", "budget_max_inr", "property_sizes"):
             fields[field] = _blank_to_none(fields[field])
+    fields["property_type"] = _clean_property_types(fields["property_type"])
+    fields["property_sizes"] = _clean_property_sizes(submission.property_sizes, fields["property_type"])
     return fields
+
+
+def _split_property_types(value: Optional[str]) -> list:
+    """One entry per comma-separated type, whitespace collapsed, repeats
+    (case-insensitive) dropped — the same reading the matcher gives the
+    field (Service/ClientPropertyMatchingService/normalization.py's
+    split_type_groups). A value without a comma, which is every single-type
+    submission, comes back as exactly itself."""
+    types, seen = [], set()
+    for part in (value or "").split(","):
+        label = " ".join(part.split())[:_MAX_PROPERTY_TYPE_LENGTH]
+        if label and label.lower() not in seen:
+            seen.add(label.lower())
+            types.append(label)
+    return types[:_MAX_PROPERTY_TYPES]
+
+
+def _clean_property_types(value: Optional[str]) -> Optional[str]:
+    return ", ".join(_split_property_types(value)) or None
+
+
+def _clean_property_sizes(sizes: Optional[dict], property_type: Optional[str]) -> Optional[dict]:
+    """{type: size} for picked types only, in the order the types were
+    picked, keyed by the type exactly as stored in property_type. Blank
+    sizes are dropped — an unanswered optional box is not a preference —
+    and the whole thing is None when nothing is left."""
+    types = _split_property_types(property_type)
+    if not sizes or not types:
+        return None
+    wanted = {}
+    for key, text in sizes.items():
+        size = " ".join((text or "").split())[:_MAX_PROPERTY_SIZE_LENGTH]
+        if size:
+            wanted[" ".join(str(key).split()).lower()] = size
+    cleaned = {label: wanted[label.lower()] for label in types if label.lower() in wanted}
+    return cleaned or None
 
 
 def _submit_whatsapp(phone: str, submission: FormSubmissionRequest) -> FormSubmissionResult:

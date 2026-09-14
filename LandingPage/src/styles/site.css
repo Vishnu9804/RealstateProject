@@ -1535,6 +1535,81 @@
   font-weight: 600;
 }
 
+/* Property type — the same pills, but any number can be on at once, so
+   each one that is carries a tick as well as the gold. Slightly tighter
+   than Buy/Rent so ten of them wrap into a few tidy rows. */
+.seg--chips .seg__btn {
+  display: inline-flex;
+  align-items: center;
+  gap: 6px;
+  padding: 10px 18px;
+  font-size: 13.5px;
+}
+
+/* One optional size box per picked type: the type on the left, the box on
+   the right with its unit printed inside, so it is obvious what a bare
+   number will be read as. */
+.req-form__sizes {
+  display: grid;
+  gap: 10px;
+}
+.req-form__size {
+  display: grid;
+  grid-template-columns: minmax(96px, 132px) 1fr;
+  align-items: center;
+  gap: 12px;
+}
+.req-form__size-type {
+  font-size: 14px;
+  font-weight: 500;
+  color: var(--text-soft);
+}
+.req-form__size-box {
+  position: relative;
+}
+.req-form__size-box input {
+  padding-right: 72px;
+}
+.req-form__size-unit {
+  position: absolute;
+  top: 50%;
+  right: 16px;
+  transform: translateY(-50%);
+  font-size: 11.5px;
+  letter-spacing: 0.12em;
+  text-transform: uppercase;
+  color: var(--gold-200);
+  pointer-events: none;
+}
+@media (max-width: 480px) {
+  .req-form__size {
+    grid-template-columns: 1fr;
+    gap: 6px;
+  }
+}
+
+/* The budget's unit key — three small tags right above the boxes. */
+.req-form__units {
+  display: flex;
+  flex-wrap: wrap;
+  gap: 8px;
+}
+.req-form__units span {
+  display: inline-flex;
+  align-items: baseline;
+  gap: 6px;
+  padding: 5px 12px;
+  border-radius: var(--r-pill);
+  border: 1px solid var(--hairline);
+  background: var(--glass-1);
+  font-size: 12.5px;
+  color: var(--text-faint);
+}
+.req-form__units b {
+  color: var(--gold-200);
+  font-weight: 600;
+}
+
 /* ===================== preferred areas (capsules) =====================
 
    components/AreaPicker.tsx. Three stacked rows — what's chosen, a search

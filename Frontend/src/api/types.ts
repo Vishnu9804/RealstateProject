@@ -158,6 +158,10 @@ export interface InquiryClientRecord {
   budget_max_inr: number | null;
   preferred_areas: string | null;
   additional_requirements: string | null;
+  /** The optional size the client gave for each type in `property_type`
+   *  (which lists every type they picked, comma-separated):
+   *  {"Flat": "1200 sqft", "Bungalow": "200 vaar"}. Null when none. */
+  property_sizes?: Record<string, string> | null;
   /** AgentManagement feature — which agent (if any) is handling this
    *  client's site visit, and whether the WhatsApp hand-off messages were
    *  ever sent. See Backend/Database/client_models.py's own comment. */
@@ -295,6 +299,10 @@ export interface MatchedProperty {
   property_category: string;
   field_scores: Record<string, number | null>;
   reason: string;
+  /** Which of the client's property types this matched — set only for a
+   *  client who picked more than one, and what the matches dialog's type
+   *  tabs split on. */
+  matched_type?: string | null;
   property_type: string | null;
   bhk: string | null;
   society_name: string | null;

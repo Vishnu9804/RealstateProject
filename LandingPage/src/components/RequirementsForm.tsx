@@ -5,7 +5,7 @@ import { landingApi } from "../api/landingApi";
 import { phoneVerificationApi } from "../api/phoneVerificationApi";
 import type { InquiryChannel, InquiryFormPrefill, InquiryFormSubmission } from "../api/types";
 import { usePhoneVerification } from "../hooks/usePhoneVerification";
-import { formatBudgetDisplay, isPlausiblePhone, parseCompactInr } from "../lib/format";
+import { formatBudgetDisplay, isPlausiblePhone, readBudget } from "../lib/format";
 import { joinAreas, mergeAreas, splitAreas, SURAT_AREAS } from "../lib/suratAreas";
 import AreaPicker from "./AreaPicker";
 import { IconAlert, IconArrowRight, IconCheck, IconEdit } from "./Icons";
@@ -16,12 +16,52 @@ const PROPERTY_TYPES = [
   "Penthouse",
   "Row House",
   "Bungalow",
+  "Farm House",
   "Shop",
   "Office",
   "Land/Plot",
   "Warehouse",
   "Other",
 ];
+
+/** Types whose size is given in vaar (square yards) — land, or a home that
+ *  comes with its own plot. Every other type is asked in sq ft. The matcher
+ *  reads a bare number by the same rule (Backend/Service/
+ *  ClientPropertyMatchingService/normalization.py's default_size_unit); a
+ *  unit the visitor writes themselves always wins over it. */
+const VAAR_TYPE_RE = /bungalow|land|plot|farm/i;
+
+function sizeUnitOf(type: string): "vaar" | "sq ft" {
+  return VAAR_TYPE_RE.test(type) ? "vaar" : "sq ft";
+}
+
+/** The stored comma-separated types ("Flat, Bungalow") back into chips.
+ *  A value that isn't one of the options (an older free-text one) is kept
+ *  as a chip of its own rather than silently dropped on the next save. */
+function splitTypes(raw: string | null): string[] {
+  const picked: string[] = [];
+  for (const part of (raw ?? "").split(",")) {
+    const label = part.trim().replace(/\s+/g, " ");
+    if (!label) continue;
+    const type = PROPERTY_TYPES.find((option) => option.toLowerCase() === label.toLowerCase()) ?? label;
+    if (!picked.some((existing) => existing.toLowerCase() === type.toLowerCase())) picked.push(type);
+  }
+  return picked;
+}
+
+/** Saved sizes re-keyed onto the chips they belong to. */
+function matchSizes(types: string[], sizes: Record<string, string> | null | undefined): Record<string, string> {
+  const matched: Record<string, string> = {};
+  for (const [key, value] of Object.entries(sizes ?? {})) {
+    const type = types.find((candidate) => candidate.toLowerCase() === key.trim().toLowerCase());
+    if (type && value) matched[type] = value;
+  }
+  return matched;
+}
+
+function sizeInputId(prefix: string, type: string): string {
+  return `${prefix}-size-${type.toLowerCase().replace(/[^a-z0-9]+/g, "-")}`;
+}
 
 // No "Sell": this site exists to put buyers and tenants in front of what the
 // client has listed, and a seller's enquiry has no requirements to match a
@@ -126,15 +166,32 @@ export default function RequirementsForm({
   const [name, setName] = useState("");
   const [email, setEmail] = useState("");
   const [purpose, setPurpose] = useState("");
-  const [propertyType, setPropertyType] = useState("");
+  // Every type they'd consider, in the order picked — sent as one
+  // comma-separated string ("Flat, Bungalow"), which is how the backend
+  // stores it and how the matcher reads it (each type scored on its own).
+  const [propertyTypes, setPropertyTypes] = useState<string[]>([]);
+  // One optional free-text size per picked type, keyed by the type. A size
+  // survives its type being un-ticked (ticking it again brings it back),
+  // but only sizes for types still picked are ever sent — see sizesToSubmit.
+  const [propertySizes, setPropertySizes] = useState<Record<string, string>>({});
   const [bhk, setBhk] = useState("");
-  // Both budget fields hold whatever is currently ON SCREEN — raw digits
-  // while focused, the short "2cr"/"85L" form once blurred. The number the
-  // backend gets is parsed back out of it on submit (parseCompactInr), so
-  // there is only ever one string per field and no way for a display value
-  // and a "real" value to drift apart.
+  // Each budget box holds exactly what was typed — "2.5 cr", "85 L" — and
+  // is never rewritten under the visitor's fingers. The rupee figure the
+  // backend stores is read out of it (lib/format.ts's readBudget), and a box
+  // it can't read is pointed out rather than silently sent as nothing.
   const [budgetMin, setBudgetMin] = useState("");
   const [budgetMax, setBudgetMax] = useState("");
+  // A box's error waits until it has been left once, so nobody is told
+  // "we couldn't read 2" while they are still typing "2.5 cr".
+  const [budgetTouched, setBudgetTouched] = useState({ min: false, max: false });
+  const minBudget = readBudget(budgetMin);
+  const maxBudget = readBudget(budgetMax);
+  const budgetOrderError =
+    minBudget.amount !== null && maxBudget.amount !== null && minBudget.amount > maxBudget.amount
+      ? "Your minimum budget is higher than the maximum — could you swap them round?"
+      : null;
+  const budgetMessage =
+    (budgetTouched.min && minBudget.error) || (budgetTouched.max && maxBudget.error) || budgetOrderError || null;
   const [preferredAreas, setPreferredAreas] = useState<string[]>([]);
   const [areaOptions, setAreaOptions] = useState<string[]>(SURAT_AREAS);
   const [additionalRequirements, setAdditionalRequirements] = useState(contextNote ?? "");
@@ -263,10 +320,12 @@ export default function RequirementsForm({
     setName(data.name ?? "");
     setEmail(data.email ?? "");
     setPurpose(data.purpose ?? "");
-    setPropertyType(data.property_type ?? "");
+    const types = splitTypes(data.property_type);
+    setPropertyTypes(types);
+    setPropertySizes(matchSizes(types, data.property_sizes));
     setBhk(data.bhk ?? "");
-    // Straight into the short form — a returning visitor reads their own
-    // saved budget back as "85L", never as a wall of zeroes to count.
+    // Written back the way they'd type it — a returning visitor reads their
+    // own saved budget as "85 L", never as a wall of zeroes to count.
     setBudgetMin(data.budget_min_inr != null ? formatBudgetDisplay(data.budget_min_inr) : "");
     setBudgetMax(data.budget_max_inr != null ? formatBudgetDisplay(data.budget_max_inr) : "");
     setPreferredAreas(splitAreas(data.preferred_areas));
@@ -305,18 +364,21 @@ export default function RequirementsForm({
     if (phoneError && isPlausiblePhone(value)) setPhoneError(null);
   }
 
-  /** Blur: show the short form ("2cr"). Focus: put the full number back, so
-   *  editing means editing digits rather than picking apart "2.5cr". Text
-   *  that isn't a number at all is left exactly as typed — this is a
-   *  convenience, not a validator. */
-  function onBudgetBlur(value: string, set: (next: string) => void) {
-    const amount = parseCompactInr(value);
-    if (amount !== null) set(formatBudgetDisplay(amount));
+  function toggleType(type: string) {
+    setPropertyTypes((previous) =>
+      previous.includes(type) ? previous.filter((picked) => picked !== type) : [...previous, type],
+    );
   }
 
-  function onBudgetFocus(value: string, set: (next: string) => void) {
-    const amount = parseCompactInr(value);
-    if (amount !== null) set(String(amount));
+  /** Sizes for the types still picked, blanks left out — null when none
+   *  are left, which is how the backend is told there is nothing to keep. */
+  function sizesToSubmit(): Record<string, string> | null {
+    const sizes: Record<string, string> = {};
+    for (const type of propertyTypes) {
+      const size = (propertySizes[type] ?? "").trim();
+      if (size) sizes[type] = size;
+    }
+    return Object.keys(sizes).length > 0 ? sizes : null;
   }
 
   /** Opens the code dialog, which sends the code the moment it mounts.
@@ -429,6 +491,12 @@ export default function RequirementsForm({
       setFormError("Please choose whether you want to buy or rent.");
       return;
     }
+    const budgetProblem = minBudget.error ?? maxBudget.error ?? budgetOrderError;
+    if (budgetProblem) {
+      setBudgetTouched({ min: true, max: true });
+      setFormError(budgetProblem);
+      return;
+    }
 
     setBusy(true);
     setFormError(null);
@@ -441,13 +509,14 @@ export default function RequirementsForm({
       name: name.trim(),
       email: email.trim() || null,
       purpose: purpose || null,
-      property_type: propertyType || null,
+      property_type: propertyTypes.join(", ") || null,
+      property_sizes: sizesToSubmit(),
       bhk: bhk.trim() || null,
-      // The full rupee figure, always — "2cr" is only ever what the FIELD
-      // shows. Nothing downstream (the matcher's budget curve, the agent
+      // The full rupee figure, always — "2.5 cr" is only ever what the BOX
+      // holds. Nothing downstream (the matcher's budget curve, the agent
       // hand-off, the stored client record) sees anything but the number.
-      budget_min_inr: parseCompactInr(budgetMin),
-      budget_max_inr: parseCompactInr(budgetMax),
+      budget_min_inr: minBudget.amount,
+      budget_max_inr: maxBudget.amount,
       preferred_areas: joinAreas(preferredAreas) || null,
       additional_requirements: additionalRequirements.trim() || null,
     };
@@ -738,76 +807,152 @@ export default function RequirementsForm({
           </div>
         </div>
 
+        {/* Pills, not a dropdown: someone happy with a flat OR a bungalow
+            should be able to say both. Every picked type is matched on its
+            own, and the dashboard shows the matches one type at a time. */}
         <div className="field">
-          <label className="field__label" htmlFor={`${idPrefix}-type`}>
+          <span className="field__label" id={`${idPrefix}-type-label`}>
             Property type
-          </label>
-          <select id={`${idPrefix}-type`} value={propertyType} onChange={(event) => setPropertyType(event.target.value)}>
-            <option value="">Select…</option>
-            {PROPERTY_TYPES.map((type) => (
-              <option key={type} value={type}>
-                {type}
-              </option>
-            ))}
-          </select>
+          </span>
+          <div className="seg seg--chips" role="group" aria-labelledby={`${idPrefix}-type-label`}>
+            {[...PROPERTY_TYPES, ...propertyTypes.filter((type) => !PROPERTY_TYPES.includes(type))].map((type) => {
+              const active = propertyTypes.includes(type);
+              return (
+                <button
+                  key={type}
+                  type="button"
+                  className={`seg__btn${active ? " is-active" : ""}`}
+                  onClick={() => toggleType(type)}
+                  aria-pressed={active}
+                >
+                  {active && <IconCheck size={14} />}
+                  {type}
+                </button>
+              );
+            })}
+          </div>
+          <span className="field__hint">Pick every type you'd consider — as many as you like.</span>
         </div>
+
+        {/* One optional box per picked type, in the unit people actually
+            use for it. Free text on purpose: "about 1200", "150–200 vaar",
+            "૨૦૦ વાર" all read fine (see normalization.py's
+            parse_size_requirement), and it only ever nudges the matching —
+            it never rules a property out. */}
+        {propertyTypes.length > 0 && (
+          <div className="field">
+            <span className="field__label">Preferred size (optional)</span>
+            <div className="req-form__sizes">
+              {propertyTypes.map((type) => {
+                const unit = sizeUnitOf(type);
+                const inputId = sizeInputId(idPrefix, type);
+                return (
+                  <div className="req-form__size" key={type}>
+                    <label className="req-form__size-type" htmlFor={inputId}>
+                      {type}
+                    </label>
+                    <div className="req-form__size-box">
+                      <input
+                        id={inputId}
+                        type="text"
+                        autoComplete="off"
+                        placeholder={unit === "vaar" ? "e.g. 200 or 150–250" : "e.g. 1200 or 1000–1500"}
+                        value={propertySizes[type] ?? ""}
+                        onChange={(event) =>
+                          setPropertySizes((previous) => ({ ...previous, [type]: event.target.value }))
+                        }
+                        aria-describedby={`${idPrefix}-size-hint`}
+                        maxLength={80}
+                      />
+                      <span className="req-form__size-unit" aria-hidden="true">
+                        {unit}
+                      </span>
+                    </div>
+                  </div>
+                );
+              })}
+            </div>
+            <span className="field__hint" id={`${idPrefix}-size-hint`}>
+              Only if you have one in mind — a rough number or a range is perfect, written any way you like, in any
+              language.
+            </span>
+          </div>
+        )}
 
         <div className="field">
           <label className="field__label" htmlFor={`${idPrefix}-bhk`}>
-            BHK / configuration
+            BHK
           </label>
           <input
             id={`${idPrefix}-bhk`}
             type="text"
-            placeholder="e.g. 3 BHK, 2/3 BHK, 3+ BHK"
+            placeholder="e.g. 3 BHK, 2 to 5 BHK, 3+ BHK"
             value={bhk}
             onChange={(event) => setBhk(event.target.value)}
             maxLength={40}
           />
           {/* Each of these maps to a shape the matcher actually parses (see
               normalization.py's parse_bhk_intent) — they are examples of
-              real behaviour, not decoration: "3+" opens up everything
-              larger, "exactly 3" closes it down again. */}
+              real behaviour, not decoration: "2 to 5" takes everything in
+              between, "3+" opens up everything larger, "exactly 3" closes
+              it down again. */}
           <span className="field__hint">
-            Write it however you think of it — “3 BHK”, “2 or 3 BHK”, “3+ BHK”, “more than 3 BHK”, “exactly 3 BHK”, “1 RK”, “studio”.
+            Write it however you think of it — “3 BHK”, “2 to 5 BHK”, “2 or 3 BHK”, “3+ BHK”, “exactly 3 BHK”, “1 RK”.
           </span>
         </div>
 
         <div className="field">
-          <span className="field__label">Budget (₹)</span>
+          <span className="field__label" id={`${idPrefix}-budget-label`}>
+            Budget (₹)
+          </span>
+          {/* The key, before the boxes — it answers "how do I write this?"
+              before anyone has to wonder. */}
+          <div className="req-form__units" id={`${idPrefix}-budget-units`}>
+            <span>
+              <b>cr</b> crore
+            </span>
+            <span>
+              <b>L</b> lakh
+            </span>
+            <span>
+              <b>K</b> thousand
+            </span>
+          </div>
           <div className="req-form__pair">
-            {/* "text", not "number": the field shows "2cr" the moment it
-                loses focus, and a number input refuses to display that at
-                all (it blanks itself instead). inputMode still brings up a
-                numeric keypad, which is what is actually typed into it. */}
             <input
               type="text"
-              inputMode="decimal"
               autoComplete="off"
-              placeholder="Min"
+              placeholder="Min — e.g. 80 L"
               aria-label="Minimum budget"
+              aria-describedby={`${idPrefix}-budget-units ${idPrefix}-budget-note`}
+              aria-invalid={Boolean(budgetTouched.min && minBudget.error)}
               value={budgetMin}
               onChange={(event) => setBudgetMin(event.target.value)}
-              onFocus={() => onBudgetFocus(budgetMin, setBudgetMin)}
-              onBlur={() => onBudgetBlur(budgetMin, setBudgetMin)}
+              onBlur={() => setBudgetTouched((previous) => ({ ...previous, min: true }))}
               maxLength={20}
             />
             <input
               type="text"
-              inputMode="decimal"
               autoComplete="off"
-              placeholder="Max"
+              placeholder="Max — e.g. 1.2 cr"
               aria-label="Maximum budget"
+              aria-describedby={`${idPrefix}-budget-units ${idPrefix}-budget-note`}
+              aria-invalid={Boolean((budgetTouched.max && maxBudget.error) || budgetOrderError)}
               value={budgetMax}
               onChange={(event) => setBudgetMax(event.target.value)}
-              onFocus={() => onBudgetFocus(budgetMax, setBudgetMax)}
-              onBlur={() => onBudgetBlur(budgetMax, setBudgetMax)}
+              onBlur={() => setBudgetTouched((previous) => ({ ...previous, max: true }))}
               maxLength={20}
             />
           </div>
-          <span className="field__hint">
-            Type the full amount — we'll shorten it for you (20000000 becomes 2cr, 8500000 becomes 85L).
-          </span>
+          {budgetMessage ? (
+            <span className="field__error" id={`${idPrefix}-budget-note`}>
+              {budgetMessage}
+            </span>
+          ) : (
+            <span className="field__hint" id={`${idPrefix}-budget-note`}>
+              Write it the way you'd say it — 2.5 cr, 85 L, or 25 K a month to rent.
+            </span>
+          )}
         </div>
 
         <div className="field">

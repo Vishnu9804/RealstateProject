@@ -1387,6 +1387,15 @@ mark.hl {
   background: var(--plane-0);
 }
 
+/* The per-type row under it, shown only for a client who asked for more
+   than one property type — lighter, so the Main/Outsider row above still
+   reads as the primary split. */
+.matches-dialog__tabs--types {
+  flex-wrap: wrap;
+  padding-top: 10px;
+  padding-bottom: 10px;
+}
+
 /* The requirement's own description, pinned between the header and the
    tabs of the Broker Requirements matches dialog so it stays in view while
    the cards scroll — it carries every detail without a field of its own

@@ -519,6 +519,16 @@ def init_db() -> None:
                 "requirement_submission_count INTEGER NOT NULL DEFAULT 0"
             )
         )
+        # Multi-type requirements: the per-type size a client gave (see
+        # ClientRow.property_sizes) and which of their types a cached match
+        # was for (ClientPropertyMatchRow.matched_type). Nullable, no
+        # default, no backfill — catalog-only in Postgres, and NULL already
+        # means exactly what every existing row should say.
+        connection.execute(text("ALTER TABLE clients ADD COLUMN IF NOT EXISTS property_sizes JSON"))
+        connection.execute(text("ALTER TABLE instagram_contacts ADD COLUMN IF NOT EXISTS property_sizes JSON"))
+        connection.execute(
+            text("ALTER TABLE client_property_matches ADD COLUMN IF NOT EXISTS matched_type VARCHAR")
+        )
         # The stored, indexed E.164 number on landing-page leads -- see
         # LandingLeadRow.phone_e164. The index is what turns the repeat-
         # enquiry check into one indexed probe instead of a table scan; both

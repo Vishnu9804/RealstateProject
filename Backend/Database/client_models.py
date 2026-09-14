@@ -20,7 +20,7 @@ from datetime import datetime
 from typing import List, Optional
 
 from pgvector.sqlalchemy import Vector
-from sqlalchemy import DateTime, Float, Integer, String, Text, func
+from sqlalchemy import JSON, DateTime, Float, Integer, String, Text, func
 from sqlalchemy.orm import DeclarativeBase, Mapped, mapped_column
 
 from Service.WhatsAppDataFetchingService.embedding_service import EMBEDDING_DIMENSIONS
@@ -72,6 +72,14 @@ class ClientRow(ClientBase):
     budget_max_inr: Mapped[Optional[float]] = mapped_column(Float, nullable=True)
     preferred_areas: Mapped[Optional[str]] = mapped_column(String, nullable=True)
     additional_requirements: Mapped[Optional[str]] = mapped_column(Text, nullable=True)
+    # The optional size a client gave for EACH property type they picked,
+    # keyed by the type exactly as it appears in `property_type` (which now
+    # holds every picked type, comma-separated: "Flat, Bungalow"), e.g.
+    # {"Flat": "1200 sqft", "Bungalow": "200 vaar"}. Free text on purpose —
+    # people write a size in any format and any language, and
+    # Service/ClientPropertyMatchingService/normalization.py reads what it
+    # can out of it. NULL for every client written before this existed.
+    property_sizes: Mapped[Optional[dict]] = mapped_column(JSON(none_as_null=True), nullable=True)
 
     # --- public-form abuse guard ---
     # How many times the PUBLIC requirements form has been completed for
@@ -204,6 +212,7 @@ class InstagramContactRow(ClientBase):
     budget_max_inr: Mapped[Optional[float]] = mapped_column(Float, nullable=True)
     preferred_areas: Mapped[Optional[str]] = mapped_column(String, nullable=True)
     additional_requirements: Mapped[Optional[str]] = mapped_column(Text, nullable=True)
+    property_sizes: Mapped[Optional[dict]] = mapped_column(JSON(none_as_null=True), nullable=True)
 
     created_at: Mapped[datetime] = mapped_column(DateTime(timezone=True), server_default=func.now())
     updated_at: Mapped[datetime] = mapped_column(

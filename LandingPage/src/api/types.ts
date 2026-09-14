@@ -124,6 +124,10 @@ export interface InquiryFormPrefill {
   budget_max_inr: number | null;
   preferred_areas: string | null;
   additional_requirements: string | null;
+  /** One optional size per type in `property_type` (which now lists every
+   *  picked type, comma-separated): {"Flat": "1200 sqft"}. Absent from an
+   *  older backend. */
+  property_sizes?: Record<string, string> | null;
 }
 
 export interface InquiryFormSubmission {
@@ -142,6 +146,7 @@ export interface InquiryFormSubmission {
   budget_max_inr?: number | null;
   preferred_areas?: string | null;
   additional_requirements?: string | null;
+  property_sizes?: Record<string, string> | null;
 }
 
 /**

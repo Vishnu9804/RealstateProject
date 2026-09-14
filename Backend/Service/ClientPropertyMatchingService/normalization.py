@@ -35,7 +35,24 @@ _RESIDENTIAL_FLAT = frozenset(
     }
 )
 _RESIDENTIAL_HOUSE = frozenset(
-    {"villa", "villas", "bungalow", "bungalows", "row house", "rowhouse", "independent house", "house", "duplex"}
+    {
+        "villa",
+        "villas",
+        "bungalow",
+        "bungalows",
+        "row house",
+        "rowhouse",
+        "independent house",
+        "house",
+        "duplex",
+        # Offered by the requirements form. A house on its own land — a
+        # sibling of the bungalow, and without an entry here "farmhouse"
+        # and "farm house" wouldn't even match each other.
+        "farm house",
+        "farmhouse",
+        "farm houses",
+        "farmhouses",
+    }
 )
 # "land/plot" is here for the same reason "flat/apartment" is in the set
 # above: a CLIENT's value is split on "/" before it gets here, but a
@@ -122,6 +139,167 @@ def property_type_gate(client_raw: Optional[str], property_raw: Optional[str]) -
         return 0.5
     prop_token = canonical_type_token(property_raw)
     return max(_pair_compatibility(token, prop_token, is_primary=(i == 0)) for i, token in enumerate(client_tokens))
+
+
+def split_type_groups(raw: Optional[str]) -> List[str]:
+    """The property types a CLIENT picked, one entry per type, as written.
+
+    The requirements form lets a client pick several types and stores them
+    comma-separated ("Flat, Bungalow"). Each is an equal preference, scored
+    on its own (see scoring.score_client_property) — unlike
+    split_client_property_types' "first is primary" reading, which is what
+    free text like "flat preferred, but open to villa" means. A value with
+    no comma — every client stored before multi-select, "Land/Plot",
+    "flat or villa" — is exactly one group and scores exactly as before.
+
+    Client side only: a broker requirement's comma list means "main type
+    first" and keeps going through property_type_gate whole."""
+    groups: List[str] = []
+    seen = set()
+    for part in (raw or "").split(","):
+        label = " ".join(part.split())
+        if label and label.lower() not in seen:
+            seen.add(label.lower())
+            groups.append(label)
+    return groups
+
+
+def size_for(sizes: Optional[dict], group: Optional[str]) -> Optional[str]:
+    """The size a client gave for one of their type groups, if any.
+    Case-insensitive on the key, so a stored "Flat" still answers "flat"."""
+    if not sizes or not group:
+        return None
+    key = group.strip().lower()
+    for name, text in sizes.items():
+        if str(name).strip().lower() == key and text and str(text).strip():
+            return str(text).strip()
+    return None
+
+
+# --- size ------------------------------------------------------------------
+#
+# A client's size preference is free text in any format and any language
+# ("1200 sqft", "1000-1500", "around 200 vaar", "૨૦૦ વાર", "min 2 vigha"),
+# so it is read here into a plain square-feet range, the same unit a
+# property's carpet area is converted into. Anything that can't be read
+# confidently comes back as None — never scored, never a mismatch.
+
+# Types whose size people give in vaar (square yards) rather than sq ft —
+# the same rule the requirements form uses to label each size box. Only
+# decides the unit of a bare number: a unit written in the text always wins.
+_VAAR_TYPE_RE = re.compile(r"bungalow|land|plot|farm")
+
+# Square feet per unit. Vaar/gaj is a square yard (exactly 9 sq ft);
+# vigha is Gujarat's 16 guntha, and a guntha is 121 sq yards (1,089 sq ft).
+_SQFT_PER_UNIT = {
+    "sqft": 1.0,
+    "vaar": 9.0,
+    "sqm": 10.7639,
+    "guntha": 1089.0,
+    "vigha": 17424.0,
+    "acre": 43560.0,
+}
+
+
+def _latin_word(pattern: str) -> str:
+    # Letter lookarounds rather than \b, so "1200sqft" and "200vaar" (no
+    # space after the number) still find their unit.
+    return rf"(?<![a-z])(?:{pattern})(?![a-z])"
+
+
+# Gujarati and Hindi spellings are matched as plain substrings: \b is not
+# reliable around their combining vowel signs.
+_SIZE_UNIT_PATTERNS = tuple(
+    (unit, re.compile(pattern))
+    for unit, pattern in (
+        ("sqft", _latin_word(r"sq\.?\s*f(?:ee)?t|square\s*f(?:ee|oo)t|ft|feet|foot") + "|ફૂટ|ફુટ|फीट|फुट"),
+        ("vaar", _latin_word(r"vaar|var|waar|gaj|sq\.?\s*y(?:ar)?ds?|square\s*yards?|yards?") + "|વાર|ગજ|गज"),
+        ("sqm", _latin_word(r"sq\.?\s*m(?:trs?|eters?|etres?)?|square\s*met(?:er|re)s?|met(?:er|re)s?|mtrs?") + "|મીટર|मीटर"),
+        ("guntha", _latin_word(r"gunthas?|guntas?") + "|ગુંઠા|गुंठा"),
+        ("vigha", _latin_word(r"vighas?|bighas?") + "|વીઘા|વિઘા|बीघा"),
+        ("acre", _latin_word(r"acres?") + "|એકર|एकड़"),
+    )
+)
+_LOCAL_DIGITS = str.maketrans("૦૧૨૩૪૫૬૭૮૯०१२३४५६७८९", "01234567890123456789")
+# "1,200" and "1,00,000" are one number; "1200,1500" is two.
+_DIGIT_GROUP_COMMA_RE = re.compile(r"(?<=\d),(?=\d{2,3}(?!\d))")
+_SIZE_NUMBER_RE = re.compile(r"\d+(?:\.\d+)?")
+# A number that is a bedroom count ("3 BHK, 1500 sqft") is not a size.
+_BEDROOM_AFTER_RE = re.compile(r"\s*(?:bhk|rk|bed)")
+_SIZE_AT_LEAST_RE = re.compile(
+    r"\+|\bmin(?:imum)?\b|\bat\s*least\b|\babove\b|\bmore\s+than\b|\bover\b|\bor\s+more\b|\bplus\b"
+    r"|થી\s*વધુ|થી\s*વધારે|से\s*ज्यादा|से\s*अधिक"
+)
+_SIZE_AT_MOST_RE = re.compile(
+    r"\bmax(?:imum)?\b|\bup\s*to\b|\bbelow\b|\bunder\b|\bless\s+than\b|\bwithin\b|\bat\s*most\b|\bor\s+less\b"
+    r"|સુધી|तक"
+)
+# A single number with no qualifier ("1200 sqft") is taken as "about that":
+# people rarely know the exact figure, and a 1,150 sq ft flat is what
+# someone asking for 1,200 means.
+_SIZE_APPROX_BAND = 0.10
+
+
+def default_size_unit(group: Optional[str]) -> str:
+    return "vaar" if group and _VAAR_TYPE_RE.search(group.lower()) else "sqft"
+
+
+def _first_unit(segment: str) -> Optional[str]:
+    found = None
+    for unit, pattern in _SIZE_UNIT_PATTERNS:
+        match = pattern.search(segment)
+        if match and (found is None or match.start() < found[0]):
+            found = (match.start(), unit)
+    return found[1] if found else None
+
+
+def parse_size_requirement(
+    text: Optional[str], group: Optional[str]
+) -> Optional[Tuple[Optional[float], Optional[float]]]:
+    """(lowest, highest) acceptable size in square feet — either end None
+    when open — or None when nothing usable was written.
+
+    Each number takes the unit written after it; a number with none takes
+    the next one's ("150 to 200 vaar"), else the type's usual unit (see
+    default_size_unit). Two or more numbers are a range; one number is a
+    minimum or a maximum when worded that way, and "about that" otherwise."""
+    if not text:
+        return None
+    cleaned = _DIGIT_GROUP_COMMA_RE.sub("", text.translate(_LOCAL_DIGITS).lower())
+    matches = list(_SIZE_NUMBER_RE.finditer(cleaned))
+    numbers: List[Tuple[float, Optional[str]]] = []
+    for index, match in enumerate(matches):
+        tail = cleaned[match.end() : matches[index + 1].start() if index + 1 < len(matches) else len(cleaned)]
+        if _BEDROOM_AFTER_RE.match(tail):
+            continue
+        numbers.append((float(match.group()), _first_unit(tail)))
+    fallback = default_size_unit(group)
+    values = []
+    for index, (number, unit) in enumerate(numbers):
+        unit = unit or next((later for _, later in numbers[index + 1 :] if later), None) or fallback
+        if number > 0:
+            values.append(number * _SQFT_PER_UNIT[unit])
+    if not values:
+        return None
+    if len(values) >= 2:
+        return min(values), max(values)
+    value = values[0]
+    if _SIZE_AT_LEAST_RE.search(cleaned):
+        return value, None
+    if _SIZE_AT_MOST_RE.search(cleaned):
+        return None, value
+    return value * (1 - _SIZE_APPROX_BAND), value * (1 + _SIZE_APPROX_BAND)
+
+
+def property_area_sqft(area: Optional[float], unit: Optional[str]) -> Optional[float]:
+    """A property's carpet area in square feet. The extractor records the
+    unit it was written in ("sqft" | "vaar" | "vigha"); no unit means sq ft,
+    which is what every row stored before that column existed was."""
+    if area is None or area <= 0:
+        return None
+    key = (unit or "sqft").strip().lower()
+    unit_name = key if key in _SQFT_PER_UNIT else _first_unit(key)
+    return area * _SQFT_PER_UNIT[unit_name] if unit_name else None
 
 
 _NON_RESIDENTIAL_WORDS_RE = re.compile(
@@ -232,6 +410,14 @@ _BHK_BOUND_PATTERNS = (
 )
 
 
+# "2 to 5 BHK", "between 2 and 5 BHK", "2 BHK till 4 BHK" — an inclusive
+# span. Only ever consulted for text holding exactly two numbers (see
+# parse_bhk_intent), where it replaces what used to be read as the set
+# {2, 5}; bhk_score already treated that set as everything from 2 to 5, so
+# every score is unchanged — the intent just now says what was meant.
+_BHK_SPAN_RE = re.compile(r"(?:\bbetween\s*)?" + _NUM + _UNIT + r"\s*(?:to|till|until|through|and)\s*" + _NUM)
+
+
 class BhkIntent:
     """Parsed shape of a free-text BHK requirement.
 
@@ -241,6 +427,7 @@ class BhkIntent:
       `lower`/`upper` are the bounds (None = open on that side), and each
       `*_inclusive` says whether the bound value itself is fine: "more than 3"
       is lower=3 exclusive, "at least 3" would be lower=3 inclusive.
+      "2 to 5 BHK" / "between 2 and 5 BHK" is a range too: 2 through 5.
     - "set": "3 or 4", "2/3 BHK" -> any listed value is fine.
     - "exact": a bare number/phrase with no qualifier, e.g. "3 BHK" -> 3 is
       the target, with graceful decay for neighbours (see bhk_score).
@@ -317,6 +504,9 @@ def parse_bhk_intent(raw: Optional[str]) -> Optional[BhkIntent]:
         return range_intent
     if _MIN_WORDS_RE.search(text):
         return BhkIntent("minimum", [min(numbers)])
+    if len(numbers) == 2 and _BHK_SPAN_RE.search(text):
+        low, high = sorted(numbers)
+        return BhkIntent("range", [], lower=low, upper=high)
     if len(numbers) >= 2:
         return BhkIntent("set", numbers)
     if _STRICT_WORDS_RE.search(text):

@@ -38,6 +38,7 @@ def replace_matches_for_client(phone: str, scores: List[MatchScore]) -> None:
                     property_category=match.property_category,
                     field_scores=match.field_scores,
                     reason=match.reason,
+                    matched_type=match.matched_type,
                 )
             )
 
@@ -100,6 +101,7 @@ def merge_matches_for_client(
             row.property_category = match.property_category
             row.field_scores = match.field_scores
             row.reason = match.reason
+            row.matched_type = match.matched_type
 
         dropped = considered_record_ids - scored_ids
         if dropped:
@@ -139,6 +141,7 @@ def get_matches_for_client(phone: str) -> Tuple[List[MatchScore], Optional[datet
             property_category=row.property_category,
             field_scores=row.field_scores,
             reason=row.reason,
+            matched_type=row.matched_type,
         )
         for row in rows
     ]

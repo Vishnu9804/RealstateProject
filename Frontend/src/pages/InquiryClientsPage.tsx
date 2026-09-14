@@ -389,6 +389,7 @@ export default function InquiryClientsPage() {
         client.bhk,
         client.preferred_areas,
         client.additional_requirements,
+        ...Object.values(client.property_sizes ?? {}),
       ]
         .filter(Boolean)
         .join(" ")
@@ -1006,6 +1007,19 @@ function ClientDetail({ client }: { client: InquiryClientRecord }) {
               : "—"}
           </div>
         </div>
+
+        {client.property_sizes && Object.keys(client.property_sizes).length > 0 && (
+          <div className="detail__block">
+            <div className="detail__k">
+              <IconTag size={11} /> Preferred size
+            </div>
+            {Object.entries(client.property_sizes).map(([type, size]) => (
+              <div className="detail__v" key={type}>
+                {type}: {size}
+              </div>
+            ))}
+          </div>
+        )}
 
         {(client.budget_min_inr !== null || client.budget_max_inr !== null) && (
           <div className="detail__block">

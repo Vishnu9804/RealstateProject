@@ -120,9 +120,29 @@ const FIELD_SCORE_LABEL: Record<string, string> = {
   location: "Location",
   bhk: "BHK",
   semantic: "Overall fit",
+  size: "Size",
   purpose_gate: "Purpose match",
   property_type_gate: "Property type match",
 };
+
+/** The type row's "everything" option — a value no real type can have. */
+const ALL_TYPES = "__all__";
+
+/** A client's property types, one per comma-separated entry — the same
+ *  reading the backend gives them (Backend/Service/
+ *  ClientPropertyMatchingService/normalization.py's split_type_groups). */
+function splitClientTypes(raw: string | null): string[] {
+  const types: string[] = [];
+  for (const part of (raw ?? "").split(",")) {
+    const label = part.trim().replace(/\s+/g, " ");
+    if (label && !types.some((type) => sameType(type, label))) types.push(label);
+  }
+  return types;
+}
+
+function sameType(a: string, b: string): boolean {
+  return a.trim().toLowerCase() === b.trim().toLowerCase();
+}
 
 /** Read the category off whatever is freshest. Both PropertyRecord and
  *  MatchedProperty carry `review_status`; the match's own cached
@@ -264,6 +284,9 @@ export default function ClientMatchesDialog({
   const [removingManualId, setRemovingManualId] = useState<string | null>(null);
 
   const [category, setCategory] = useState<DialogView>(initialView ?? "main");
+  // null = every type. Only meaningful for a client who asked for more
+  // than one property type — see clientTypes below.
+  const [typeView, setTypeView] = useState<string | null>(null);
   const [selectedIds, setSelectedIds] = useState<Set<string>>(new Set());
   const [openItemId, setOpenItemId] = useState<string | null>(null);
   const [viewingCompletedId, setViewingCompletedId] = useState<string | null>(null);
@@ -484,15 +507,46 @@ export default function ClientMatchesDialog({
 
   const visibleItems = useMemo(() => items.filter((item) => item.category === category), [items, category]);
 
+  /** The client's property types when they asked for more than one
+   *  ("Flat, Bungalow") — each gets a tab of its own under the
+   *  Main/Outsider row. The backend tags every scored match with the type
+   *  it matched (MatchedProperty.matched_type), so a tab is an exact split,
+   *  not a guess made here. */
+  const clientTypes = useMemo(() => splitClientTypes(client?.property_type ?? null), [client]);
+  const showTypeTabs = clientTypes.length > 1 && category !== "completed";
+  const typeFilter =
+    showTypeTabs && typeView !== null && clientTypes.some((type) => sameType(type, typeView)) ? typeView : null;
+
+  /** Only a scored match knows which type it was for. A hand-picked or
+   *  website-enquired property that never scored (or a match cached before
+   *  types were tracked) has no type to be filed under, so it stays on
+   *  every type tab rather than vanishing from all of them. */
+  const typeVisibleItems = useMemo(
+    () =>
+      typeFilter === null
+        ? visibleItems
+        : visibleItems.filter((item) => !item.match?.matched_type || sameType(item.match.matched_type, typeFilter)),
+    [visibleItems, typeFilter],
+  );
+
+  const countByType = useMemo(() => {
+    const counts = new Map<string, number>();
+    for (const item of visibleItems) {
+      const type = item.match?.matched_type?.trim().toLowerCase();
+      if (type) counts.set(type, (counts.get(type) ?? 0) + 1);
+    }
+    return counts;
+  }, [visibleItems]);
+
   const sections = useMemo(
     () =>
       SECTION_ORDER.map((key) => ({
         key,
-        items: visibleItems
+        items: typeVisibleItems
           .filter((item) => item.section === key)
           .sort((a, b) => (b.match?.score ?? 0) - (a.match?.score ?? 0)),
       })).filter((section) => section.items.length > 0),
-    [visibleItems],
+    [typeVisibleItems],
   );
 
   // Every card that came from a website enquiry, regardless of its own
@@ -502,8 +556,11 @@ export default function ClientMatchesDialog({
   // positioned right after Manually added (see the JSX below), never as
   // one of the sections above.
   const websiteItems = useMemo(
-    () => visibleItems.filter((item) => item.fromWebsiteInquiry).sort((a, b) => (b.match?.score ?? 0) - (a.match?.score ?? 0)),
-    [visibleItems],
+    () =>
+      typeVisibleItems
+        .filter((item) => item.fromWebsiteInquiry)
+        .sort((a, b) => (b.match?.score ?? 0) - (a.match?.score ?? 0)),
+    [typeVisibleItems],
   );
   const manualSection = sections.find((section) => section.key === "manual") ?? null;
   const bucketSections = sections.filter((section) => section.key !== "manual");
@@ -751,6 +808,26 @@ export default function ClientMatchesDialog({
             )}
           </div>
 
+          {showTypeTabs && (
+            <div className="matches-dialog__tabs matches-dialog__tabs--types">
+              <span className="section-head__eyebrow" style={{ marginBottom: 0 }}>
+                Property type
+              </span>
+              <Segmented<string>
+                ariaLabel="Which of the client's property types to show"
+                value={typeFilter ?? ALL_TYPES}
+                onChange={(value) => setTypeView(value === ALL_TYPES ? null : value)}
+                options={[
+                  { value: ALL_TYPES, label: `All${visibleItems.length ? ` (${visibleItems.length})` : ""}` },
+                  ...clientTypes.map((type) => {
+                    const count = countByType.get(type.toLowerCase()) ?? 0;
+                    return { value: type, label: `${type}${count ? ` (${count})` : ""}` };
+                  }),
+                ]}
+              />
+            </div>
+          )}
+
           <div className="detail-modal__body">
             {error && (
               <Note tone="bad" icon={<IconAlert size={16} />}>
@@ -775,11 +852,17 @@ export default function ClientMatchesDialog({
               websiteItems.length === 0 && (
                 <EmptyState
                   icon={<IconInbox size={36} />}
-                  title={`Nothing in ${CATEGORY_LABEL[category]}`}
+                  title={
+                    typeFilter
+                      ? `No ${typeFilter} matches in ${CATEGORY_LABEL[category]}`
+                      : `Nothing in ${CATEGORY_LABEL[category]}`
+                  }
                   body={
-                    total > 0
-                      ? "Every property found for this client is filed under one of the other tabs above."
-                      : "No stored property matched this client's requirements yet. Add one by hand, or refresh the matches."
+                    typeFilter
+                      ? `Nothing here matched this client's ${typeFilter} requirement yet — try their other property type above, or the other tab.`
+                      : total > 0
+                        ? "Every property found for this client is filed under one of the other tabs above."
+                        : "No stored property matched this client's requirements yet. Add one by hand, or refresh the matches."
                   }
                 />
               )}
@@ -1182,6 +1265,9 @@ function PropertyMatchCard({
             ? SECTION_LABEL[item.section]
             : SECTION_LABEL[item.section].replace(" matches", " match")}
         </Badge>
+        {/* Only ever set for a client who asked for more than one type —
+            says which of their requirements this property answers. */}
+        {item.match?.matched_type && <Badge tone="accent">For {item.match.matched_type}</Badge>}
         {/* Only when this card's OWN section isn't already the Web Site
             Property Inquiry badge above — a website enquiry that also
             scored or was hand-picked gets this second, smaller badge to
@@ -1357,6 +1443,7 @@ export function PropertyMatchDetailDialog({
             <div className="detail-modal__badges">
               {match && <Badge tone={BUCKET_TONE[match.bucket]}>{Math.round(match.score * 100)}% match</Badge>}
               {match?.is_partial_match && <Badge tone="info">Partial data</Badge>}
+              {match?.matched_type && <Badge tone="accent">For {match.matched_type}</Badge>}
               <Badge tone={item.category === "main" ? "ok" : "info"}>
                 {CATEGORY_LABEL[item.category]}
               </Badge>

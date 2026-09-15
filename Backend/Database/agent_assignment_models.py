@@ -52,6 +52,12 @@ class AgentAssignmentRow(ClientBase):
     budget_max_inr: Mapped[Optional[float]] = mapped_column(Float, nullable=True)
     property_record_id: Mapped[str] = mapped_column(String, nullable=False)
     property_label: Mapped[str] = mapped_column(String, nullable=False)
+    # What kind of listing this visit is to — "property" or "builder_project"
+    # — snapshotted at hand-off like property_label, so the visit keeps
+    # saying what it was even if that listing is later deleted. NULL on rows
+    # written before builder projects could be matched, every one of which
+    # was a property (see agent_assignment_repository._source).
+    property_source: Mapped[Optional[str]] = mapped_column(String, nullable=True)
 
     # When the site visit itself is booked for — picked in the matches
     # dialog's visit planner, either at hand-off time or later from its

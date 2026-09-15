@@ -79,24 +79,32 @@ class SoldOutPropertyRow(Base):
     # --- content, as it stood the moment the property was sold -----------
     property_type: Mapped[Optional[str]] = mapped_column(String, nullable=True)
     bhk: Mapped[Optional[str]] = mapped_column(String, nullable=True)
+    unit_no: Mapped[Optional[str]] = mapped_column(String, nullable=True)
     society_name: Mapped[Optional[str]] = mapped_column(String, nullable=True)
     area_name: Mapped[Optional[str]] = mapped_column(String, nullable=True)
     address: Mapped[Optional[str]] = mapped_column(Text, nullable=True)
-    carpet_area_sqft: Mapped[Optional[float]] = mapped_column(Float, nullable=True)
-    carpet_area_unit: Mapped[Optional[str]] = mapped_column(String, nullable=True)
+    area_sqft: Mapped[Optional[float]] = mapped_column(Float, nullable=True)
+    area_vaar: Mapped[Optional[float]] = mapped_column(Float, nullable=True)
     # Copied from PropertyRow.super_built like every other content column;
     # retrofitted by Database/session.py's init_db, so nullable.
     super_built: Mapped[Optional[str]] = mapped_column(String, nullable=True)
+    furnishing: Mapped[Optional[str]] = mapped_column(String, nullable=True)
     price_text: Mapped[Optional[str]] = mapped_column(String, nullable=True)
     price_amount_inr: Mapped[Optional[float]] = mapped_column(Float, nullable=True)
-    price_per_unit_text: Mapped[Optional[str]] = mapped_column(String, nullable=True)
-    price_per_unit_amount_inr: Mapped[Optional[float]] = mapped_column(Float, nullable=True)
     listing_type: Mapped[str] = mapped_column(String, nullable=False, default="Sale", server_default="Sale")
     contact_name: Mapped[Optional[str]] = mapped_column(String, nullable=True)
     contact_phone: Mapped[Optional[str]] = mapped_column(String, nullable=True)
     description: Mapped[Optional[str]] = mapped_column(Text, nullable=True)
     instagram_reel_url: Mapped[Optional[str]] = mapped_column(String, nullable=True)
     image_urls: Mapped[list] = mapped_column(JSON, nullable=False, default=list)
+    # Carried over like every other content column — this table is internal
+    # history that only staff ever read, and the Sold out tab reuses the same
+    # detail dialog. It still never leaves the building (see
+    # StructuredProperty.location_url).
+    location_url: Mapped[Optional[str]] = mapped_column(Text, nullable=True)
+    video_available: Mapped[bool] = mapped_column(Boolean, nullable=False, default=False, server_default="false")
+    extra_notes: Mapped[Optional[str]] = mapped_column(Text, nullable=True)
+    is_available: Mapped[bool] = mapped_column(Boolean, nullable=False, default=True, server_default="true")
     review_status: Mapped[str] = mapped_column(String, nullable=False, default="accepted")
     needs_review: Mapped[bool] = mapped_column(Boolean, nullable=False, default=False, server_default="false")
     review_notes: Mapped[Optional[str]] = mapped_column(Text, nullable=True)

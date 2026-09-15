@@ -5,7 +5,7 @@ import type { PropertyRecord } from "../api/types";
 import { friendlyError } from "../lib/apiError";
 import { useToast } from "./ui/Toast";
 import { Button, Segmented } from "./ui/Primitives";
-import { IconImage, IconInstagram, IconX } from "./ui/Icons";
+import { IconImage, IconInstagram, IconPin, IconX } from "./ui/Icons";
 import PropertyImagesField from "./PropertyImagesField";
 
 /**
@@ -33,16 +33,16 @@ export type EditableContentRecord = Pick<
   | "record_id"
   | "property_type"
   | "bhk"
+  | "unit_no"
   | "society_name"
   | "area_name"
   | "address"
-  | "carpet_area_sqft"
-  | "carpet_area_unit"
+  | "area_sqft"
+  | "area_vaar"
   | "super_built"
+  | "furnishing"
   | "price_text"
   | "price_amount_inr"
-  | "price_per_unit_text"
-  | "price_per_unit_amount_inr"
   | "listing_type"
   | "contact_name"
   | "contact_phone"
@@ -50,7 +50,17 @@ export type EditableContentRecord = Pick<
   | "instagram_reel_url"
   | "image_urls"
   | "image_count"
+  | "location_url"
+  | "video_available"
+  | "extra_notes"
+  | "is_available"
 >;
+
+/** The three values the backend normalizes furnishing onto (see
+ *  Agent/WhatsAppDataFetchingAgent/glm_extraction_schema.py). A stored value
+ *  that somehow isn't one of them still round-trips: the select below adds
+ *  it as an extra option rather than silently resetting the field to blank. */
+export const FURNISHING_OPTIONS = ["Unfurnished", "Semi furnished", "Fully furnished"];
 
 /** Where the dialog saves to and loads photos from. */
 export interface ContentFormApi<T extends EditableContentRecord> {
@@ -68,65 +78,78 @@ const PROPERTY_FORM_API: ContentFormApi<PropertyRecord> = {
 interface FormState {
   property_type: string;
   bhk: string;
+  unit_no: string;
   society_name: string;
   area_name: string;
   address: string;
-  carpet_area_sqft: string;
-  carpet_area_unit: string;
+  area_sqft: string;
+  area_vaar: string;
   super_built: string;
+  furnishing: string;
   price_text: string;
   price_amount_inr: string;
-  price_per_unit_text: string;
-  price_per_unit_amount_inr: string;
   listing_type: "Sale" | "Rent";
   contact_name: string;
   contact_phone: string;
   description: string;
   instagram_reel_url: string;
   image_urls: string[];
+  location_url: string;
+  video_available: boolean;
+  extra_notes: string;
+  is_available: boolean;
 }
 
 const BLANK_FORM: FormState = {
   property_type: "",
   bhk: "",
+  unit_no: "",
   society_name: "",
   area_name: "",
   address: "",
-  carpet_area_sqft: "",
-  carpet_area_unit: "",
+  area_sqft: "",
+  area_vaar: "",
   super_built: "",
+  furnishing: "",
   price_text: "",
   price_amount_inr: "",
-  price_per_unit_text: "",
-  price_per_unit_amount_inr: "",
   listing_type: "Sale",
   contact_name: "",
   contact_phone: "",
   description: "",
   instagram_reel_url: "",
   image_urls: [],
+  location_url: "",
+  video_available: false,
+  extra_notes: "",
+  // A newly added property is on the market — that is what adding it means.
+  is_available: true,
 };
 
 function toFormState(property: EditableContentRecord): FormState {
   return {
     property_type: property.property_type ?? "",
     bhk: property.bhk ?? "",
+    unit_no: property.unit_no ?? "",
     society_name: property.society_name ?? "",
     area_name: property.area_name ?? "",
     address: property.address ?? "",
-    carpet_area_sqft: property.carpet_area_sqft?.toString() ?? "",
-    carpet_area_unit: property.carpet_area_unit ?? "",
+    area_sqft: property.area_sqft?.toString() ?? "",
+    area_vaar: property.area_vaar?.toString() ?? "",
     super_built: property.super_built ?? "",
+    furnishing: property.furnishing ?? "",
     price_text: property.price_text ?? "",
     price_amount_inr: property.price_amount_inr?.toString() ?? "",
-    price_per_unit_text: property.price_per_unit_text ?? "",
-    price_per_unit_amount_inr: property.price_per_unit_amount_inr?.toString() ?? "",
     listing_type: property.listing_type,
     contact_name: property.contact_name ?? "",
     contact_phone: property.contact_phone ?? "",
     description: property.description ?? "",
     instagram_reel_url: property.instagram_reel_url ?? "",
     image_urls: property.image_urls ?? [],
+    location_url: property.location_url ?? "",
+    video_available: property.video_available,
+    extra_notes: property.extra_notes ?? "",
+    is_available: property.is_available,
   };
 }
 
@@ -148,22 +171,26 @@ function toPayload(form: FormState, includeImages: boolean): PropertyContentFiel
   const payload: PropertyContentFields = {
     property_type: text(form.property_type),
     bhk: text(form.bhk),
+    unit_no: text(form.unit_no),
     society_name: text(form.society_name),
     area_name: text(form.area_name),
     address: text(form.address),
-    carpet_area_sqft: num(form.carpet_area_sqft),
-    carpet_area_unit: text(form.carpet_area_unit),
+    area_sqft: num(form.area_sqft),
+    area_vaar: num(form.area_vaar),
     super_built: text(form.super_built),
+    furnishing: text(form.furnishing),
     price_text: text(form.price_text),
     price_amount_inr: num(form.price_amount_inr),
-    price_per_unit_text: text(form.price_per_unit_text),
-    price_per_unit_amount_inr: num(form.price_per_unit_amount_inr),
     listing_type: form.listing_type,
     contact_name: text(form.contact_name),
     contact_phone: text(form.contact_phone),
     description: text(form.description),
     instagram_reel_url: text(form.instagram_reel_url),
     image_urls: form.image_urls,
+    location_url: text(form.location_url),
+    video_available: form.video_available,
+    extra_notes: text(form.extra_notes),
+    is_available: form.is_available,
   };
   if (!includeImages) delete payload.image_urls;
   return payload;
@@ -344,8 +371,11 @@ export default function PropertyFormDialog<T extends EditableContentRecord = Pro
             </Field>
 
             <div style={GRID_STYLE}>
-              <Field label="Society / building name">
+              <Field label="Society / Building name">
                 <input className="input" value={form.society_name} onChange={(e) => set("society_name", e.target.value)} placeholder="e.g. Black Residency" />
+              </Field>
+              <Field label="Unit / Flat number">
+                <input className="input" value={form.unit_no} onChange={(e) => set("unit_no", e.target.value)} placeholder="e.g. 402 or A-404" />
               </Field>
               <Field label="Area / locality">
                 <input className="input" value={form.area_name} onChange={(e) => set("area_name", e.target.value)} placeholder="e.g. Vesu" />
@@ -371,19 +401,30 @@ export default function PropertyFormDialog<T extends EditableContentRecord = Pro
                 />
               </Field>
 
-              <Field label="Carpet area">
-                <input className="input" type="number" inputMode="decimal" value={form.carpet_area_sqft} onChange={(e) => set("carpet_area_sqft", e.target.value)} placeholder="e.g. 1200" />
+              <Field label="Area (sqft)" hint="Only if the size is quoted in square feet">
+                <input className="input" type="number" inputMode="decimal" value={form.area_sqft} onChange={(e) => set("area_sqft", e.target.value)} placeholder="e.g. 1200" />
               </Field>
-              <Field label="Area unit">
-                <select className="select" value={form.carpet_area_unit} onChange={(e) => set("carpet_area_unit", e.target.value)}>
-                  <option value="">—</option>
-                  <option value="sqft">sqft</option>
-                  <option value="vaar">vaar</option>
-                  <option value="vigha">vigha</option>
-                </select>
+              <Field label="Area (vaar)" hint="Only if the size is quoted in vaar / gaj">
+                <input className="input" type="number" inputMode="decimal" value={form.area_vaar} onChange={(e) => set("area_vaar", e.target.value)} placeholder="e.g. 155" />
               </Field>
               <Field label="Super built" hint="As you'd write it — e.g. 1850 sq ft">
                 <input className="input" value={form.super_built} onChange={(e) => set("super_built", e.target.value)} placeholder="e.g. 1850 sq ft" />
+              </Field>
+              <Field label="Furnishing">
+                <select className="select" value={form.furnishing} onChange={(e) => set("furnishing", e.target.value)}>
+                  <option value="">—</option>
+                  {/* The stored value first when it is something other than
+                      the three standard ones, so opening and saving a record
+                      can never quietly blank a value it didn't recognise. */}
+                  {form.furnishing && !FURNISHING_OPTIONS.includes(form.furnishing) && (
+                    <option value={form.furnishing}>{form.furnishing}</option>
+                  )}
+                  {FURNISHING_OPTIONS.map((option) => (
+                    <option key={option} value={option}>
+                      {option}
+                    </option>
+                  ))}
+                </select>
               </Field>
 
               <Field label="Price (as written)" hint="e.g. 45L, 1.25cr, 15k/month">
@@ -392,18 +433,54 @@ export default function PropertyFormDialog<T extends EditableContentRecord = Pro
               <Field label="Price (₹ amount)">
                 <input className="input" type="number" inputMode="decimal" value={form.price_amount_inr} onChange={(e) => set("price_amount_inr", e.target.value)} placeholder="e.g. 4500000" />
               </Field>
-              <Field label="Price per unit (as written)" hint="e.g. 1L/sq ft — only if a rate was quoted">
-                <input className="input" value={form.price_per_unit_text} onChange={(e) => set("price_per_unit_text", e.target.value)} placeholder="e.g. 1L/sq ft" />
-              </Field>
-              <Field label="Price per unit (₹ amount)">
-                <input className="input" type="number" inputMode="decimal" value={form.price_per_unit_amount_inr} onChange={(e) => set("price_per_unit_amount_inr", e.target.value)} placeholder="e.g. 100000" />
-              </Field>
 
               <Field label="Contact name">
                 <input className="input" value={form.contact_name} onChange={(e) => set("contact_name", e.target.value)} placeholder="e.g. Ramesh Broker" />
               </Field>
               <Field label="Contact phone">
                 <input className="input" value={form.contact_phone} onChange={(e) => set("contact_phone", e.target.value)} placeholder="Digits, with country code" />
+              </Field>
+
+              <Field label="Availability" hint={`Is this ${noun} still on the market?`}>
+                <Segmented
+                  ariaLabel="Availability"
+                  value={form.is_available ? "yes" : "no"}
+                  onChange={(value) => set("is_available", value === "yes")}
+                  options={[
+                    { value: "yes", label: "Available" },
+                    { value: "no", label: "Not available" },
+                  ]}
+                />
+              </Field>
+              <Field label="Video" hint={`Whether a video of this ${noun} exists.`}>
+                <Segmented
+                  ariaLabel="Video"
+                  value={form.video_available ? "yes" : "no"}
+                  onChange={(value) => set("video_available", value === "yes")}
+                  options={[
+                    { value: "no", label: "No video" },
+                    { value: "yes", label: "Video available" },
+                  ]}
+                />
+              </Field>
+
+              <Field
+                label="Location link (internal only)"
+                hint="A map/pin link for your own team. Never shown on the public site and never included in any message sent to a client, broker or agent."
+                span
+              >
+                <div className="input-wrap">
+                  <span className="input-wrap__icon">
+                    <IconPin size={16} />
+                  </span>
+                  <input
+                    className="input"
+                    style={{ paddingLeft: 40 }}
+                    value={form.location_url}
+                    onChange={(e) => set("location_url", e.target.value)}
+                    placeholder="https://maps.app.goo.gl/…"
+                  />
+                </div>
               </Field>
 
               <Field
@@ -428,6 +505,10 @@ export default function PropertyFormDialog<T extends EditableContentRecord = Pro
 
             <Field label="Description">
               <textarea className="textarea" rows={3} value={form.description} onChange={(e) => set("description", e.target.value)} placeholder="Any other details worth noting" />
+            </Field>
+
+            <Field label="Extra" hint="Anything else you keep against this record that has no field of its own.">
+              <textarea className="textarea" rows={2} value={form.extra_notes} onChange={(e) => set("extra_notes", e.target.value)} placeholder="e.g. floor, facing, parking, possession" />
             </Field>
           </div>
         </div>

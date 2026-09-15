@@ -1,11 +1,14 @@
 """The Builder Projects page's backend: projects a person adds, edits and
-deletes by hand — never captured from WhatsApp, never scored against a
-client, never published to the landing site. Storage and caching live in
-builder_project_store.py; this module shapes the API records.
+deletes by hand — never captured from WhatsApp, never published to the
+landing site. Storage and caching live in builder_project_store.py; this
+module shapes the API records.
 
-Deliberately independent of every WhatsApp-intake module: nothing here
-touches the property table, the snapshot, the embedding model or the
-matching pipeline, so this feature can never change how any of them behave.
+Builder projects ARE matched against client inquiries and broker
+requirements, alongside properties — but that happens entirely on the
+matching side (Service/ClientPropertyMatchingService/match_candidates.py
+reads them from builder_project_store), so nothing here touches the property
+table, the property snapshot or the WhatsApp intake, and this feature can
+never change how any of those behave.
 """
 
 from __future__ import annotations
@@ -13,6 +16,7 @@ from __future__ import annotations
 from typing import Any, Dict, List, Optional
 
 from Database.builder_project_repository import EDITABLE_CONTENT_FIELDS
+from Database.session import is_database_configured
 from Model.BuilderProjectModel.builder_project import BuilderProject, BuilderProjectRecord
 from Service.BuilderProjectService import builder_project_store
 from Service.BuilderProjectService.builder_project_store import BuilderProjectEntry
@@ -51,8 +55,31 @@ def update_builder_project(record_id: str, content_updates: Dict[str, Any]) -> O
     return _to_record(entry, display_settings_service.get_use_24_hour_format()) if entry is not None else None
 
 
+def get_builder_project(record_id: str) -> Optional[BuilderProjectRecord]:
+    """One project, from memory — what the match dialogs' read-only view
+    opens with for a builder project that was assigned to an agent or already
+    visited. None when no such project exists (deleted since)."""
+    entry = builder_project_store.get(record_id)
+    return _to_record(entry, display_settings_service.get_use_24_hour_format()) if entry is not None else None
+
+
 def delete_builder_project(record_id: str) -> bool:
-    return builder_project_store.delete(record_id)
+    """With a database, the stored client and broker-requirement matches
+    pointing at this project are deleted in the same transaction as the
+    project itself (see builder_project_repository.delete_project). Without
+    one, the matching layer's in-memory caches are cleaned here instead — the
+    same split the sold-out move uses for a property."""
+    deleted = builder_project_store.delete(record_id)
+    if deleted and not is_database_configured():
+        # Lazy imports: the matching services read builder projects through
+        # builder_project_store, so importing them at module load would tie
+        # the two features together in both directions.
+        from Service.BrokerRequirementService import requirement_matching_service
+        from Service.ClientPropertyMatchingService import matching_service
+
+        matching_service.drop_property_from_memory_cache(record_id)
+        requirement_matching_service.drop_property_from_memory_cache(record_id)
+    return deleted
 
 
 def get_builder_project_images(record_id: str) -> Optional[List[str]]:
@@ -85,7 +112,9 @@ def get_builder_project_version(record_id: str) -> Optional[str]:
 def _to_record(entry: BuilderProjectEntry, use_24_hour_format: bool) -> BuilderProjectRecord:
     """`image_urls` is forced to [] whatever `fields` holds: the database path
     never loads that column, and the in-memory fallback does hold it — sending
-    it either way would put megabytes of base64 into a list response."""
+    it either way would put megabytes of base64 into a list response. The
+    match vector lives on the entry, never in `fields`, so it cannot reach an
+    API record at all."""
     data = {key: value for key, value in entry.fields.items() if key != "image_urls"}
     created_at = entry.fields.get("created_at")
     return BuilderProjectRecord(

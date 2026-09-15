@@ -48,7 +48,7 @@ from Middleware import step_logger
 from Model.AgentManagementModel.assignment_record import ActiveAssignment
 from Model.AgentManagementModel.visit_record import VisitRecord
 from Service.AgentManagementService import agent_store
-from Service.WhatsAppInquiryHandlingService import inquiry_connection_store, outbound_messenger
+from Service.WhatsAppInquiryHandlingService import client_store, inquiry_connection_store, outbound_messenger
 
 # Fixed +5:30 (IST has no DST) — same choice as scheduled_recompute_service.py.
 _IST = timezone(timedelta(hours=5, minutes=30))
@@ -216,12 +216,37 @@ def _send_due_followups(now: datetime) -> List[datetime]:
                 continue
             if _send(phone, followup_message(visits)):
                 agent_store.mark_visit_followups_sent(visits, now)
+                _record_follow_up(phone, now)
                 step_logger.success(f"[Visit reminders] Follow-up sent to {phone} for {len(visits)} visit(s).")
                 continue
         except Exception as exc:  # noqa: BLE001
             step_logger.error(f"[Visit reminders] Follow-up for {phone} failed ({type(exc).__name__}): {exc!r}")
         upcoming.append(now + _RETRY_AFTER_FAILURE)
     return upcoming
+
+
+def _record_follow_up(phone: str, when: datetime) -> None:
+    """Stamps ClientRow.last_follow_up_dates with the moment this follow-up
+    message actually went out, so the Inquiries page shows when this client
+    was last contacted without anyone having to remember to note it.
+
+    Called ONLY on a send that really succeeded — never when the follow-up
+    was skipped (the client is gone) or failed, since neither is a follow-up
+    having happened. Writes one column via client_store.set_last_follow_up,
+    so it can never clobber anything a staff edit changed meanwhile.
+
+    Never raises: the message has already been delivered and recorded by the
+    time this runs, so a bookkeeping failure must not make this pass look
+    like a failed send and retry it 15 minutes later. A missing client row
+    (a website lead with no ClientRecord) simply returns None here, which is
+    not an error."""
+    try:
+        client_store.set_last_follow_up(phone, when)
+    except Exception as exc:  # noqa: BLE001
+        step_logger.error(
+            f"[Visit reminders] Follow-up to {phone} was sent, but its date could not be recorded "
+            f"({type(exc).__name__}): {exc!r}"
+        )
 
 
 def followup_message(visits: Sequence[VisitRecord]) -> str:

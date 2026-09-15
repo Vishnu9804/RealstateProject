@@ -29,12 +29,28 @@ class StructuredProperty(BaseModel):
     # --- extracted by the LLM from the message text ---
     property_type: Optional[str] = None
     bhk: Optional[str] = None
+    # The individual unit's own number within its building — "402", "A-404",
+    # "Shop 12". The client's two spreadsheets call this "unit_no" and
+    # "flat_no" respectively; it is one field with one meaning, shown as
+    # "Unit / Flat number" everywhere in the UI.
+    unit_no: Optional[str] = None
     society_name: Optional[str] = None  # building/project/society name, e.g. "Black Residency" — distinct
     # from area_name (the broader locality, e.g. "Althan") and address (other address details).
+    # The client's two spreadsheets call this "society_name" and
+    # "building_name"; same field, shown as "Society / Building name".
     area_name: Optional[str] = None
     address: Optional[str] = None
-    carpet_area_sqft: Optional[float] = None
-    carpet_area_unit: Optional[str] = None  # "sqft" | "vaar" | "vigha" — the unit carpet_area_sqft was written in
+    # The property's area, in whichever of the two units the listing actually
+    # used — square feet and vaar (= gaj = square yard) are the only two the
+    # client records, and they are deliberately SEPARATE columns rather than
+    # one number plus a unit label. A number is only ever comparable to
+    # another number in the same unit, and keeping them apart means nothing
+    # can read one as the other. Normally exactly one is filled; both may be
+    # when the listing itself quoted both. No conversion is ever performed at
+    # write time (see Service/ClientPropertyMatchingService/normalization.py's
+    # property_area_sqft, which converts only for scoring).
+    area_sqft: Optional[float] = None
+    area_vaar: Optional[float] = None
     # The "super built" (super built-up) area, exactly as a human typed it in
     # the Add/Edit dialog — e.g. "1850 sq ft". Never extracted by the LLM: it
     # is deliberately absent from the extraction schema
@@ -42,10 +58,18 @@ class StructuredProperty(BaseModel):
     # structuring prompt, so it adds nothing to any GLM call. Free text rather
     # than a number because it is quoted with its own unit and wording.
     super_built: Optional[str] = None
+    # "Unfurnished" | "Semi furnished" | "Fully furnished", or None when the
+    # listing never said. Free-form str rather than an enum because the LLM
+    # is asked to normalize onto those three and a stored value that somehow
+    # isn't one of them must still round-trip rather than fail validation.
+    furnishing: Optional[str] = None
+    # THE TOTAL price of the property. There is deliberately no per-unit rate
+    # column: a rate quoted per sqft/vaar is used during structuring to
+    # DERIVE this total (see property_structurer._fill_missing_price) and is
+    # then discarded — the client tracks one price per property, and a stored
+    # rate that could be mistaken for a total is worse than no rate at all.
     price_text: Optional[str] = None
     price_amount_inr: Optional[float] = None
-    price_per_unit_text: Optional[str] = None
-    price_per_unit_amount_inr: Optional[float] = None
     # "Sale" vs "Rent", classified by the LLM (see property_structurer.py's
     # RENT VS SALE CLASSIFICATION rules). Defaults to "Sale" whenever the
     # message gives no explicit Rent/Sale signal — the safe default per
@@ -67,6 +91,34 @@ class StructuredProperty(BaseModel):
     # order the user arranged them; the first is the cover photo. Optional —
     # an empty list is the common case, not an error.
     image_urls: List[str] = Field(default_factory=list)
+    # A map/pin link to where the property actually is, pasted by a human from
+    # the client's own records.
+    #
+    # INTERNAL ONLY, AND THAT IS ENFORCED BY CONSTRUCTION, NOT BY CARE: it is
+    # absent from every outbound shape there is — the public landing-page
+    # models (Model/LandingPageModel/landing_property.py), the matched-property
+    # shape the WhatsApp share and agent hand-off messages are built from
+    # (Model/ClientPropertyMatchingModel/matched_property.py), and the
+    # Instagram auto-reply template (Service/InstagramInquiryHandlingService/
+    # instagram_message_templates.py). A pin is the one field that lets
+    # someone reach a property without the broker, so it must never travel to
+    # a client, a visitor, a broker or an agent. If you add it to any model
+    # that leaves this building, you have broken that guarantee.
+    location_url: Optional[str] = None
+    # Whether a video of this property exists (the client's spreadsheet
+    # records it as a yes/no, not a link). Human-set, never extracted.
+    video_available: bool = False
+    # Whatever else the client noted about this property in their own
+    # spreadsheet's "Extra" column. Human-only free text — deliberately not
+    # written by the LLM, which has `description` for its own summary.
+    extra_notes: Optional[str] = None
+    # The client's "AVL or Not" toggle: is this property still on offer?
+    # Defaults to True — a property is available unless someone says
+    # otherwise. Deliberately NOT the same thing as the Sold out tab, which
+    # moves a closed deal out of the table entirely (see
+    # Database/soldout_property_models.py); this is the softer "off the market
+    # for now" flag the client already keeps by hand.
+    is_available: bool = True
 
     # --- known for certain from WhatsApp itself, not from the LLM ---
     group_name: str

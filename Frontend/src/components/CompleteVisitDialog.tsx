@@ -3,6 +3,7 @@ import { createPortal } from "react-dom";
 import { agentApi } from "../api/agentApi";
 import type { AssignedClientSummary, VisitRecord } from "../api/types";
 import { friendlyError } from "../lib/apiError";
+import SourceTag from "./ui/SourceTag";
 import { useToast } from "./ui/Toast";
 import { IconX } from "./ui/Icons";
 
@@ -69,6 +70,7 @@ export default function CompleteVisitDialog({
         </div>
 
         <div className="modal__body stack stack-3">
+          <SourceTag source={client.property_source} />
           <p className="faint small">
             {client.property_label} for {client.name ?? client.phone} moves out of {agentName}'s active visits and into their completed visits.
           </p>

@@ -1,11 +1,11 @@
 import { useCallback, useEffect, useMemo, useRef, useState } from "react";
 import { createPortal } from "react-dom";
-import { builderProjectApi } from "../api/builderProjectApi";
+import { BUILDER_PROJECT_LIST_LIMIT, builderProjectApi } from "../api/builderProjectApi";
 import type { BuilderProjectRecord } from "../api/types";
 import { useAppStatus } from "../state/StatusProvider";
 import { useDebounced, usePersistentState } from "../hooks/useUi";
 import { friendlyError } from "../lib/apiError";
-import { formatCarpetArea, formatPrice, formatPricePerUnit, relativeTime } from "../lib/formatters";
+import { formatArea, formatPrice, relativeTime } from "../lib/formatters";
 import {
   compileFilters,
   countActiveFilters,
@@ -80,10 +80,15 @@ import {
  * Source column and no original message — a project that was typed in has
  * none of those. And it is kept apart from the property database on purpose
  * (see Backend/Database/builder_project_models.py), so a builder project
- * never shows up in client matches, on the Landing Page or on the public site.
+ * never shows up on the Properties page, the Landing Page or the public
+ * site. It IS matched against client inquiries and broker requirements,
+ * alongside properties — the match dialogs label every card "Property" or
+ * "Builder project" so the two are never confused.
  */
 
-const FETCH_LIMIT = 500;
+// The same number the match dialogs ask for, so the page and the dialogs
+// share one browser-cached copy of the list (see BUILDER_PROJECT_LIST_LIMIT).
+const FETCH_LIMIT = BUILDER_PROJECT_LIST_LIMIT;
 const PAGE_SIZE = 20;
 
 type ViewMode = "table" | "cards";
@@ -101,16 +106,18 @@ interface Column {
 /** The Properties page's own columns, minus Source (a builder project has no
  *  chat it came from), with the timestamp reading as when it was added. */
 const COLUMNS: Column[] = [
-  { key: "society", label: "Society", sort: "society" },
+  { key: "society", label: "Society / Building", sort: "society" },
+  { key: "unitNo", label: "Unit / Flat no." },
   { key: "locality", label: "Area", sort: "locality", filterKey: "locality" },
   { key: "address", label: "Address" },
   { key: "bhk", label: "BHK", filterKey: "bhk" },
   { key: "type", label: "Type", filterKey: "type" },
   { key: "listingType", label: "Sale/Rent", filterKey: "listingType" },
-  { key: "carpet", label: "Carpet area", sort: "area", numeric: true, filterKey: "carpet" },
+  { key: "areaSqft", label: "Area (sqft)", sort: "areaSqft", numeric: true, filterKey: "areaSqft" },
+  { key: "areaVaar", label: "Area (vaar)", sort: "areaVaar", numeric: true, filterKey: "areaVaar" },
   { key: "superBuilt", label: "Super built" },
+  { key: "furnishing", label: "Furnishing", filterKey: "furnishing" },
   { key: "price", label: "Price", sort: "price", numeric: true, filterKey: "price" },
-  { key: "priceUnit", label: "Price/unit", sort: "priceUnit", numeric: true, filterKey: "priceUnit" },
   { key: "contact", label: "Contact" },
   { key: "time", label: "Added (IST)", sort: "time" },
 ];
@@ -300,6 +307,9 @@ export default function BuilderProjectsPage() {
         project.property_type,
         project.super_built,
         project.price_text,
+        project.unit_no,
+        project.furnishing,
+        project.extra_notes,
       ]
         .filter(Boolean)
         .join(" ")
@@ -314,10 +324,10 @@ export default function BuilderProjectsPage() {
       switch (sortKey) {
         case "price":
           return compareNullable(a.price_amount_inr, b.price_amount_inr, direction);
-        case "priceUnit":
-          return compareNullable(a.price_per_unit_amount_inr, b.price_per_unit_amount_inr, direction);
-        case "area":
-          return compareNullable(a.carpet_area_sqft, b.carpet_area_sqft, direction);
+        case "areaSqft":
+          return compareNullable(a.area_sqft, b.area_sqft, direction);
+        case "areaVaar":
+          return compareNullable(a.area_vaar, b.area_vaar, direction);
         case "society":
           return compareNullable(a.society_name, b.society_name, direction);
         case "locality":
@@ -834,6 +844,9 @@ function BuilderProjectTable({
                   <td className="cell-truncate cell-strong" title={project.society_name ?? undefined}>
                     <Highlight text={project.society_name ?? "—"} query={query} />
                   </td>
+                  <td className="cell-truncate" title={project.unit_no ?? undefined}>
+                    <Highlight text={project.unit_no ?? "—"} query={query} />
+                  </td>
                   <td className="cell-truncate" title={project.area_name ?? undefined}>
                     <Highlight text={project.area_name ?? "—"} query={query} />
                   </td>
@@ -846,10 +859,16 @@ function BuilderProjectTable({
                     <Badge tone={project.listing_type === "Rent" ? "info" : "ok"}>{project.listing_type}</Badge>
                   </td>
                   <td className="cell-num" style={{ textAlign: "right" }}>
-                    {formatCarpetArea(project.carpet_area_sqft, project.carpet_area_unit)}
+                    {project.area_sqft === null ? "—" : Math.round(project.area_sqft)}
+                  </td>
+                  <td className="cell-num" style={{ textAlign: "right" }}>
+                    {project.area_vaar === null ? "—" : Math.round(project.area_vaar)}
                   </td>
                   <td className="cell-truncate" title={project.super_built ?? undefined}>
                     <Highlight text={project.super_built ?? "—"} query={query} />
+                  </td>
+                  <td className="cell-truncate">
+                    <Highlight text={project.furnishing ?? "—"} query={query} />
                   </td>
                   <td
                     className="cell-num cell-strong"
@@ -857,9 +876,6 @@ function BuilderProjectTable({
                     title={project.price_text ?? undefined}
                   >
                     {formatPrice(project.price_text, project.price_amount_inr)}
-                  </td>
-                  <td className="cell-num" style={{ textAlign: "right" }} title={project.price_per_unit_text ?? undefined}>
-                    {formatPricePerUnit(project.price_per_unit_text, project.price_per_unit_amount_inr)}
                   </td>
                   <td className="cell-truncate">
                     <Highlight text={project.contact_name ?? "—"} query={query} />
@@ -914,11 +930,6 @@ function BuilderProjectCards({ projects, query, freshIds, onOpenDetail, onEdit, 
           <div className="pcard__price" title={project.price_text ?? undefined}>
             {formatPrice(project.price_text, project.price_amount_inr)}
           </div>
-          {(project.price_per_unit_text !== null || project.price_per_unit_amount_inr !== null) && (
-            <div className="faint small" title={project.price_per_unit_text ?? undefined}>
-              {formatPricePerUnit(project.price_per_unit_text, project.price_per_unit_amount_inr)} / unit
-            </div>
-          )}
 
           <div className="pcard__facts">
             {project.bhk && (
@@ -933,10 +944,10 @@ function BuilderProjectCards({ projects, query, freshIds, onOpenDetail, onEdit, 
                 {project.property_type}
               </span>
             )}
-            {project.carpet_area_sqft !== null && (
+            {formatArea(project.area_sqft, project.area_vaar) !== "—" && (
               <span className="fact">
                 <IconRuler size={12} />
-                {formatCarpetArea(project.carpet_area_sqft, project.carpet_area_unit)}
+                {formatArea(project.area_sqft, project.area_vaar)}
               </span>
             )}
             {project.super_built && (
@@ -1066,16 +1077,22 @@ function BuilderProjectDetailDialog({
                     {project.bhk}
                   </span>
                 )}
-                {project.carpet_area_sqft !== null && (
+                {formatArea(project.area_sqft, project.area_vaar) !== "—" && (
                   <span className="fact">
                     <IconRuler size={12} />
-                    {formatCarpetArea(project.carpet_area_sqft, project.carpet_area_unit)}
+                    {formatArea(project.area_sqft, project.area_vaar)}
                   </span>
                 )}
                 {project.super_built && (
                   <span className="fact" title="Super built">
                     <IconRuler size={12} />
                     Super built {project.super_built}
+                  </span>
+                )}
+                {project.furnishing && <span className="fact">{project.furnishing}</span>}
+                {!project.is_available && (
+                  <span className="fact" title="Marked not available">
+                    Not available
                   </span>
                 )}
               </div>
@@ -1129,22 +1146,8 @@ function BuilderProjectDetailDialog({
               </div>
 
               <div className="detail__block">
-                <div className="detail__k">Price per unit</div>
-                <div className="detail__v">
-                  {project.price_per_unit_text ?? formatPricePerUnit(null, project.price_per_unit_amount_inr)}
-                </div>
-                {project.price_per_unit_amount_inr !== null && (
-                  <div className="faint small" style={{ marginTop: 4 }}>
-                    Read as {formatPricePerUnit(null, project.price_per_unit_amount_inr)}
-                  </div>
-                )}
-              </div>
-
-              <div className="detail__block">
                 <div className="detail__k">Size</div>
-                <div className="detail__v">
-                  Carpet {formatCarpetArea(project.carpet_area_sqft, project.carpet_area_unit)}
-                </div>
+                <div className="detail__v">{formatArea(project.area_sqft, project.area_vaar)}</div>
                 <div className="faint small" style={{ marginTop: 4 }}>
                   Super built {project.super_built ?? "—"}
                 </div>

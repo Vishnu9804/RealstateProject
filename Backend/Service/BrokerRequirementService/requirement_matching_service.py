@@ -2,6 +2,12 @@
 high/medium/low matched properties out that a client inquiry already gets —
 now STORED, like client matches are.
 
+"Properties" here means every match candidate: the stored properties AND
+the Builder Projects page's projects, gathered in one place for both sides
+(Service/ClientPropertyMatchingService/match_candidates.py) and scored by
+the same engine. Wherever this module talks about "the property list", it
+means that combined list.
+
 THE WHOLE POINT: IT IS THE SAME SCORING
 
 A broker requirement and a client inquiry are the same thing said by two
@@ -81,16 +87,16 @@ from Model.WhatsAppInquiryHandlingModel.client_record import ClientRecord
 from Service.BrokerRequirementService import requirement_match_store, requirement_store
 from Service.ClientPropertyMatchingService import (
     client_requirement_text_builder,
+    match_candidates,
     matching_service,
     normalization,
     scoring,
 )
-from Service.WhatsAppDataFetchingService import embedding_service, property_vector_store
+from Service.WhatsAppDataFetchingService import embedding_service
 
-# Same ceiling the client side scores under, and for the same reason — see
-# matching_service's own comment on it. Read from there rather than
-# re-declared, so the two can never be tuned apart.
-_MAX_PROPERTIES_SCORED = matching_service._MAX_PROPERTIES_SCORED
+# The listings scored, and how many of each, come from match_candidates —
+# the same source and the same ceilings the client side scores under, so
+# the two can never be tuned apart.
 # How many of the newest requirements the 6 AM catch-up covers — the most
 # the Broker Requirements page can list (its controller caps limit at 1000).
 _DAILY_REQUIREMENTS_WINDOW = 1000
@@ -119,7 +125,7 @@ def get_matches_for_requirement(record_id: str) -> Optional[RequirementMatchResu
     # Taken BEFORE the property list is read — see
     # BrokerRequirementMatchRunRow.computed_at.
     run_started_at = _now()
-    properties = property_vector_store.get_all_properties(limit=_MAX_PROPERTIES_SCORED)
+    properties = match_candidates.get_all()
     scores, computed_at, stored_fingerprint = requirement_match_store.get_matches(record_id)
 
     if computed_at is None or stored_fingerprint != fingerprint:
@@ -129,7 +135,7 @@ def get_matches_for_requirement(record_id: str) -> Optional[RequirementMatchResu
         requirement_match_store.replace_matches({record_id: (scores, fingerprint)}, run_started_at)
         computed_at = run_started_at
     else:
-        changed = property_vector_store.get_properties_changed_since(computed_at, limit=_MAX_PROPERTIES_SCORED)
+        changed = match_candidates.get_changed_since(computed_at)
         live_ids = {prop.record_id for prop in properties}
         gone = {score.record_id for score in scores if score.record_id not in live_ids}
         if changed or gone:
@@ -161,9 +167,10 @@ def get_match_counts(limit: int = 500) -> Dict[str, int]:
     scored are picked up when its dialog is opened (the catch-up in
     get_matches_for_requirement), and the page then updates that one row's
     count from the dialog's result. A never-scored requirement is absent."""
+    # Ids only — nothing is scored, so no builder project's vector is needed.
     live_ids = {
         prop.record_id
-        for prop in property_vector_store.get_all_properties(limit=_MAX_PROPERTIES_SCORED)
+        for prop in match_candidates.get_all(ensure_embeddings=False)
         if matching_service.is_matchable(prop)
     }
     return requirement_match_store.get_match_counts(live_ids, limit)
@@ -178,7 +185,7 @@ def recompute_for_requirement(record_id: str) -> Optional[RequirementMatchResult
         return None
     pseudo_client = _as_pseudo_client(requirement)
     run_started_at = _now()
-    properties = property_vector_store.get_all_properties(limit=_MAX_PROPERTIES_SCORED)
+    properties = match_candidates.get_all()
     scores = (
         _score(requirement, pseudo_client, properties) if matching_service.has_requirements(pseudo_client) else []
     )
@@ -196,7 +203,7 @@ def score_new_requirements(requirements: List[StructuredRequirement]) -> int:
     if not requirements:
         return 0
     run_started_at = _now()
-    properties = property_vector_store.get_all_properties(limit=_MAX_PROPERTIES_SCORED)
+    properties = match_candidates.get_all()
     results: Dict[str, Tuple[List[MatchScore], str]] = {}
     for requirement in requirements:
         pseudo_client = _as_pseudo_client(requirement)
@@ -233,9 +240,7 @@ def rescore_all_requirements() -> Tuple[int, int, int]:
     pending: Dict[str, Tuple[Optional[datetime], Optional[str], List[EmbeddedProperty]]] = {}
     for record_id, (computed_at, fingerprint) in runs.items():
         if computed_at not in changed_by_watermark:
-            changed_by_watermark[computed_at] = property_vector_store.get_properties_changed_since(
-                computed_at, limit=_MAX_PROPERTIES_SCORED
-            )
+            changed_by_watermark[computed_at] = match_candidates.get_changed_since(computed_at)
         if changed_by_watermark[computed_at]:
             pending[record_id] = (computed_at, fingerprint, changed_by_watermark[computed_at])
     if not pending:
@@ -254,7 +259,7 @@ def rescore_all_requirements() -> Tuple[int, int, int]:
                 # Never scored, or its text changed since: nothing stored can
                 # be trusted, so this one alone gets a full re-score.
                 if all_properties is None:
-                    all_properties = property_vector_store.get_all_properties(limit=_MAX_PROPERTIES_SCORED)
+                    all_properties = match_candidates.get_all()
                 scores = _score(requirement, pseudo_client, all_properties) if has_requirements else []
                 full[requirement.record_id] = (scores, fingerprint)
             else:
@@ -271,6 +276,57 @@ def rescore_all_requirements() -> Tuple[int, int, int]:
     written = requirement_match_store.replace_matches(full, run_started_at) if full else 0
     written += requirement_match_store.merge_matches_bulk(incremental, run_started_at)
     return len(full) + len(incremental), len(runs) - len(pending), written
+
+
+def score_builder_projects_for_scored_requirements() -> Tuple[int, int, int]:
+    """The one-time pass that brings builder projects into matches that were
+    stored BEFORE builder projects were matched (see
+    ClientPropertyMatchingService/scheduled_recompute_service.
+    start_builder_project_introduction_in_background). Returns (requirements
+    updated, match rows written, requirements that failed).
+
+    Why it is needed at all: every later read catches a requirement up only
+    on listings changed since its watermark, and a project saved before then
+    is older than that watermark — without this, it would reach existing
+    requirements only through a full re-score.
+
+    What it deliberately does NOT do is move any watermark (see
+    requirement_match_store.merge_matches_bulk's keep_watermarks): only the
+    builder projects are looked at here, so a property changed since a
+    requirement was last scored must still be caught up by that
+    requirement's next read, exactly as before.
+
+    Skipped, because their next read already re-scores them in full with
+    builder projects included: requirements never scored, and requirements
+    whose text changed since they were scored."""
+    candidates = match_candidates.get_builder_projects()
+    if not candidates:
+        return 0, 0, 0
+    runs = requirement_match_store.get_run_index(_DAILY_REQUIREMENTS_WINDOW)
+    scored_ids = [record_id for record_id, (computed_at, _) in runs.items() if computed_at is not None]
+    if not scored_ids:
+        return 0, 0, 0
+    considered = {candidate.record_id for candidate in candidates}
+    updates: Dict[str, Tuple[List[MatchScore], set, str]] = {}
+    failed = 0
+    for requirement in requirement_store.get_requirements_by_record_ids(scored_ids):
+        try:
+            pseudo_client = _as_pseudo_client(requirement)
+            fingerprint = _fingerprint(pseudo_client)
+            if fingerprint != runs[requirement.record_id][1]:
+                continue
+            scores = (
+                _score(requirement, pseudo_client, candidates) if matching_service.has_requirements(pseudo_client) else []
+            )
+            updates[requirement.record_id] = (scores, considered, fingerprint)
+        except Exception as exc:  # noqa: BLE001
+            failed += 1
+            step_logger.error(
+                f"[Matching] Builder projects could not be scored for requirement {requirement.record_id} "
+                f"({type(exc).__name__}): {exc!r}"
+            )
+    written = requirement_match_store.merge_matches_bulk(updates, _now(), keep_watermarks=True) if updates else 0
+    return len(updates), written, failed
 
 
 def forget_requirement(record_id: str) -> None:

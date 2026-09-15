@@ -291,15 +291,22 @@ def parse_size_requirement(
     return value * (1 - _SIZE_APPROX_BAND), value * (1 + _SIZE_APPROX_BAND)
 
 
-def property_area_sqft(area: Optional[float], unit: Optional[str]) -> Optional[float]:
-    """A property's carpet area in square feet. The extractor records the
-    unit it was written in ("sqft" | "vaar" | "vigha"); no unit means sq ft,
-    which is what every row stored before that column existed was."""
-    if area is None or area <= 0:
-        return None
-    key = (unit or "sqft").strip().lower()
-    unit_name = key if key in _SQFT_PER_UNIT else _first_unit(key)
-    return area * _SQFT_PER_UNIT[unit_name] if unit_name else None
+def property_area_sqft(area_sqft: Optional[float], area_vaar: Optional[float]) -> Optional[float]:
+    """A property's area in square feet, for comparison against a client's
+    own size preference (which parse_size_requirement has already reduced to
+    square feet too).
+
+    A property stores its area in whichever unit the listing used, in its own
+    column (see StructuredProperty.area_sqft/area_vaar) — no unit label to
+    misread, so this is a plain lookup rather than a guess. Square feet wins
+    when a listing quoted both, simply because it needs no conversion at all.
+    None when neither column holds a usable number, which scoring treats as
+    "not comparable" rather than as a miss."""
+    if area_sqft is not None and area_sqft > 0:
+        return area_sqft
+    if area_vaar is not None and area_vaar > 0:
+        return area_vaar * _SQFT_PER_UNIT["vaar"]
+    return None
 
 
 _NON_RESIDENTIAL_WORDS_RE = re.compile(

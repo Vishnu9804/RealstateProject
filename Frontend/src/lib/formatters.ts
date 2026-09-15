@@ -80,41 +80,99 @@ export function formatPrice(priceText: string | null, priceAmountInr: number | n
 }
 
 /**
- * The opposite priority from formatPrice: for a per-unit rate, the unit
- * ("/vaar", "/sq ft", ...) is not optional context, it's the entire point —
- * "1.25L" alone doesn't say per what. The normalized text carries that
- * suffix and wins whenever it's present; the bare numeric amount is only a
- * fallback for the rare case a rate was parsed with no accompanying text.
- * "—" means neither was extracted.
- */
-export function formatPricePerUnit(priceText: string | null, priceAmountInr: number | null): string {
-  if (priceText) return priceText;
-  if (priceAmountInr !== null) return formatCompactInr(priceAmountInr);
-  return "—";
-}
-
-/**
- * Plain digits plus whichever unit the message actually used — "155 vaar",
- * "3856 sqft", "2 vigha" — never converted between units. The number is
- * only ever comparable to another number in the *same* unit, so showing
- * the unit isn't decoration, it's the difference between a plot and a flat
- * reading as the same size by accident.
+ * A property's size, in whichever unit the listing actually recorded it —
+ * "3856 sqft", "155 vaar", or both when a listing quoted both.
  *
- * Falls back to "sqft" when unit is missing but a number is present: every
- * carpet_area_sqft value stored before carpet_area_unit existed came from
- * a sqft-only extractor, so that's the correct label for old rows, not a
- * guess.
+ * Never converted between the two, and that is the whole point: the number
+ * is only ever comparable to another number in the *same* unit, so showing
+ * the unit is the difference between a plot and a flat reading as the same
+ * size by accident. The two values arrive in their own fields (see
+ * PropertyRecord.area_sqft / area_vaar), so there is no unit label left to
+ * misread and no fallback to guess at.
  */
-export function formatCarpetArea(area: number | null, unit: string | null): string {
-  if (area === null) return "—";
-  return `${Math.round(area)} ${unit ?? "sqft"}`;
+export function formatArea(areaSqft: number | null, areaVaar: number | null): string {
+  const parts: string[] = [];
+  if (areaSqft !== null) parts.push(`${Math.round(areaSqft)} sqft`);
+  if (areaVaar !== null) parts.push(`${Math.round(areaVaar)} vaar`);
+  return parts.length > 0 ? parts.join(" · ") : "—";
 }
 
-export function parseSqft(raw: string): number | null {
-  const cleaned = raw.trim().toLowerCase().replace(/[,\s]/g, "").replace(/sqft|sq\.?ft\.?|ft2/g, "");
+/** Reads a bare size for the range filters — "1200", "1,200", "1200 sqft",
+ *  "500 vaar" all become the number. The unit words are stripped rather than
+ *  interpreted: which filter the number bounds is decided by which column
+ *  the user opened, not by what they typed after it. */
+export function parseArea(raw: string): number | null {
+  const cleaned = raw
+    .trim()
+    .toLowerCase()
+    .replace(/[,\s]/g, "")
+    .replace(/sqft|sq\.?ft\.?|ft2|vaar|var|gaj/g, "");
   if (!cleaned) return null;
   const value = Number.parseFloat(cleaned);
   return Number.isFinite(value) ? value : null;
+}
+
+/* --------------------------------------------------------------------- IST
+ *
+ * India Standard Time is a fixed +05:30 with no DST, which is why these do
+ * plain arithmetic rather than going through the browser's locale machinery.
+ *
+ * Doing it explicitly — instead of leaning on the browser being set to IST,
+ * which it usually is here — means a laptop travelling, a misconfigured
+ * clock, or a server-rendered check can never shift a follow-up by hours
+ * without anyone noticing. It also matches the backend exactly: the
+ * automatic stamp and the visit reminders use the same fixed offset (see
+ * Backend/Service/AgentManagementService/visit_reminder_service.py's _IST).
+ */
+const IST_OFFSET_MS = (5 * 60 + 30) * 60 * 1000;
+
+function pad2(value: number): string {
+  return String(value).padStart(2, "0");
+}
+
+/** An ISO instant → the `YYYY-MM-DD` and `HH:mm` an `<input type="date">`
+ *  and `<input type="time">` should show, as IST wall-clock. Null for a
+ *  missing or unparseable instant, which the caller renders as "not set". */
+export function toIstFields(iso: string | null): { date: string; time: string } | null {
+  if (!iso) return null;
+  const ms = new Date(iso).getTime();
+  if (Number.isNaN(ms)) return null;
+  // Shift by the offset, then read the UTC parts: those are now the IST
+  // wall-clock numbers, whatever timezone this browser is in.
+  const shifted = new Date(ms + IST_OFFSET_MS);
+  return {
+    date: `${shifted.getUTCFullYear()}-${pad2(shifted.getUTCMonth() + 1)}-${pad2(shifted.getUTCDate())}`,
+    time: `${pad2(shifted.getUTCHours())}:${pad2(shifted.getUTCMinutes())}`,
+  };
+}
+
+/** The inverse: IST wall-clock `YYYY-MM-DD` + `HH:mm` → the ISO instant to
+ *  store. Null when the date is missing or either part is malformed — a
+ *  half-typed value must never be sent as a real time. */
+export function fromIstFields(date: string, time: string): string | null {
+  const day = /^(\d{4})-(\d{2})-(\d{2})$/.exec(date.trim());
+  if (!day) return null;
+  // An empty time means midnight IST, which is what a date-only pick means.
+  const clock = time.trim() ? /^(\d{2}):(\d{2})/.exec(time.trim()) : ["", "00", "00"];
+  if (!clock) return null;
+  const ms =
+    Date.UTC(Number(day[1]), Number(day[2]) - 1, Number(day[3]), Number(clock[1]), Number(clock[2])) - IST_OFFSET_MS;
+  return Number.isNaN(ms) ? null : new Date(ms).toISOString();
+}
+
+/** How a stored instant reads on screen: "15 Sep 2026, 5:00 pm IST". Always
+ *  IST, never the browser's timezone — the whole team works to one clock,
+ *  and a follow-up time that changes meaning with who is looking at it is
+ *  worse than none. */
+export function formatIst(iso: string | null): string {
+  const fields = toIstFields(iso);
+  if (!fields) return "—";
+  const [year, month, day] = fields.date.split("-").map(Number);
+  const [hour, minute] = fields.time.split(":").map(Number);
+  const MONTHS = ["Jan", "Feb", "Mar", "Apr", "May", "Jun", "Jul", "Aug", "Sep", "Oct", "Nov", "Dec"];
+  const meridiem = hour >= 12 ? "pm" : "am";
+  const hour12 = hour % 12 === 0 ? 12 : hour % 12;
+  return `${day} ${MONTHS[month - 1]} ${year}, ${hour12}:${pad2(minute)} ${meridiem} IST`;
 }
 
 /**

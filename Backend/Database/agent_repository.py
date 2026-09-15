@@ -118,6 +118,9 @@ def get_all_agents_with_active_clients() -> List[AgentSummary]:
                     budget_max_inr=assignment_row.budget_max_inr,
                     property_record_id=assignment_row.property_record_id,
                     property_label=assignment_row.property_label,
+                    # NULL = a row from before builder projects could be
+                    # assigned, i.e. a property.
+                    property_source=assignment_row.property_source or "property",
                     assigned_at=assignment_row.created_at,
                     scheduled_at=assignment_row.scheduled_at,
                 )

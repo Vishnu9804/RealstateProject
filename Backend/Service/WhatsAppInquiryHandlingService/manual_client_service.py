@@ -41,6 +41,12 @@ from Service.WhatsAppInquiryHandlingService.phone_utils import normalize_phone
 DETAIL_FIELDS = (
     "name",
     "email",
+    # Staff-only, and the only dialog that can set them — see
+    # Database/client_repository.py's STAFF_DETAIL_FIELDS for why every other
+    # write path leaves them alone. Not requirements, so they never re-run
+    # matching and stay editable while a site visit is out.
+    "current_address",
+    "about_loan",
     "purpose",
     "property_type",
     "bhk",
@@ -58,7 +64,8 @@ _MAX_PHOTO_LENGTH = 8 * 1024 * 1024
 
 LOCKED_MESSAGE = (
     "This client has properties out with an agent for a site visit, so their requirements can't change right "
-    "now — clear those assignments from their properties first. Their name, email and photo can still be changed."
+    "now — clear those assignments from their properties first. Their name, email, address, loan notes and "
+    "photo can still be changed."
 )
 
 Outcome = Literal["ok", "invalid_phone", "invalid_photo", "exists", "not_found", "locked"]
@@ -93,7 +100,14 @@ def create_client(raw_phone: str, fields: Dict[str, Any], photo_url: Optional[st
     if _has_requirements(record) and assignment_lock_service.has_active_assignment(phone):
         return ManualClientResult("locked")
 
-    saved = client_store.upsert_client(record, photo_url=photo_url, update_photo=photo_url is not None)
+    saved = client_store.upsert_client(
+        record,
+        photo_url=photo_url,
+        update_photo=photo_url is not None,
+        # This dialog is the one place the staff-only details can be set —
+        # see DETAIL_FIELDS above.
+        update_staff_fields=True,
+    )
     return ManualClientResult("ok", saved)
 
 
@@ -124,7 +138,13 @@ def update_client(
         # WhatsApp is answered, since the requirements just were updated.
         updated = updated.model_copy(update={"status": "registered", "pending_action": None})
 
-    saved = client_store.upsert_client(updated, previous=existing, photo_url=photo_url, update_photo=update_photo)
+    saved = client_store.upsert_client(
+        updated,
+        previous=existing,
+        photo_url=photo_url,
+        update_photo=update_photo,
+        update_staff_fields=True,
+    )
     return ManualClientResult("ok", saved)
 
 

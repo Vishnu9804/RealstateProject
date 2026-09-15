@@ -10,7 +10,7 @@ import { useDebounced } from "../hooks/useUi";
 import { getCachedAgents, setCachedAgents } from "../lib/agentListCache";
 import { friendlyError } from "../lib/apiError";
 import { getCachedCompletedVisits, setCachedCompletedVisits } from "../lib/clientMatchCache";
-import { formatCarpetArea, formatPrice, formatPricePerUnit, relativeTime } from "../lib/formatters";
+import { formatPrice, relativeTime } from "../lib/formatters";
 import { setCachedPropertyList } from "../lib/propertyListCache";
 import {
   compileFilters,
@@ -505,6 +505,9 @@ export default function SelectPropertyPage() {
                           <td className="cell-truncate cell-strong" title={property.society_name ?? undefined}>
                             <Highlight text={property.society_name ?? "—"} query={query} />
                           </td>
+                          <td className="cell-truncate" title={property.unit_no ?? undefined}>
+                            <Highlight text={property.unit_no ?? "—"} query={query} />
+                          </td>
                           <td className="cell-truncate" title={property.area_name ?? undefined}>
                             <Highlight text={property.area_name ?? "—"} query={query} />
                           </td>
@@ -517,13 +520,19 @@ export default function SelectPropertyPage() {
                             <Badge tone={property.listing_type === "Rent" ? "info" : "ok"}>{property.listing_type}</Badge>
                           </td>
                           <td className="cell-num" style={{ textAlign: "right" }}>
-                            {formatCarpetArea(property.carpet_area_sqft, property.carpet_area_unit)}
+                            {property.area_sqft === null ? "—" : Math.round(property.area_sqft)}
                           </td>
+                          <td className="cell-num" style={{ textAlign: "right" }}>
+                            {property.area_vaar === null ? "—" : Math.round(property.area_vaar)}
+                          </td>
+                          {/* COLUMNS is shared with the Properties page, so every
+                              column it declares needs its cell here too. */}
+                          <td className="cell-truncate" title={property.super_built ?? undefined}>
+                            {property.super_built ?? "—"}
+                          </td>
+                          <td className="cell-truncate">{property.furnishing ?? "—"}</td>
                           <td className="cell-num cell-strong" style={{ textAlign: "right" }} title={property.price_text ?? undefined}>
                             {formatPrice(property.price_text, property.price_amount_inr)}
-                          </td>
-                          <td className="cell-num" style={{ textAlign: "right" }} title={property.price_per_unit_text ?? undefined}>
-                            {formatPricePerUnit(property.price_per_unit_text, property.price_per_unit_amount_inr)}
                           </td>
                           <td className="cell-truncate">
                             <Highlight text={property.contact_name ?? "—"} query={query} />

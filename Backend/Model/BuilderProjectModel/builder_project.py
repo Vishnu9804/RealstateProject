@@ -29,16 +29,18 @@ class BuilderProject(BaseModel):
 
     property_type: Optional[str] = None
     bhk: Optional[str] = None
+    unit_no: Optional[str] = None
     society_name: Optional[str] = None
     area_name: Optional[str] = None
     address: Optional[str] = None
-    carpet_area_sqft: Optional[float] = None
-    carpet_area_unit: Optional[str] = None  # "sqft" | "vaar" | "vigha"
+    # Two separate columns, one per unit, never converted into one another —
+    # see StructuredProperty.area_sqft/area_vaar.
+    area_sqft: Optional[float] = None
+    area_vaar: Optional[float] = None
     super_built: Optional[str] = None
+    furnishing: Optional[str] = None
     price_text: Optional[str] = None
     price_amount_inr: Optional[float] = None
-    price_per_unit_text: Optional[str] = None
-    price_per_unit_amount_inr: Optional[float] = None
     listing_type: Literal["Sale", "Rent"] = "Sale"
     contact_name: Optional[str] = None
     contact_phone: Optional[str] = None
@@ -47,6 +49,14 @@ class BuilderProject(BaseModel):
     # Data URLs, in display order; the first is the cover — the same
     # contract as StructuredProperty.image_urls.
     image_urls: List[str] = Field(default_factory=list)
+    # Internal only, exactly as on a property — see
+    # StructuredProperty.location_url. A builder project is never published
+    # to the public site at all, so there is no outbound shape to keep it out
+    # of; the rule still holds if one is ever added.
+    location_url: Optional[str] = None
+    video_available: bool = False
+    extra_notes: Optional[str] = None
+    is_available: bool = True
 
     # Assigned by Postgres (server_default / onupdate) in database mode, and
     # by Service/BuilderProjectService/builder_project_store.py for the

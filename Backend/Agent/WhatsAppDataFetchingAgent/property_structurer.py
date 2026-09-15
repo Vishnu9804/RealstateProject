@@ -821,23 +821,42 @@ def _build_system_prompt(area_knowledge_supplied: bool = False) -> str:
             "Keep society_name (a specific named building/project/society, e.g. \"Black "
             "Residency\") and area_name (the general locality, e.g. \"Althan\") strictly "
             "separate — do not put a locality in society_name or a building name in "
-            "area_name. Only fill carpet_area_sqft if an explicit area number is stated in "
-            "the message; never estimate it from the BHK.",
+            "area_name. unit_no is a third, narrower thing again: the individual unit's own "
+            "number inside that building (\"Flat no. 402\" -> \"402\", \"A-404\" -> \"A-404\"). "
+            "Fill it only when the message actually names which unit is being offered — never "
+            "from a floor number, a count of available units, a BHK, or a phone number.",
             "",
-            "AREA UNIT — carpet_area_sqft takes the area number regardless of which unit it "
-            "is written in: square feet (\"1200 sqft\", \"1200 sq ft\"), Vaar/Gaj (\"500 "
-            "vaar\", \"500 gaj\"), or Vigha (\"2 vigha\"). Copy the bare number as written for "
-            "whichever of these units appears — do NOT convert between units and do NOT "
-            "guess a unit that isn't stated. carpet_area_unit records WHICH of those units it "
-            "was — set it to exactly \"sqft\", \"vaar\", or \"vigha\" every time carpet_area_sqft "
-            "is filled (never leave it null when carpet_area_sqft is set, and never set it when "
-            "carpet_area_sqft is null). The dashboard shows this unit next to the number exactly "
-            "as you set it (e.g. \"155 vaar\"), so getting it right matters as much as the number "
-            "itself.",
+            "AREA — there are TWO separate area fields, one per unit of measure, and they are "
+            "not interchangeable:",
+            "  - area_sqft is the number ONLY when the message writes it in square feet "
+            "(\"1200 sqft\", \"1200 sq ft\", \"1200 square feet\" -> 1200).",
+            "  - area_vaar is the number ONLY when the message writes it in vaar or a synonym "
+            "of vaar — \"vaar\", \"var\", \"gaj\", \"sq yard\", \"square yard\" (\"500 vaar\" -> "
+            "500, \"500 gaj\" -> 500).",
+            "Fill the ONE field matching the unit the message actually used, with the bare "
+            "number exactly as written. NEVER convert between the two — 1200 sqft is not 133 "
+            "vaar as far as you are concerned, and writing a sqft figure into area_vaar (or the "
+            "reverse) makes a flat and a plot read as the same size. Fill BOTH only in the one "
+            "case where the message itself separately quotes both. Leave both null when no area "
+            "is stated — never estimate an area from the BHK — and also leave both null when the "
+            "area is given in some OTHER unit entirely (vigha, guntha, acre, square metres): "
+            "there is no field for those, and the figure still reaches a human through "
+            "description and the original message text, which is far better than a number "
+            "silently filed under the wrong unit.",
+            "",
+            "FURNISHING — set furnishing only when the message says how furnished the property "
+            "is, normalized to exactly one of \"Unfurnished\", \"Semi furnished\" or \"Fully "
+            "furnished\". Map the wording onto those three (\"non furnished\"/\"bare shell\" -> "
+            "\"Unfurnished\"; \"semi-furnished\"/\"partly furnished\" -> \"Semi furnished\"; "
+            "\"furnished\"/\"full furnished\"/\"furniture included\" -> \"Fully furnished\"). "
+            "Null when the message does not say — \"Unfurnished\" is NOT a safe default, and a "
+            "passing mention of one piece of furniture is not a furnishing statement.",
             "",
             "PRICE FIELDS — there are two independent kinds of price, and they must never be "
             "confused with each other:",
-            "  - price_text / price_amount_inr is the TOTAL price of the property.",
+            "  - price_text / price_amount_inr is the TOTAL price of the property. This is the "
+            "only price that is stored, so keeping a rate out of it is the single most "
+            "important thing in this section.",
             "  - price_per_unit_text / price_per_unit_amount_inr is a PER-UNIT RATE — only "
             "fill this when the message explicitly states a rate per sq ft / per vaar / per "
             "vigha / per unit, phrased like \"1L per sq ft\", \"1L/sq ft\", \"85000/vaar\", "
@@ -878,6 +897,18 @@ def _build_system_prompt(area_knowledge_supplied: bool = False) -> str:
             "(and on price_text only when the message itself qualified the total that way, e.g. "
             "\"/month\" rent). This formatting must be exact and consistent for every price you "
             "extract — get it right every time, not just usually.",
+            "",
+            "NULL IS A CORRECT ANSWER — read this before filling anything in. You are NOT "
+            "being scored on how many fields you fill; you are scored on whether every field "
+            "you DID fill is really what the message says. Most real listings state only a "
+            "handful of these fields, so most of them coming back null is the normal, expected, "
+            "wanted result. Never stretch a value to fill a neighbouring field: an area is not a "
+            "unit number, a locality is not a society, a floor is not a unit number, a rate is "
+            "not a total, a size in vigha is not a size in vaar, and \"has furniture in one "
+            "photo\" is not a furnishing statement. A field you leave null is simply blank and "
+            "can be typed in later by a human; a field you fill with the wrong thing is bad data "
+            "that looks correct and nobody catches. When in any doubt about a specific field, "
+            "leave THAT field null and keep everything else you are sure of.",
             "",
             "Never invent details that are not present in the message text. If a field is "
             "not mentioned, use null rather than guessing. Do not perform any arithmetic "
@@ -1030,7 +1061,7 @@ def _build_system_prompt(area_knowledge_supplied: bool = False) -> str:
             "",
             "Set has_enough_information FALSE ONLY in the extreme case: the fragment carries "
             "essentially NOTHING you could extract — every single one of property_type, bhk, "
-            "society_name, area_name, address, carpet_area_sqft, price_text and "
+            "society_name, area_name, address, area_sqft, area_vaar, price_text and "
             "price_per_unit_text came out null or meaningless, so the property you are returning "
             "is an empty shell. Concretely: you have a line that is real text but says nothing "
             "usable about the property (\"available, interested people contact\", \"good deal, "
@@ -1072,9 +1103,11 @@ def _build_system_prompt(area_knowledge_supplied: bool = False) -> str:
             "      \"property_lines\": [\"<short identifying words for each property, per STEP 0>\"],",
             "      \"properties\": [",
             "        {\"property_type\": string|null, \"bhk\": string|null, "
+            "\"unit_no\": string|null, "
             "\"society_name\": string|null, \"area_name\": string|null, "
-            "\"address\": string|null, \"carpet_area_sqft\": number|null, "
-            "\"carpet_area_unit\": \"sqft\"|\"vaar\"|\"vigha\"|null, "
+            "\"address\": string|null, \"area_sqft\": number|null, "
+            "\"area_vaar\": number|null, "
+            "\"furnishing\": \"Unfurnished\"|\"Semi furnished\"|\"Fully furnished\"|null, "
             "\"price_text\": string|null, \"price_amount_inr\": number|null, "
             "\"price_per_unit_text\": string|null, \"price_per_unit_amount_inr\": number|null, "
             "\"listing_type_reason\": string, \"listing_type\": \"Sale\"|\"Rent\", "
@@ -1338,15 +1371,15 @@ def _to_structured_property(
         source_message_id=message.message_id,
         property_type=listing.property_type,
         bhk=listing.bhk,
+        unit_no=listing.unit_no,
         society_name=listing.society_name,
         area_name=listing.area_name,
         address=listing.address,
-        carpet_area_sqft=listing.carpet_area_sqft,
-        carpet_area_unit=listing.carpet_area_unit,
+        area_sqft=listing.area_sqft,
+        area_vaar=listing.area_vaar,
+        furnishing=listing.furnishing,
         price_text=listing.price_text,
         price_amount_inr=listing.price_amount_inr,
-        price_per_unit_text=listing.price_per_unit_text,
-        price_per_unit_amount_inr=listing.price_per_unit_amount_inr,
         listing_type=listing.listing_type,
         contact_name=listing.contact_name,
         contact_phone=listing.contact_phone,
@@ -1367,12 +1400,16 @@ def _to_structured_property(
     )
     _fill_missing_area_name(structured, listing.area_match_reason)
     _rescue_wrongly_flagged_outsider(structured)
-    _sanitize_and_parse_prices(structured)
+    # The per-unit rate lives only in these three lines. It is extracted (see
+    # GLMPropertyListing's own comment on why asking for it makes the TOTAL
+    # more accurate), used to repair or derive the total, and then goes out of
+    # scope — it is never written to `structured`, which has no column for it.
+    rate = _sanitize_and_parse_prices(structured, listing)
     if single_property_message:
         # Before the derivation below, so a price recovered straight from the
         # broker's own wording can still feed "total = area x rate".
         _recover_total_price_from_text(structured)
-    _fill_missing_price_or_area(structured)
+    _fill_missing_price(structured, rate)
     if single_property_message:
         _sanitize_listing_type(structured)
     # Last, deliberately: the derivations above can fill in a price or an
@@ -1390,8 +1427,8 @@ def _to_structured_property(
 # listing.
 _INFORMATION_GROUPS = (
     ("location", ("society_name", "area_name", "address")),
-    ("specification", ("property_type", "bhk", "carpet_area_sqft")),
-    ("price", ("price_text", "price_amount_inr", "price_per_unit_text", "price_per_unit_amount_inr")),
+    ("specification", ("property_type", "bhk", "area_sqft", "area_vaar")),
+    ("price", ("price_text", "price_amount_inr")),
 )
 
 
@@ -1655,7 +1692,7 @@ def _parse_price_text_to_inr(text: str) -> Optional[float]:
 # "₹6,500 Per Sq. Ft." carries no scale word at all, and GLM has been
 # observed inventing one anyway (treating it as "6.5L per sq ft" — a clean
 # 100x error that then propagates into a wildly wrong total once
-# _fill_missing_price_or_area multiplies it by the area). Unlike totals,
+# _fill_missing_price multiplies it by the area). Unlike totals,
 # which brokers almost always spell out with an explicit Lakh/Crore word,
 # per-unit rates are routinely written as bare numbers, so this pattern is
 # common enough to be worth guarding deterministically rather than trusting
@@ -1668,6 +1705,35 @@ _UNIT_PHRASE_PATTERNS = {
 _NUMBER_SCALE_PATTERN = (
     r"(?P<num>\d[\d,]*(?:\.\d+)?)\s*(?P<scale>" + _SCALE_WORD_PATTERN + r")?\b"
 )
+
+
+def _rate_unit(rate_text: Optional[str], prop: StructuredProperty) -> Optional[str]:
+    """Which of the property's two area fields a per-unit rate is quoted
+    against — "sqft" or "vaar" — or None when that cannot be told.
+
+    The rate's own wording decides it whenever it names a unit
+    ("85,000/vaar"). Failing that, an unqualified rate belongs to whichever
+    single area unit this property actually has a number in; if it has both,
+    or neither, there is no defensible answer and None is returned rather
+    than a guess — multiplying an area by a rate meant for the other unit
+    would be wrong by a factor of nine.
+
+    A rate quoted per vigha (or per anything else) also resolves to None:
+    there is no area column in that unit to pair it with, so it is simply
+    not used. It is still RECOGNISED as a per-unit phrase elsewhere in this
+    module (see _NOT_A_PER_UNIT_PHRASE), which is what stops it from being
+    mistaken for a total price."""
+    text = rate_text or ""
+    for unit in ("vaar", "sqft"):
+        if re.search(_UNIT_PHRASE_PATTERNS[unit], text, re.IGNORECASE):
+            return unit
+    if re.search(_UNIT_PHRASE_PATTERNS["vigha"], text, re.IGNORECASE):
+        return None
+    if prop.area_vaar is not None and prop.area_sqft is None:
+        return "vaar"
+    if prop.area_sqft is not None and prop.area_vaar is None:
+        return "sqft"
+    return None
 
 
 def _extract_per_unit_rate_from_text(text: Optional[str], unit: Optional[str]) -> Optional[float]:
@@ -1766,7 +1832,7 @@ def _verify_total_price_against_text(prop: StructuredProperty) -> None:
     - If the LLM's total has NO basis anywhere in the text — the message
       never states a total at all, only e.g. a per-unit rate — the LLM
       invented it despite being told never to guess. Clear price_text/
-      price_amount_inr so _fill_missing_price_or_area derives the real
+      price_amount_inr so _fill_missing_price derives the real
       total deterministically from area x per-unit rate instead of a
       fabricated number surviving into the stored record.
     """
@@ -1807,64 +1873,81 @@ def _verify_total_price_against_text(prop: StructuredProperty) -> None:
         prop.price_text = None
 
 
-def _sanitize_and_parse_prices(prop: StructuredProperty) -> None:
+def _sanitize_and_parse_prices(
+    prop: StructuredProperty, listing: GLMPropertyListing
+) -> Optional[Tuple[float, str]]:
     """Deterministic safety net over the LLM's PRICE FIELDS separation, run
     right after structuring — never trusts the LLM's total-vs-per-unit split
-    (or its numeric parsing) as the only line of defense:
+    (or its numeric parsing) as the only line of defense.
+
+    Returns the property's per-unit rate as (amount, "sqft"|"vaar") when one
+    could be established, else None. That rate is NOT stored: a property has
+    one price, the total (see StructuredProperty.price_text). It is returned
+    purely so _fill_missing_price can finish the job — recovering the total
+    of a plot listing that only ever quoted "<area> vaar" and "<rate>/vaar",
+    which is most of them.
 
     1. If price_text itself reads like a per-unit rate ("...per vaar",
-       ".../sq ft"), the LLM mislabeled a rate as the total. Reclassify it
-       as the per-unit rate (unless that field is already filled) and clear
-       price_text/price_amount_inr — a "total" that is actually a rate is
-       strictly worse than leaving Price blank, since a blank total still
-       lets _fill_missing_price_or_area derive the real one from
-       area * rate.
-    2. Whenever an *_amount_inr is null but its matching *_text is present,
-       try to parse a plain number out of the text — the LLM sometimes
-       writes a clean, parseable price string without also filling the
-       numeric field, which would otherwise silently block the area/rate/
-       total derivation from having the two inputs it needs.
-    3. Cross-check the resulting per-unit rate against a fresh parse of the
-       raw message text (_extract_per_unit_rate_from_text). When the two
-       disagree, the raw text wins — it's what the broker actually typed,
-       while the LLM's number/scale is a transcription that can silently
-       apply the wrong magnitude (see _extract_per_unit_rate_from_text's
-       docstring). This also repairs price_per_unit_text so it stays
-       consistent with the corrected amount.
-    4. Same idea for a SCALED total price (_verify_total_price_against_text)
-       — cross-check it against the raw text, and clear it entirely if it
-       has no basis there at all (the LLM invented a total for a message
-       that only ever stated a per-unit rate), letting the deterministic
-       area x rate derivation below fill in the real one instead.
+       ".../sq ft"), the LLM mislabeled a rate as the total. Take it as the
+       rate (unless the LLM already gave one) and clear price_text/
+       price_amount_inr — a "total" that is actually a rate is strictly worse
+       than leaving Price blank, since a blank total still lets step 5 derive
+       the real one from area * rate.
+    2. Whenever an amount is null but its matching text is present, try to
+       parse a plain number out of the text — the LLM sometimes writes a
+       clean, parseable price string without also filling the numeric field,
+       which would otherwise silently block the derivation from having the
+       two inputs it needs.
+    3. Cross-check a SCALED total price (_verify_total_price_against_text)
+       against the raw text, and clear it entirely if it has no basis there
+       at all (the LLM invented a total for a message that only ever stated a
+       per-unit rate), letting the derivation fill in the real one instead.
+    4. Cross-check the per-unit rate against a fresh parse of the raw message
+       text (_extract_per_unit_rate_from_text). When the two disagree, the raw
+       text wins — it's what the broker actually typed, while the LLM's
+       number/scale is a transcription that can silently apply the wrong
+       magnitude (see that function's docstring). Deliberately only ever
+       CORRECTS a rate the LLM assigned to this property, never invents one
+       from the text: message_text covers every property in a bulk listing, so
+       a rate found there could belong to a completely different line (the
+       same "never borrow a different property's signal" rule PART 3's area
+       matching and _sanitize_listing_type both follow).
     """
+    rate_text = listing.price_per_unit_text
+    rate_amount = listing.price_per_unit_amount_inr
+
     if _PER_UNIT_HINT_RE.search(prop.price_text or ""):
-        if not prop.price_per_unit_text:
-            prop.price_per_unit_text = prop.price_text
+        if not rate_text:
+            rate_text = prop.price_text
         prop.price_text = None
         prop.price_amount_inr = None
 
     if prop.price_amount_inr is None and prop.price_text:
         prop.price_amount_inr = _parse_price_text_to_inr(prop.price_text)
-    if prop.price_per_unit_amount_inr is None and prop.price_per_unit_text:
-        prop.price_per_unit_amount_inr = _parse_price_text_to_inr(prop.price_per_unit_text)
+    if rate_amount is None and rate_text:
+        rate_amount = _parse_price_text_to_inr(rate_text)
 
     _verify_total_price_against_text(prop)
 
-    grounded_rate = _extract_per_unit_rate_from_text(prop.message_text, prop.carpet_area_unit)
+    unit = _rate_unit(rate_text, prop)
+    grounded_rate = _extract_per_unit_rate_from_text(prop.message_text, unit)
     if (
         grounded_rate is not None
         and grounded_rate > 0
-        and prop.price_per_unit_amount_inr is not None
-        and not math.isclose(grounded_rate, prop.price_per_unit_amount_inr, rel_tol=0.01)
+        and rate_amount is not None
+        and not math.isclose(grounded_rate, rate_amount, rel_tol=0.01)
     ):
         step_logger.warn(
             f"Per-unit rate for message {prop.source_message_id!r} disagreed with the raw message text "
-            f"(LLM gave {prop.price_per_unit_amount_inr:,.0f}/{prop.carpet_area_unit}, text says "
-            f"{grounded_rate:,.0f}/{prop.carpet_area_unit}) — using the text-grounded value. This is almost "
-            "always the LLM mis-scaling a bare number (e.g. reading '6,500 per sq ft' as '6.5L per sq ft')."
+            f"(LLM gave {rate_amount:,.0f}/{unit}, text says {grounded_rate:,.0f}/{unit}) — using the "
+            "text-grounded value. This is almost always the LLM mis-scaling a bare number (e.g. reading "
+            "'6,500 per sq ft' as '6.5L per sq ft')."
         )
-        prop.price_per_unit_amount_inr = grounded_rate
-        prop.price_per_unit_text = f"{_format_compact_inr(grounded_rate)}/{prop.carpet_area_unit}"
+        rate_amount = grounded_rate
+
+    if rate_amount is None or rate_amount <= 0 or unit is None:
+        return None
+    return rate_amount, unit
 
 
 # Words a broker puts directly in FRONT of the property's total price.
@@ -1975,43 +2058,32 @@ def _trim_number(value: float) -> str:
     return f"{rounded:g}"
 
 
-def _fill_missing_price_or_area(prop: StructuredProperty) -> None:
+def _fill_missing_price(prop: StructuredProperty, rate: Optional[Tuple[float, str]]) -> None:
     """Deterministic post-processing, run after the LLM has structured the
-    property — never inside the LLM prompt itself. carpet_area_sqft,
-    price_amount_inr and price_per_unit_amount_inr are three numbers that
-    are only ever dimensionally consistent within one listing (all in
-    whatever single unit — sqft/vaar/vigha — that listing used), so
-    "total = area * rate" holds exactly as written, with no unit
-    conversion. When exactly one of the three is missing and the other two
-    are present, the third is computed here; when two or more are missing
-    there isn't enough information to derive anything, so every field is
-    left exactly as the LLM returned it (null stays null, shown as "—" in
-    the UI, same as today)."""
-    area = prop.carpet_area_sqft
-    total = prop.price_amount_inr
-    per_unit = prop.price_per_unit_amount_inr
+    property — never inside the LLM prompt itself.
 
-    present = sum(value is not None for value in (area, total, per_unit))
-    if present != 2:
+    "total = area * rate" holds exactly as written, with no unit conversion,
+    because `rate` arrives already paired with the area field it is quoted
+    against (see _rate_unit): a per-vaar rate is only ever multiplied by
+    area_vaar, a per-sqft rate only by area_sqft. That pairing is precisely
+    what the two separate area columns buy.
+
+    Fills whichever ONE of (total price, that area) is missing. Nothing is
+    derived when both are missing — there is nothing to derive from — nor
+    when both are already present, and nothing happens at all without a
+    rate. Anything left null stays null and renders as "—", exactly as
+    before."""
+    if rate is None:
         return
+    rate_amount, unit = rate
+    area_field = "area_sqft" if unit == "sqft" else "area_vaar"
+    area = getattr(prop, area_field)
+    total = prop.price_amount_inr
 
-    if total is None:
-        if per_unit == 0:
-            return
-        total = area * per_unit
+    if total is None and area is not None:
+        total = area * rate_amount
         prop.price_amount_inr = total
         if not prop.price_text:
             prop.price_text = _format_compact_inr(total)
-    elif area is None:
-        if per_unit is None or per_unit == 0:
-            return
-        area = total / per_unit
-        prop.carpet_area_sqft = area
-    elif per_unit is None:
-        if area == 0:
-            return
-        per_unit = total / area
-        prop.price_per_unit_amount_inr = per_unit
-        if not prop.price_per_unit_text:
-            suffix = f"/{prop.carpet_area_unit}" if prop.carpet_area_unit else ""
-            prop.price_per_unit_text = f"{_format_compact_inr(per_unit)}{suffix}"
+    elif area is None and total is not None:
+        setattr(prop, area_field, total / rate_amount)

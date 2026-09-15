@@ -410,8 +410,9 @@ def _summary_fields(prop: EmbeddedProperty, image_limit: Optional[int]) -> dict:
         "bhk": prop.bhk,
         "society_name": prop.society_name,
         "area_name": prop.area_name,
-        "carpet_area": prop.carpet_area_sqft,
-        "carpet_area_unit": prop.carpet_area_unit,
+        "area_sqft": prop.area_sqft,
+        "area_vaar": prop.area_vaar,
+        "furnishing": prop.furnishing,
         "price_text": prop.price_text,
         "price_amount_inr": prop.price_amount_inr,
         "listing_type": prop.listing_type,
@@ -429,8 +430,6 @@ def _to_detail(prop: EmbeddedProperty) -> LandingPropertyDetail:
     return LandingPropertyDetail(
         **_summary_fields(prop, image_limit=None),
         description=prop.description,
-        price_per_unit_text=prop.price_per_unit_text,
-        price_per_unit_amount_inr=prop.price_per_unit_amount_inr,
         instagram_reel_url=prop.instagram_reel_url,
         instagram_reel_embed_url=_reel_embed_url(prop.instagram_reel_url),
     )

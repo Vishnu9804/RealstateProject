@@ -46,6 +46,11 @@ class AgentVisitRow(ClientBase):
     # have none; every new completion always sets it.
     property_record_id: Mapped[Optional[str]] = mapped_column(String, nullable=True)
     property_label: Mapped[Optional[str]] = mapped_column(String, nullable=True)
+    # "property" or "builder_project", carried over from the active
+    # assignment at completion (see AgentAssignmentRow.property_source).
+    # NULL on rows completed before builder projects could be matched — all
+    # of them properties.
+    property_source: Mapped[Optional[str]] = mapped_column(String, nullable=True)
 
     # Snapshot of the assignment's own budget at completion time, same
     # reasoning as property_record_id/property_label above — lets a later

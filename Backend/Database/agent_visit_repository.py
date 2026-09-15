@@ -40,6 +40,7 @@ def create_visit(
     budget_max_inr: Optional[float],
     notes: Optional[str],
     scheduled_at: Optional[datetime] = None,
+    property_source: Optional[str] = None,
 ) -> VisitRecord:
     with get_client_session() as session:
         row = AgentVisitRow(
@@ -49,6 +50,7 @@ def create_visit(
             client_name=client_name,
             property_record_id=property_record_id,
             property_label=property_label,
+            property_source=property_source,
             budget_min_inr=budget_min_inr,
             budget_max_inr=budget_max_inr,
             notes=notes,
@@ -139,4 +141,6 @@ def mark_followups_sent(visit_ids: List[str], sent_at: datetime) -> None:
 
 def _to_pydantic(row: AgentVisitRow) -> VisitRecord:
     data = {name: getattr(row, name) for name in _COLUMNS}
-    return VisitRecord(**data, completed_at=row.completed_at)
+    # NULL on every visit completed before builder projects could be
+    # assigned — all of them properties.
+    return VisitRecord(**data, property_source=row.property_source or "property", completed_at=row.completed_at)

@@ -318,11 +318,6 @@ def init_db() -> None:
         )
         connection.execute(text("ALTER TABLE users ADD COLUMN IF NOT EXISTS session_epoch INTEGER NOT NULL DEFAULT 0"))
     with engine.begin() as connection:
-        connection.execute(text("ALTER TABLE properties ADD COLUMN IF NOT EXISTS price_per_unit_text VARCHAR"))
-        connection.execute(
-            text("ALTER TABLE properties ADD COLUMN IF NOT EXISTS price_per_unit_amount_inr FLOAT")
-        )
-        connection.execute(text("ALTER TABLE properties ADD COLUMN IF NOT EXISTS carpet_area_unit VARCHAR"))
         # The human-entered "Super built" area (StructuredProperty.super_built).
         # Nullable, no default: a metadata-only change on Postgres, and every
         # existing row simply reads "not set".
@@ -670,6 +665,67 @@ def init_db() -> None:
             connection.execute(text("ALTER TABLE broker_requirements DROP COLUMN sender_phone"))
             connection.execute(text("ALTER TABLE broker_requirements DROP COLUMN message_text"))
             connection.execute(text("ALTER TABLE broker_requirements DROP COLUMN message_timestamp"))
+    # The client's own spreadsheet columns, folded into the property schema:
+    # the unit/flat number, the area split into its two real units (sqft and
+    # vaar — see StructuredProperty.area_sqft/area_vaar), furnishing, the
+    # internal-only map link, whether a video exists, the client's free-text
+    # "Extra" note, and their "AVL or Not" toggle.
+    #
+    # create_all above already builds all of these on a brand-new database,
+    # so every statement here is a no-op there. They exist for the case this
+    # module's docstring already warns about: this database is shared with
+    # other branches of the project, and a branch that reshaped one of these
+    # tables without these columns would otherwise make every read fail.
+    # Nullable (or NOT NULL with a default) throughout, so each is a
+    # catalog-only change in Postgres — no table rewrite, no backfill pass.
+    #
+    # The four columns this replaces — carpet_area_sqft, carpet_area_unit,
+    # price_per_unit_text, price_per_unit_amount_inr — are deliberately NOT
+    # dropped. Dropping a column destroys whatever it holds, and this project
+    # is moving to a fresh database rather than migrating the old one; an
+    # unused nullable column left behind costs nothing and SQLAlchemy ignores
+    # it entirely, while a DROP run against the wrong database cannot be
+    # undone.
+    new_content_columns = (
+        "unit_no VARCHAR",
+        "area_sqft FLOAT",
+        "area_vaar FLOAT",
+        "furnishing VARCHAR",
+        "location_url TEXT",
+        "video_available BOOLEAN NOT NULL DEFAULT false",
+        "extra_notes TEXT",
+        "is_available BOOLEAN NOT NULL DEFAULT true",
+    )
+    with engine.begin() as connection:
+        for table in ("properties", "builder_projects", "soldout_properties"):
+            for column in new_content_columns:
+                connection.execute(text(f"ALTER TABLE {table} ADD COLUMN IF NOT EXISTS {column}"))
+
+        # Builder projects are matched against client inquiries and broker
+        # requirements alongside properties: their match vector (see
+        # BuilderProjectRow.embedding), and which kind of listing each agent
+        # visit is to (AgentAssignmentRow/AgentVisitRow.property_source).
+        # All nullable with no default — catalog-only changes in Postgres, no
+        # table rewrite and no backfill pass. NULL already means exactly
+        # the right thing for every existing row: a project whose vector is
+        # computed the first time matching needs it, and a visit to a
+        # property (nothing else could be assigned before this).
+        connection.execute(
+            text(f"ALTER TABLE builder_projects ADD COLUMN IF NOT EXISTS embedding vector({EMBEDDING_DIMENSIONS})")
+        )
+        connection.execute(text("ALTER TABLE agent_assignments ADD COLUMN IF NOT EXISTS property_source VARCHAR"))
+        connection.execute(text("ALTER TABLE agent_visits ADD COLUMN IF NOT EXISTS property_source VARCHAR"))
+
+        # The client-inquiry side's own additions: the two staff-only detail
+        # fields and the last-follow-up stamp (see Database/client_models.py,
+        # which explains why none of the three is in client_repository's
+        # _COLUMNS). All nullable, so catalog-only changes with nothing to
+        # backfill — NULL already means exactly what an existing client
+        # should read: nothing recorded yet.
+        connection.execute(text("ALTER TABLE clients ADD COLUMN IF NOT EXISTS current_address TEXT"))
+        connection.execute(text("ALTER TABLE clients ADD COLUMN IF NOT EXISTS about_loan TEXT"))
+        connection.execute(text("ALTER TABLE clients ADD COLUMN IF NOT EXISTS last_follow_up_dates TIMESTAMPTZ"))
+
     _retire_extra_requirement_columns(engine)
 
     # Fills text_fingerprint for message rows that predate that column —

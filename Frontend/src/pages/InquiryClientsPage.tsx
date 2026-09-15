@@ -18,7 +18,7 @@ import { usePolling } from "../hooks/usePolling";
 import { useAuth } from "../state/AuthProvider";
 import { useDebounced } from "../hooks/useUi";
 import { friendlyError } from "../lib/apiError";
-import { formatCompactInr, relativeTime } from "../lib/formatters";
+import { formatCompactInr, formatIst, fromIstFields, relativeTime, toIstFields } from "../lib/formatters";
 import { getCachedClients, setCachedClients } from "../lib/inquiryListCache";
 import { useToast } from "../components/ui/Toast";
 import ClientMatchesDialog, { type DialogView } from "../components/ClientMatchesDialog";
@@ -591,6 +591,10 @@ export default function InquiryClientsPage() {
               countsFor={countsFor}
               onEdit={handleEdit}
               onDelete={setDeleteTarget}
+              // The same fold-back an Edit save uses: the endpoint returns
+              // the updated record, so the cell and the shared list cache
+              // both show the new date without re-fetching the whole list.
+              onFollowUpSaved={(saved) => applySavedClient(saved, "edit")}
             />
           )}
 
@@ -670,6 +674,177 @@ export default function InquiryClientsPage() {
   );
 }
 
+/* ------------------------------------------------------- last follow-up */
+
+/**
+ * The editable "Last follow-up" cell.
+ *
+ * The value is normally written for you: the post-site-visit follow-up
+ * message goes out 24 hours after a visit is marked complete, and stamps
+ * this with the moment it actually sent (Backend/Service/
+ * AgentManagementService/visit_reminder_service.py). This cell exists for
+ * the other half — a follow-up that happened by phone, in person, or on a
+ * day the automatic one didn't cover — so the date can be corrected by hand.
+ *
+ * Everything shown and typed here is IST, converted at the edge (see
+ * lib/formatters.ts). The backend stores a UTC instant, so the automatic
+ * stamp and a hand-set one are directly comparable.
+ */
+function FollowUpPopover({
+  client,
+  anchorEl,
+  onClose,
+  onSaved,
+}: {
+  client: InquiryClientRecord;
+  anchorEl: HTMLElement;
+  onClose: () => void;
+  onSaved: (saved: InquiryClientRecord) => void;
+}) {
+  const toast = useToast();
+  const popoverRef = useRef<HTMLDivElement>(null);
+  const [position, setPosition] = useState<{ left: number; top: number } | null>(null);
+  const [saving, setSaving] = useState(false);
+  const stored = toIstFields(client.last_follow_up_dates);
+  const [date, setDate] = useState(stored?.date ?? "");
+  const [time, setTime] = useState(stored?.time ?? "");
+
+  // Same placement and dismissal rules as components/ui/FilterPopover.tsx —
+  // re-measured on scroll/resize so it tracks its cell when the table scrolls
+  // sideways instead of drifting away from it.
+  useEffect(() => {
+    const place = () => {
+      const rect = anchorEl.getBoundingClientRect();
+      const width = 260;
+      const height = 210;
+      const left = Math.max(8, Math.min(rect.left, window.innerWidth - width - 8));
+      const below = rect.bottom + 8;
+      const top = below + height > window.innerHeight - 8 ? Math.max(8, rect.top - height - 8) : below;
+      setPosition({ left, top });
+    };
+    place();
+    window.addEventListener("scroll", place, true);
+    window.addEventListener("resize", place);
+    return () => {
+      window.removeEventListener("scroll", place, true);
+      window.removeEventListener("resize", place);
+    };
+  }, [anchorEl]);
+
+  useEffect(() => {
+    const onPointerDown = (event: PointerEvent) => {
+      const target = event.target as Node;
+      if (popoverRef.current?.contains(target) || anchorEl.contains(target)) return;
+      onClose();
+    };
+    const onKeyDown = (event: KeyboardEvent) => {
+      if (event.key === "Escape") {
+        event.stopPropagation();
+        onClose();
+      }
+    };
+    document.addEventListener("pointerdown", onPointerDown, true);
+    document.addEventListener("keydown", onKeyDown);
+    return () => {
+      document.removeEventListener("pointerdown", onPointerDown, true);
+      document.removeEventListener("keydown", onKeyDown);
+    };
+  }, [anchorEl, onClose]);
+
+  /** Fills both boxes with the current moment in IST — the common case by
+   *  far, since the reason someone opens this is usually "I just called
+   *  them". Only fills the inputs; nothing is stored until Save. */
+  function setNow() {
+    const now = toIstFields(new Date().toISOString());
+    if (!now) return;
+    setDate(now.date);
+    setTime(now.time);
+  }
+
+  async function save(at: string | null) {
+    setSaving(true);
+    try {
+      onSaved(await inquiryClientApi.setFollowUp(client.phone, at));
+      toast.push({
+        tone: "ok",
+        title: at ? "Follow-up date saved" : "Follow-up date cleared",
+        message: at ? formatIst(at) : "This client now reads as never followed up.",
+      });
+      onClose();
+    } catch (err) {
+      toast.push({ tone: "bad", title: "Couldn't save the follow-up date", message: friendlyError(err) });
+    } finally {
+      setSaving(false);
+    }
+  }
+
+  // A date with no time means midnight IST (see fromIstFields); no date at
+  // all means there is nothing to save, so Save stays disabled rather than
+  // silently storing something the operator did not choose.
+  const iso = date ? fromIstFields(date, time) : null;
+
+  return createPortal(
+    <div
+      ref={popoverRef}
+      className="popover"
+      role="dialog"
+      aria-label="Last follow-up"
+      style={{
+        left: position?.left ?? -9999,
+        top: position?.top ?? -9999,
+        width: 260,
+        visibility: position ? "visible" : "hidden",
+      }}
+    >
+      <div className="popover__head">
+        <span className="popover__title">Last follow-up</span>
+        <button type="button" className="toast__close" onClick={onClose} aria-label="Close">
+          <IconX size={13} />
+        </button>
+      </div>
+
+      <div className="stack stack-3" style={{ padding: 12 }}>
+        <div className="row-flex" style={{ gap: 8 }}>
+          <input
+            className="input"
+            type="date"
+            aria-label="Follow-up date (IST)"
+            value={date}
+            onChange={(event) => setDate(event.target.value)}
+            disabled={saving}
+          />
+          <input
+            className="input"
+            type="time"
+            aria-label="Follow-up time (IST)"
+            value={time}
+            onChange={(event) => setTime(event.target.value)}
+            disabled={saving}
+          />
+        </div>
+        <span className="field__hint">
+          Times are IST. {iso ? formatIst(iso) : "Pick a date, or use Now."}
+        </span>
+
+        <div className="row-flex" style={{ gap: 8, flexWrap: "wrap" }}>
+          <Button size="sm" variant="ghost" onClick={setNow} disabled={saving}>
+            Now
+          </Button>
+          <Button size="sm" variant="primary" busy={saving} disabled={!iso} onClick={() => save(iso)}>
+            Save
+          </Button>
+          {client.last_follow_up_dates && (
+            <Button size="sm" variant="ghost" disabled={saving} onClick={() => save(null)}>
+              Clear
+            </Button>
+          )}
+        </div>
+      </div>
+    </div>,
+    document.body,
+  );
+}
+
 /* ------------------------------------------------------------------ table */
 
 function ClientTable({
@@ -682,6 +857,7 @@ function ClientTable({
   countsFor,
   onEdit,
   onDelete,
+  onFollowUpSaved,
 }: {
   clients: InquiryClientRecord[];
   query: string;
@@ -695,7 +871,11 @@ function ClientTable({
   onEdit: (client: InquiryClientRecord) => void;
   /** Raises the delete confirmation; the caller owns the actual delete. */
   onDelete: (client: InquiryClientRecord) => void;
+  /** Folds the record the follow-up endpoint returned back into the list. */
+  onFollowUpSaved: (saved: InquiryClientRecord) => void;
 }) {
+  const [followUp, setFollowUp] = useState<{ phone: string; anchor: HTMLElement } | null>(null);
+  const followUpClient = followUp ? clients.find((c) => c.phone === followUp.phone) : undefined;
   // Delete is admin-only — Backend/Controller/WhatsAppInquiryHandlingController/
   // whatsapp_inquiry_controller.py's DELETE /clients/{phone} requires it
   // server-side regardless; hiding the button here is purely so an
@@ -714,6 +894,7 @@ function ClientTable({
               <th>BHK</th>
               <th style={{ textAlign: "right" }}>Budget</th>
               <th>Areas</th>
+              <th>Last follow-up</th>
               <th>Updated</th>
               <th>Matches</th>
               <th>Completed</th>
@@ -779,6 +960,31 @@ function ClientTable({
                       query={query}
                     />
                   </td>
+                  {/* Owns its own clicks — opening the picker is not the
+                      same as opening the client's detail dialog, which is
+                      what the row itself does. */}
+                  <td onClick={(event) => event.stopPropagation()} style={{ whiteSpace: "nowrap" }}>
+                    <button
+                      type="button"
+                      className="text-link"
+                      title={
+                        client.last_follow_up_dates
+                          ? `Last followed up ${formatIst(client.last_follow_up_dates)} — click to change`
+                          : "Not followed up yet — click to set a date"
+                      }
+                      onClick={(event) => {
+                        // Read synchronously: React runs a functional state
+                        // updater during the NEXT render, by which point the
+                        // synthetic event's currentTarget is already null.
+                        const anchor = event.currentTarget;
+                        setFollowUp((open) =>
+                          open?.phone === client.phone ? null : { phone: client.phone, anchor },
+                        );
+                      }}
+                    >
+                      {client.last_follow_up_dates ? formatIst(client.last_follow_up_dates) : "Set date"}
+                    </button>
+                  </td>
                   <td className="cell-num" style={{ whiteSpace: "nowrap" }}>
                     {client.updated_at
                       ? relativeTime(new Date(client.updated_at))
@@ -832,6 +1038,18 @@ function ClientTable({
           </tbody>
         </table>
       </div>
+
+      {/* Anchored to the cell that opened it. Keyed off the live client from
+          `clients`, so the value it shows follows a poll that changed it —
+          and it closes on its own if that client leaves the filtered list. */}
+      {followUp && followUpClient && (
+        <FollowUpPopover
+          client={followUpClient}
+          anchorEl={followUp.anchor}
+          onClose={() => setFollowUp(null)}
+          onSaved={onFollowUpSaved}
+        />
+      )}
 
       {expandedPhone && (() => {
         const client = clients.find((c) => c.phone === expandedPhone);
@@ -940,7 +1158,28 @@ function ClientDetail({ client }: { client: InquiryClientRecord }) {
               ? relativeTime(new Date(client.updated_at))
               : "—"}
           </div>
+          {/* Read-only here; the table's own cell is where it is changed. */}
+          <div className="faint small" style={{ marginTop: 4 }}>
+            Last follow-up{" "}
+            {client.last_follow_up_dates ? formatIst(client.last_follow_up_dates) : "— not yet"}
+          </div>
         </div>
+
+        {client.current_address && (
+          <div className="detail__block">
+            <div className="detail__k">
+              <IconPin size={11} /> Current address
+            </div>
+            <div className="detail__v">{client.current_address}</div>
+          </div>
+        )}
+
+        {client.about_loan && (
+          <div className="detail__block">
+            <div className="detail__k">Loan</div>
+            <div className="detail__v">{client.about_loan}</div>
+          </div>
+        )}
 
         {client.property_sizes && Object.keys(client.property_sizes).length > 0 && (
           <div className="detail__block">

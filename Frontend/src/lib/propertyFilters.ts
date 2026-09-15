@@ -1,5 +1,5 @@
 import type { PropertyRecord } from "../api/types";
-import { formatCarpetArea, formatCompactInr, parseCompactInr, parseSqft } from "./formatters";
+import { formatCompactInr, parseArea, parseCompactInr } from "./formatters";
 
 /**
  * Per-column filtering for the property table.
@@ -12,11 +12,11 @@ import { formatCarpetArea, formatCompactInr, parseCompactInr, parseSqft } from "
  *    "Vesu" appears in the Area picker on the next refresh with no code
  *    change and no configuration.
  *
- *  - `range` — a continuous quantity (price, carpet area). A checkbox per
- *    distinct price would be one checkbox per property, which is not a
- *    filter, it is the table again.
+ *  - `range` — a continuous quantity (price, and the two area columns). A
+ *    checkbox per distinct price would be one checkbox per property, which
+ *    is not a filter, it is the table again.
  *
- * Society, address and contact get neither: those are free text that is
+ * Society, unit number, address and contact get neither: those are free text that is
  * near-unique per record, so a value picker there would list hundreds of
  * one-hit options and a range is meaningless. The search box already covers
  * them properly.
@@ -125,39 +125,54 @@ export function sourceDetail(property: PropertyRecord): string {
  *  lib/builderProjectFilters.ts). */
 export type PropertyContentFilterable = Pick<
   PropertyRecord,
-  "area_name" | "bhk" | "property_type" | "listing_type" | "carpet_area_sqft" | "price_amount_inr" | "price_per_unit_amount_inr"
+  | "area_name"
+  | "bhk"
+  | "property_type"
+  | "listing_type"
+  | "furnishing"
+  | "area_sqft"
+  | "area_vaar"
+  | "price_amount_inr"
 >;
 
 /** Every property filter that reads the property's own content — i.e. all
- *  of them except Source, which only a WhatsApp capture has. */
+ *  of them except Source, which only a WhatsApp capture has.
+ *
+ *  Sqft and vaar get a range each rather than sharing one, because they are
+ *  two different measurements: a single "size" bound would have to convert
+ *  one into the other to be meaningful, and a 500-vaar plot silently passing
+ *  a "under 1500 sqft" filter is exactly the confusion the two separate
+ *  columns exist to prevent. A property with no number in the unit being
+ *  bounded simply isn't inside that range (see compileFilters). */
 export const CONTENT_FILTER_DEFS: ColumnFilterDef<PropertyContentFilterable>[] = [
   { key: "locality", label: "Area", kind: "values", optionOf: (property) => property.area_name },
   { key: "bhk", label: "BHK", kind: "values", optionOf: (property) => property.bhk },
   { key: "type", label: "Type", kind: "values", optionOf: (property) => property.property_type },
   { key: "listingType", label: "Sale/Rent", kind: "values", optionOf: (property) => property.listing_type },
+  { key: "furnishing", label: "Furnishing", kind: "values", optionOf: (property) => property.furnishing },
   {
-    key: "carpet",
-    label: "Carpet area",
+    key: "areaSqft",
+    label: "Area (sqft)",
     kind: "range",
-    numberOf: (property) => property.carpet_area_sqft,
-    format: (value) => formatCarpetArea(value, null),
-    parse: parseSqft,
+    numberOf: (property) => property.area_sqft,
+    format: (value) => `${Math.round(value)} sqft`,
+    parse: parseArea,
     unitHint: "e.g. 1200 or 2400",
+  },
+  {
+    key: "areaVaar",
+    label: "Area (vaar)",
+    kind: "range",
+    numberOf: (property) => property.area_vaar,
+    format: (value) => `${Math.round(value)} vaar`,
+    parse: parseArea,
+    unitHint: "e.g. 155 or 500",
   },
   {
     key: "price",
     label: "Price",
     kind: "range",
     numberOf: (property) => property.price_amount_inr,
-    format: formatCompactInr,
-    parse: parseCompactInr,
-    unitHint: "e.g. 50L, 1.2cr, 700k",
-  },
-  {
-    key: "priceUnit",
-    label: "Price/unit",
-    kind: "range",
-    numberOf: (property) => property.price_per_unit_amount_inr,
     format: formatCompactInr,
     parse: parseCompactInr,
     unitHint: "e.g. 50L, 1.2cr, 700k",

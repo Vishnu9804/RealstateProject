@@ -7,14 +7,16 @@ import type {
   MatchBucket,
   MatchedProperty,
   PropertyRecord,
+  PropertySource,
   RequirementMatchResult,
 } from "../api/types";
 import { friendlyError } from "../lib/apiError";
-import { formatCarpetArea, formatPrice, relativeTime } from "../lib/formatters";
+import { formatArea, formatPrice, relativeTime } from "../lib/formatters";
 import { getCachedPropertyList, patchCachedProperty, setCachedPropertyList } from "../lib/propertyListCache";
 import type { SharePropertyLike } from "../lib/propertyShareTemplate";
 import { PropertyMatchDetailDialog, type DialogItem } from "./ClientMatchesDialog";
 import ShareRequirementPropertiesDialog from "./ShareRequirementPropertiesDialog";
+import SourceTag from "./ui/SourceTag";
 import { useToast } from "./ui/Toast";
 import { Badge, Button, EmptyState, Note, Segmented, SkeletonRows } from "./ui/Primitives";
 import {
@@ -73,11 +75,14 @@ const BUCKET_TONE: Record<MatchBucket, "ok" | "warn" | "bad"> = { high: "ok", me
 /** One card. `property` is the full record when the property list has
  *  landed and `match` is always present — unlike the client dialog there
  *  are no hand-picked or website-enquired cards here, so every card is a
- *  scored match. */
+ *  scored match. `source` says whether it is a property or a builder
+ *  project (both are matched); a builder project never has a `property`
+ *  record — its card and detail view read the match's own fields. */
 interface MatchItem {
   recordId: string;
   bucket: MatchBucket;
   category: PropertyCategory;
+  source: PropertySource;
   match: MatchedProperty;
   property: PropertyRecord | null;
 }
@@ -212,11 +217,14 @@ export default function RequirementMatchesDialog({
     const out: MatchItem[] = [];
     for (const bucket of BUCKET_ORDER) {
       for (const match of result?.[bucket] ?? []) {
-        const property = propertiesById.get(match.record_id) ?? null;
+        const source: PropertySource = match.property_source ?? "property";
+        const property = source === "property" ? (propertiesById.get(match.record_id) ?? null) : null;
         out.push({
           recordId: match.record_id,
           bucket,
+          // A builder project is always "accepted", so it files under Main.
           category: categoryOf(property ?? match),
+          source,
           match,
           property,
         });
@@ -281,6 +289,7 @@ export default function RequirementMatchesDialog({
       recordId: item.recordId,
       section: item.bucket,
       category: item.category,
+      source: item.source,
       match: item.match,
       property: item.property,
       handoff: item.property ?? item.match,
@@ -292,6 +301,9 @@ export default function RequirementMatchesDialog({
    *  and local update ClientMatchesDialog's detail view performs. A drawer
    *  change alters nothing about how well it fits, so nothing is re-scored. */
   async function handleMove(recordId: string, target: PropertyCategory) {
+    // Main/Outsider is a property's filing — a builder project has neither
+    // (the detail view offers no move for one; this only guards it).
+    if (items.find((item) => item.recordId === recordId)?.source === "builder_project") return;
     setMovingId(recordId);
     try {
       const updated = await propertyApi.updateProperty(recordId, categoryPatch(target));
@@ -566,6 +578,7 @@ function RequirementMatchCard({
 
       <div className="match-card__head">
         <div style={{ minWidth: 0 }}>
+          <SourceTag source={item.source} />
           <div className="pcard__title cell-truncate">{title}</div>
           {location && <div className="pcard__sub cell-truncate">{location}</div>}
         </div>
@@ -587,10 +600,10 @@ function RequirementMatchCard({
             {source.area_name}
           </span>
         )}
-        {source.carpet_area_sqft !== null && (
+        {formatArea(source.area_sqft, source.area_vaar) !== "—" && (
           <span className="fact">
             <IconRuler size={12} />
-            {formatCarpetArea(source.carpet_area_sqft, source.carpet_area_unit)}
+            {formatArea(source.area_sqft, source.area_vaar)}
           </span>
         )}
       </div>

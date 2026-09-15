@@ -1,5 +1,5 @@
 import type { AgentSummary, InquiryClientRecord } from "../api/types";
-import { formatCompactInr, formatVisitTime } from "./formatters";
+import { formatArea, formatCompactInr, formatVisitTime } from "./formatters";
 
 export const BUSINESS_NAME = "Estate Signal";
 
@@ -11,12 +11,15 @@ export interface HandoffPropertyLike {
   record_id: string;
   property_type: string | null;
   bhk: string | null;
+  unit_no: string | null;
   society_name: string | null;
   area_name: string | null;
-  carpet_area_sqft: number | null;
-  carpet_area_unit: string | null;
+  area_sqft: number | null;
+  area_vaar: number | null;
   contact_name: string | null;
   contact_phone: string | null;
+  /* No `location_url`, deliberately — this message is sent to a field agent
+     over WhatsApp. See PropertyRecord.location_url. */
 }
 
 /** What the matches dialog's visit planner decided for one property on top
@@ -69,8 +72,10 @@ export function propertyLabel(property: HandoffPropertyLike): string {
 
 function describeProperty(property: HandoffPropertyLike, index: number, meta: VisitMeta | undefined): string[] {
   const location = [property.society_name, property.area_name].filter(Boolean).join(", ");
-  const size = property.carpet_area_sqft ? `${Math.round(property.carpet_area_sqft)} ${property.carpet_area_unit ?? "sqft"}` : null;
-  const details = [property.bhk, size].filter(Boolean).join(" · ");
+  const size = formatArea(property.area_sqft, property.area_vaar);
+  const details = [property.unit_no && `Unit ${property.unit_no}`, property.bhk, size === "—" ? null : size]
+    .filter(Boolean)
+    .join(" · ");
   const lines = [`${index + 1}) ${propertyLabel(property)}${location ? `, ${location}` : ""}`];
   if (details) lines.push(`   ${details}`);
   if (property.contact_name || property.contact_phone) {

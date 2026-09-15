@@ -6,8 +6,8 @@ import { CONTENT_FILTER_DEFS, type ColumnFilterDef } from "./propertyFilters";
  * definitions (lib/propertyFilters.ts), every one of them except Source,
  * which only a WhatsApp capture has. A builder project carries the same
  * content fields under the same names, so the Area/BHK/Type/Sale-Rent/
- * Carpet area/Price/Price-per-unit filters behave identically on both pages
- * and open the very same FilterPopover.
+ * Furnishing/Area-sqft/Area-vaar/Price filters behave identically on both
+ * pages and open the very same FilterPopover.
  */
 export const BUILDER_PROJECT_FILTER_DEFS: ColumnFilterDef<BuilderProjectRecord>[] = CONTENT_FILTER_DEFS;
 

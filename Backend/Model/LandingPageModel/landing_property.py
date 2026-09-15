@@ -32,11 +32,17 @@ class LandingPropertySummary(BaseModel):
     property_type: Optional[str] = None
     bhk: Optional[str] = None
     society_name: Optional[str] = None
-    # The broad locality only — never `address`. This is the whole reason
-    # this model exists.
+    # The broad locality only — never `address`, and never `location_url`
+    # (the internal map pin, which would give a visitor the exact spot the
+    # withheld address is protecting). This is the whole reason this model
+    # exists.
     area_name: Optional[str] = None
-    carpet_area: Optional[float] = None
-    carpet_area_unit: Optional[str] = None
+    # The property's area in whichever unit the listing used — the same two
+    # separate fields the internal record keeps, never converted into one
+    # another (see StructuredProperty.area_sqft/area_vaar).
+    area_sqft: Optional[float] = None
+    area_vaar: Optional[float] = None
+    furnishing: Optional[str] = None
     price_text: Optional[str] = None
     price_amount_inr: Optional[float] = None
     listing_type: str = "Sale"
@@ -53,8 +59,6 @@ class LandingPropertyDetail(LandingPropertySummary):
     """The property page — the summary plus the long-form parts."""
 
     description: Optional[str] = None
-    price_per_unit_text: Optional[str] = None
-    price_per_unit_amount_inr: Optional[float] = None
     instagram_reel_url: Optional[str] = None
     # The same reel rewritten to Instagram's embeddable form, resolved
     # server-side (see landing_page_service._reel_embed_url) so the site

@@ -1,10 +1,12 @@
 import { useEffect, useState } from "react";
 import { createPortal } from "react-dom";
+import { builderProjectApi } from "../api/builderProjectApi";
 import { ApiError } from "../api/client";
 import { propertyApi } from "../api/propertyApi";
-import type { PropertyRecord } from "../api/types";
+import type { BuilderProjectRecord, PropertyRecord, PropertySource } from "../api/types";
 import { friendlyError } from "../lib/apiError";
-import { formatCarpetArea, formatPrice, formatPricePerUnit } from "../lib/formatters";
+import { getCachedBuilderProjectList } from "../lib/builderProjectListCache";
+import { formatArea, formatPrice } from "../lib/formatters";
 import { getCachedPropertyDetail, setCachedPropertyDetail } from "../lib/propertyDetailCache";
 import { getCachedPropertyList } from "../lib/propertyListCache";
 import { sourceDetail, sourceLabel } from "../lib/propertyFilters";
@@ -19,6 +21,14 @@ import { sourceDetail, sourceLabel } from "../lib/propertyFilters";
 function findInPropertyListCache(recordId: string): PropertyRecord | null {
   return getCachedPropertyList()?.data.find((property) => property.record_id === recordId) ?? null;
 }
+
+/** The builder-project counterpart: the Builder Projects list cache (kept
+ *  warm by that page and by the match dialogs) holds every field this view
+ *  shows, so a hit there costs no request at all. */
+function findInBuilderProjectListCache(recordId: string): BuilderProjectRecord | null {
+  return getCachedBuilderProjectList()?.data.find((project) => project.record_id === recordId) ?? null;
+}
+import SourceTag from "./ui/SourceTag";
 import { Button, Copyable, EmptyState, Note, SkeletonRows } from "./ui/Primitives";
 import { IconAlert, IconBuilding, IconCheck, IconMessage, IconPin, IconRuler, IconX } from "./ui/Icons";
 
@@ -38,25 +48,35 @@ export interface ReadOnlySelectAction {
 }
 
 /**
- * Read-only property view, shared by every place that only ever holds a
+ * Read-only listing view, shared by every place that only ever holds a
  * property_record_id + a display label — an agent's active/completed
- * visit row (AgentVisitsDialog.tsx) and a client's completed-visit row
- * (ClientMatchesDialog.tsx) alike — and needs the full record (price,
+ * visit row (AgentVisitsDialog.tsx) and a client's assigned/completed-visit
+ * card (ClientMatchesDialog.tsx) alike — and needs the full record (price,
  * contact, sender, source, original message) on demand. Fetched here via
  * the same on-demand-plus-shared-cache pattern InquiryClientsPage's
  * expanded leads use, so a property recently opened from the Properties
  * or Landing Page page costs no extra request.
  *
+ * `source` says which kind of listing that id is. A visit can be to a
+ * builder project as well as a property (both are matched and assigned the
+ * same way), and the two live behind different endpoints, so a builder
+ * project gets its own body — the same facts, minus what only a WhatsApp
+ * capture has (sender, source chat, original message). Absent means
+ * "property", which is what every caller that predates builder-project
+ * matching passes by not passing it.
+ *
  * No edit/move/assign actions — this exists purely so whoever is looking
- * at a visit record can see enough about the property to make sense of
- * it, not to manage it. That management happens on the Properties page or
- * inside the matches dialog's own scored cards, never from here.
+ * at a visit record can see enough about the listing to make sense of it,
+ * not to manage it. That management happens on the Properties / Builder
+ * Projects pages or inside the matches dialog's own scored cards, never
+ * from here.
  */
 export default function PropertyReadOnlyDialog({
   recordId,
   onClose,
   badges,
   selectAction,
+  source,
 }: {
   recordId: string;
   onClose: () => void;
@@ -67,7 +87,28 @@ export default function PropertyReadOnlyDialog({
   /** Only set by callers that open this dialog from a selectable list
    *  (SelectPropertyPage) — an extra footer button, Select/Deselect, next
    *  to Close. Undefined everywhere else, so the button simply doesn't
-   *  render there. */
+   *  render there. Properties only: nothing selectable lists builder
+   *  projects. */
+  selectAction?: ReadOnlySelectAction;
+  /** Which kind of listing `recordId` is — see the component docstring. */
+  source?: PropertySource;
+}) {
+  return source === "builder_project" ? (
+    <BuilderProjectReadOnlyDialog recordId={recordId} onClose={onClose} badges={badges} />
+  ) : (
+    <PropertyRecordReadOnlyDialog recordId={recordId} onClose={onClose} badges={badges} selectAction={selectAction} />
+  );
+}
+
+function PropertyRecordReadOnlyDialog({
+  recordId,
+  onClose,
+  badges,
+  selectAction,
+}: {
+  recordId: string;
+  onClose: () => void;
+  badges?: React.ReactNode;
   selectAction?: ReadOnlySelectAction;
 }) {
   const [property, setProperty] = useState<PropertyRecord | null | undefined>(
@@ -119,6 +160,112 @@ export default function PropertyReadOnlyDialog({
     };
   }, [recordId]);
 
+  return (
+    <ReadOnlyFrame
+      onClose={onClose}
+      ariaLabel="Property details"
+      heading="Property details"
+      loading={property === undefined && !notFound && !error}
+      error={error}
+      // Two ways a property reaches this state now: it was deleted, or its
+      // deal closed and it was moved to Sold out (see the Properties page's
+      // Sold out tab) — which takes it out of the property database
+      // entirely. This dialog only ever gets an id, so it cannot tell which,
+      // and naming both is more use than confidently naming the wrong one.
+      notFoundBody={
+        notFound
+          ? "This property is no longer in your property database — it was either deleted or marked sold out."
+          : null
+      }
+    >
+      {property && (
+        <PropertyReadOnlyBody property={property} badges={badges} onClose={onClose} selectAction={selectAction} />
+      )}
+    </ReadOnlyFrame>
+  );
+}
+
+function BuilderProjectReadOnlyDialog({
+  recordId,
+  onClose,
+  badges,
+}: {
+  recordId: string;
+  onClose: () => void;
+  badges?: React.ReactNode;
+}) {
+  const [project, setProject] = useState<BuilderProjectRecord | null | undefined>(
+    () => findInBuilderProjectListCache(recordId) ?? undefined,
+  );
+  const [notFound, setNotFound] = useState(false);
+  const [error, setError] = useState<string | null>(null);
+
+  useEffect(() => {
+    let cancelled = false;
+    // Same order as the property path: the shared list cache first (no
+    // request at all), then the single-project endpoint — served from the
+    // backend's memory and HTTP-cached, so it costs no database query
+    // either way.
+    const fromList = findInBuilderProjectListCache(recordId);
+    if (fromList) {
+      setProject(fromList);
+      return;
+    }
+    setProject(undefined);
+    setNotFound(false);
+    setError(null);
+    builderProjectApi
+      .getBuilderProject(recordId)
+      .then((found) => {
+        if (!cancelled) setProject(found);
+      })
+      .catch((err) => {
+        if (cancelled) return;
+        if (err instanceof ApiError && err.status === 404) {
+          setNotFound(true);
+          setProject(null);
+        } else {
+          setError(friendlyError(err));
+        }
+      });
+    return () => {
+      cancelled = true;
+    };
+  }, [recordId]);
+
+  return (
+    <ReadOnlyFrame
+      onClose={onClose}
+      ariaLabel="Builder project details"
+      heading="Builder project details"
+      loading={project === undefined && !notFound && !error}
+      error={error}
+      notFoundBody={notFound ? "This builder project is no longer on the Builder Projects page — it was deleted." : null}
+    >
+      {project && <BuilderProjectReadOnlyBody project={project} badges={badges} onClose={onClose} />}
+    </ReadOnlyFrame>
+  );
+}
+
+/** The dialog shell both bodies share: the scrim, Escape to close, and the
+ *  loading / error / no-longer-available states. */
+function ReadOnlyFrame({
+  onClose,
+  ariaLabel,
+  heading,
+  loading,
+  error,
+  notFoundBody,
+  children,
+}: {
+  onClose: () => void;
+  ariaLabel: string;
+  heading: string;
+  loading: boolean;
+  error: string | null;
+  notFoundBody: string | null;
+  children: React.ReactNode;
+}) {
   useEffect(() => {
     const onKeyDown = (event: KeyboardEvent) => {
       if (event.key === "Escape") {
@@ -132,8 +279,8 @@ export default function PropertyReadOnlyDialog({
 
   return createPortal(
     <div className="modal-scrim" onMouseDown={(event) => event.target === event.currentTarget && onClose()}>
-      <div className="detail-modal anim-rise" role="dialog" aria-modal="true" aria-label="Property details">
-        {property === undefined && !notFound && !error && (
+      <div className="detail-modal anim-rise" role="dialog" aria-modal="true" aria-label={ariaLabel}>
+        {loading && (
           <>
             <div className="detail-modal__head">
               <div className="detail-modal__eyebrow">Loading…</div>
@@ -150,7 +297,7 @@ export default function PropertyReadOnlyDialog({
         {error && (
           <>
             <div className="detail-modal__head">
-              <div className="detail-modal__eyebrow">Property details</div>
+              <div className="detail-modal__eyebrow">{heading}</div>
               <button type="button" className="toast__close" onClick={onClose} aria-label="Close" style={{ position: "absolute", right: 22, top: 22 }}>
                 <IconX size={15} />
               </button>
@@ -168,26 +315,16 @@ export default function PropertyReadOnlyDialog({
           </>
         )}
 
-        {notFound && (
+        {notFoundBody && (
           <>
             <div className="detail-modal__head">
-              <div className="detail-modal__eyebrow">Property details</div>
+              <div className="detail-modal__eyebrow">{heading}</div>
               <button type="button" className="toast__close" onClick={onClose} aria-label="Close" style={{ position: "absolute", right: 22, top: 22 }}>
                 <IconX size={15} />
               </button>
             </div>
             <div className="detail-modal__body">
-              {/* Two ways a property reaches this state now: it was
-                  deleted, or its deal closed and it was moved to Sold out
-                  (see the Properties page's Sold out tab) — which takes it
-                  out of the property database entirely. This dialog only
-                  ever gets an id, so it cannot tell which, and naming both
-                  is more use than confidently naming the wrong one. */}
-              <EmptyState
-                icon={<IconAlert size={36} />}
-                title="No longer available"
-                body="This property is no longer in your property database — it was either deleted or marked sold out."
-              />
+              <EmptyState icon={<IconAlert size={36} />} title="No longer available" body={notFoundBody} />
             </div>
             <div className="detail-modal__foot">
               <Button variant="ghost" onClick={onClose}>
@@ -197,9 +334,7 @@ export default function PropertyReadOnlyDialog({
           </>
         )}
 
-        {property && (
-          <PropertyReadOnlyBody property={property} badges={badges} onClose={onClose} selectAction={selectAction} />
-        )}
+        {children}
       </div>
     </div>,
     document.body,
@@ -218,7 +353,10 @@ function PropertyReadOnlyBody({
   selectAction?: ReadOnlySelectAction;
 }) {
   const title = property.society_name || property.area_name || "Property";
-  const subtitle = [property.area_name, property.address].filter(Boolean).join(" · ");
+  const subtitle = [property.unit_no && `Unit ${property.unit_no}`, property.area_name, property.address]
+    .filter(Boolean)
+    .join(" · ");
+  const area = formatArea(property.area_sqft, property.area_vaar);
   return (
     <>
       <div className="detail-modal__head">
@@ -229,6 +367,7 @@ function PropertyReadOnlyBody({
           <h2 className="detail-modal__title cell-truncate">{title}</h2>
           {subtitle && <div className="detail-modal__sub cell-truncate">{subtitle}</div>}
           <div className="detail-modal__badges">
+            <SourceTag source="property" />
             {badges}
             {property.bhk && (
               <span className="fact">
@@ -242,16 +381,22 @@ function PropertyReadOnlyBody({
                 {property.area_name}
               </span>
             )}
-            {property.carpet_area_sqft !== null && (
+            {area !== "—" && (
               <span className="fact">
                 <IconRuler size={12} />
-                {formatCarpetArea(property.carpet_area_sqft, property.carpet_area_unit)}
+                {area}
               </span>
             )}
             {property.super_built && (
               <span className="fact" title="Super built">
                 <IconRuler size={12} />
                 Super built {property.super_built}
+              </span>
+            )}
+            {property.furnishing && <span className="fact">{property.furnishing}</span>}
+            {!property.is_available && (
+              <span className="fact" title="Marked not available">
+                Not available
               </span>
             )}
           </div>
@@ -277,13 +422,6 @@ function PropertyReadOnlyBody({
                 Read as {formatPrice(null, property.price_amount_inr)}
               </div>
             )}
-          </div>
-
-          <div className="detail__block">
-            <div className="detail__k">Price per unit</div>
-            <div className="detail__v">
-              {property.price_per_unit_text ?? formatPricePerUnit(null, property.price_per_unit_amount_inr)}
-            </div>
           </div>
 
           <div className="detail__block">
@@ -325,6 +463,29 @@ function PropertyReadOnlyBody({
           </div>
         )}
 
+        {property.extra_notes && (
+          <div className="detail__block">
+            <div className="detail__k">Extra</div>
+            <div className="detail__v">{property.extra_notes}</div>
+          </div>
+        )}
+
+        {/* Internal only — this dialog is staff-facing (see
+            PropertyRecord.location_url). It is not in any share, hand-off or
+            public shape, so this is the one place a pin is ever rendered. */}
+        {property.location_url && (
+          <div className="detail__block">
+            <div className="detail__k">
+              <IconPin size={11} /> Location link <span className="faint">· internal only</span>
+            </div>
+            <div className="detail__v">
+              <a href={property.location_url} target="_blank" rel="noreferrer noopener">
+                Open map
+              </a>
+            </div>
+          </div>
+        )}
+
         <div className="detail__block">
           <div className="detail__k">
             <IconMessage size={11} /> Original message
@@ -352,6 +513,142 @@ function PropertyReadOnlyBody({
             {selectAction.selected ? "Deselect" : "Select"}
           </Button>
         )}
+      </div>
+    </>
+  );
+}
+
+/** A builder project's facts — the property body above minus what only a
+ *  WhatsApp capture has (sender, source chat, original message, review
+ *  flag), plus when it was added. */
+function BuilderProjectReadOnlyBody({
+  project,
+  badges,
+  onClose,
+}: {
+  project: BuilderProjectRecord;
+  badges?: React.ReactNode;
+  onClose: () => void;
+}) {
+  const title = project.society_name || project.area_name || "Builder project";
+  const subtitle = [project.unit_no && `Unit ${project.unit_no}`, project.area_name, project.address]
+    .filter(Boolean)
+    .join(" · ");
+  const area = formatArea(project.area_sqft, project.area_vaar);
+  return (
+    <>
+      <div className="detail-modal__head">
+        <div style={{ minWidth: 0 }}>
+          <div className="detail-modal__eyebrow">
+            {project.property_type || "Builder project"} · {project.listing_type}
+          </div>
+          <h2 className="detail-modal__title cell-truncate">{title}</h2>
+          {subtitle && <div className="detail-modal__sub cell-truncate">{subtitle}</div>}
+          <div className="detail-modal__badges">
+            <SourceTag source="builder_project" />
+            {badges}
+            {project.bhk && (
+              <span className="fact">
+                <IconBuilding size={12} />
+                {project.bhk}
+              </span>
+            )}
+            {project.area_name && (
+              <span className="fact">
+                <IconPin size={12} />
+                {project.area_name}
+              </span>
+            )}
+            {area !== "—" && (
+              <span className="fact">
+                <IconRuler size={12} />
+                {area}
+              </span>
+            )}
+            {project.super_built && (
+              <span className="fact" title="Super built">
+                <IconRuler size={12} />
+                Super built {project.super_built}
+              </span>
+            )}
+            {project.furnishing && <span className="fact">{project.furnishing}</span>}
+            {!project.is_available && (
+              <span className="fact" title="Marked not available">
+                Not available
+              </span>
+            )}
+          </div>
+        </div>
+        <button type="button" className="toast__close" onClick={onClose} aria-label="Close">
+          <IconX size={15} />
+        </button>
+      </div>
+
+      <div className="detail-modal__body">
+        <div className="detail__grid">
+          <div className="detail__block">
+            <div className="detail__k">Price as written</div>
+            <div className="detail__v">{project.price_text ?? "—"}</div>
+            {project.price_amount_inr !== null && (
+              <div className="faint small" style={{ marginTop: 4 }}>
+                Read as {formatPrice(null, project.price_amount_inr)}
+              </div>
+            )}
+          </div>
+
+          <div className="detail__block">
+            <div className="detail__k">Contact</div>
+            <div className="detail__v">{project.contact_name ?? "—"}</div>
+            {project.contact_phone && (
+              <div className="detail__v" style={{ marginTop: 4 }}>
+                <Copyable text={project.contact_phone} />
+              </div>
+            )}
+          </div>
+
+          <div className="detail__block">
+            <div className="detail__k">Added</div>
+            <div className="detail__v">{project.formatted_timestamp}</div>
+            <div className="faint small" style={{ marginTop: 4 }}>
+              Builder Projects page
+            </div>
+          </div>
+        </div>
+
+        {project.description && (
+          <div className="detail__block">
+            <div className="detail__k">Description</div>
+            <div className="detail__v">{project.description}</div>
+          </div>
+        )}
+
+        {project.extra_notes && (
+          <div className="detail__block">
+            <div className="detail__k">Extra</div>
+            <div className="detail__v">{project.extra_notes}</div>
+          </div>
+        )}
+
+        {/* Internal only, exactly as on a property — see
+            BuilderProjectRecord.location_url. */}
+        {project.location_url && (
+          <div className="detail__block">
+            <div className="detail__k">
+              <IconPin size={11} /> Location link <span className="faint">· internal only</span>
+            </div>
+            <div className="detail__v">
+              <a href={project.location_url} target="_blank" rel="noreferrer noopener">
+                Open map
+              </a>
+            </div>
+          </div>
+        )}
+      </div>
+
+      <div className="detail-modal__foot">
+        <Button variant="ghost" onClick={onClose}>
+          Close
+        </Button>
       </div>
     </>
   );

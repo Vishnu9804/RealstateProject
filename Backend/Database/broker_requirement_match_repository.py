@@ -125,7 +125,11 @@ def get_run_index(limit: int) -> Dict[str, Tuple[Optional[datetime], Optional[st
         return {record_id: (computed_at, fingerprint) for record_id, computed_at, fingerprint in session.execute(stmt).all()}
 
 
-def merge_matches_bulk(updates: Dict[str, Tuple[List[MatchScore], Set[str], str]], computed_at: datetime) -> int:
+def merge_matches_bulk(
+    updates: Dict[str, Tuple[List[MatchScore], Set[str], str]],
+    computed_at: datetime,
+    keep_watermarks: bool = False,
+) -> int:
     """merge_matches for many requirements in ONE transaction: record_id ->
     (re-scored properties that still match, properties considered, fingerprint).
     Returns how many match rows were written.
@@ -133,7 +137,11 @@ def merge_matches_bulk(updates: Dict[str, Tuple[List[MatchScore], Set[str], str]
     Statement count does not grow with the number of requirements: one id
     lookup, one delete per distinct considered set (requirements last scored
     at the same moment share one — after the first daily run that is nearly
-    all of them), the upsert in chunks, one run-row upsert."""
+    all of them), the upsert in chunks, one run-row upsert.
+
+    `keep_watermarks` skips that last run-row upsert, leaving every
+    requirement's computed_at and fingerprint untouched — see
+    requirement_match_store.merge_matches_bulk for when that is needed."""
     if not updates:
         return 0
     with get_session() as session:
@@ -174,14 +182,15 @@ def merge_matches_bulk(updates: Dict[str, Tuple[List[MatchScore], Set[str], str]
                     set_={column: getattr(upsert.excluded, column) for column in _SCORE_COLUMNS},
                 )
             )
-        _upsert_runs(
-            session,
-            [
-                {"requirement_id": ids[record_id], "computed_at": computed_at, "requirement_fingerprint": fingerprint}
-                for record_id, (_, _, fingerprint) in updates.items()
-                if record_id in ids
-            ],
-        )
+        if not keep_watermarks:
+            _upsert_runs(
+                session,
+                [
+                    {"requirement_id": ids[record_id], "computed_at": computed_at, "requirement_fingerprint": fingerprint}
+                    for record_id, (_, _, fingerprint) in updates.items()
+                    if record_id in ids
+                ],
+            )
         return len(rows)
 
 

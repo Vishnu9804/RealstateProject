@@ -27,7 +27,7 @@ dimension count of their own.
 
 from __future__ import annotations
 
-from typing import List, Optional
+from typing import Any, Iterable, List, Mapping, Optional
 
 from sentence_transformers import SentenceTransformer
 
@@ -35,6 +35,23 @@ from Model.WhatsAppDataFetchingModel.structured_property import StructuredProper
 
 EMBEDDING_MODEL_NAME = "sentence-transformers/all-MiniLM-L6-v2"
 EMBEDDING_DIMENSIONS = 384
+
+# The identifying fields a listing's vector is built from, in this fixed
+# order — see build_embedding_text. Shared by a property and a builder
+# project (build_embedding_text_from_fields), so the two are embedded from
+# exactly the same kind of text and land in the same semantic space as a
+# client's requirement vector.
+EMBEDDING_TEXT_FIELDS = (
+    "property_type",
+    "bhk",
+    "society_name",
+    "area_name",
+    "address",
+    "price_text",
+    "contact_name",
+    "contact_phone",
+    "description",
+)
 
 _model: Optional[SentenceTransformer] = None
 
@@ -56,17 +73,19 @@ def build_embedding_text(prop: StructuredProperty) -> str:
     score (Service/ClientPropertyMatchingService/scoring.py), where it acts
     as a low-weight sanity signal on top of the explicit budget/location/
     BHK scoring."""
-    parts = [
-        prop.property_type,
-        prop.bhk,
-        prop.society_name,
-        prop.area_name,
-        prop.address,
-        prop.price_text,
-        prop.contact_name,
-        prop.contact_phone,
-        prop.description,
-    ]
+    return _join_parts(getattr(prop, name) for name in EMBEDDING_TEXT_FIELDS)
+
+
+def build_embedding_text_from_fields(fields: Mapping[str, Any]) -> str:
+    """build_embedding_text for a listing held as plain column values rather
+    than a StructuredProperty — a builder project (Service/
+    BuilderProjectService/builder_project_store.py). Same fields, same
+    order, same separator, so a builder project and a property with the same
+    details produce byte-for-byte the same text and the same vector."""
+    return _join_parts(fields.get(name) for name in EMBEDDING_TEXT_FIELDS)
+
+
+def _join_parts(parts: Iterable[Any]) -> str:
     return " | ".join(part for part in parts if part)
 
 

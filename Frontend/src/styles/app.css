@@ -1632,6 +1632,35 @@ mark.hl {
 .match-card__facts { display: flex; flex-wrap: wrap; gap: 6px; }
 .match-card__facts .fact { padding: 4px 8px; font-size: 11.5px; }
 .match-card__badges { display: flex; flex-wrap: wrap; gap: 6px; }
+
+/* "Property" / "Builder project" — components/ui/SourceTag.tsx. A small
+   uppercase label rather than one more pill badge, so it reads as "what
+   this is" and never gets confused with a score/state badge. The builder
+   project variant takes the accent colour so the two can be told apart at
+   a glance across a whole grid of cards. */
+.source-tag {
+  display: inline-flex;
+  align-items: center;
+  align-self: flex-start;
+  flex: none;
+  padding: 2px 7px;
+  border-radius: 6px;
+  font-size: 10px;
+  font-weight: 700;
+  letter-spacing: 0.06em;
+  line-height: 1.4;
+  text-transform: uppercase;
+  white-space: nowrap;
+  color: var(--ink-2);
+  border: 1px solid var(--rim-strong);
+  background: var(--plane-1);
+}
+.source-tag--builder {
+  color: var(--accent);
+  border-color: color-mix(in oklab, var(--accent) 45%, transparent);
+  background: color-mix(in oklab, var(--accent) 14%, transparent);
+}
+.match-card__head .source-tag { margin-bottom: 6px; }
 .match-card__reason {
   font-size: 12px;
   line-height: 1.5;

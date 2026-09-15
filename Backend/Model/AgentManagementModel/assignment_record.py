@@ -1,5 +1,5 @@
 from datetime import datetime
-from typing import Optional
+from typing import Literal, Optional
 
 from pydantic import BaseModel
 
@@ -19,6 +19,9 @@ class ActiveAssignment(BaseModel):
     budget_max_inr: Optional[float] = None
     property_record_id: str
     property_label: str
+    # Whether property_record_id is a property or a builder project — see
+    # Database/agent_assignment_models.py's property_source.
+    property_source: Literal["property", "builder_project"] = "property"
     # When the visit is booked for; None = agent chosen, time not fixed yet.
     scheduled_at: Optional[datetime] = None
     created_at: Optional[datetime] = None

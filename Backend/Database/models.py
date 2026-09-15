@@ -88,19 +88,25 @@ class PropertyRow(Base):
     # --- extracted by the LLM from the message text ---
     property_type: Mapped[Optional[str]] = mapped_column(String, nullable=True)
     bhk: Mapped[Optional[str]] = mapped_column(String, nullable=True)
+    # The unit's own number within its building — see StructuredProperty.unit_no
+    # for why the client's "unit_no"/"flat_no" are one column here.
+    unit_no: Mapped[Optional[str]] = mapped_column(String, nullable=True)
     society_name: Mapped[Optional[str]] = mapped_column(String, nullable=True)
     area_name: Mapped[Optional[str]] = mapped_column(String, nullable=True)
     address: Mapped[Optional[str]] = mapped_column(Text, nullable=True)
-    carpet_area_sqft: Mapped[Optional[float]] = mapped_column(Float, nullable=True)
-    carpet_area_unit: Mapped[Optional[str]] = mapped_column(String, nullable=True)
+    # Two separate columns, never one number plus a unit label — see
+    # StructuredProperty.area_sqft/area_vaar.
+    area_sqft: Mapped[Optional[float]] = mapped_column(Float, nullable=True)
+    area_vaar: Mapped[Optional[float]] = mapped_column(Float, nullable=True)
     # Set by a human in the Add/Edit dialog, never by the LLM — see
     # StructuredProperty.super_built. Retrofitted by Database/session.py's
     # init_db, so nullable.
     super_built: Mapped[Optional[str]] = mapped_column(String, nullable=True)
+    furnishing: Mapped[Optional[str]] = mapped_column(String, nullable=True)
+    # The TOTAL price only. There is no per-unit rate column by design — see
+    # StructuredProperty.price_text.
     price_text: Mapped[Optional[str]] = mapped_column(String, nullable=True)
     price_amount_inr: Mapped[Optional[float]] = mapped_column(Float, nullable=True)
-    price_per_unit_text: Mapped[Optional[str]] = mapped_column(String, nullable=True)
-    price_per_unit_amount_inr: Mapped[Optional[float]] = mapped_column(Float, nullable=True)
     # "Sale" or "Rent" — see StructuredProperty.listing_type. Defaulted at
     # both the ORM and DB level so a pre-existing row (retrofitted via
     # Database/session.py's init_db) and any insert that omits it still
@@ -116,6 +122,15 @@ class PropertyRow(Base):
     # StructuredProperty.image_urls. Same "human-only, optional" story as
     # instagram_reel_url just above.
     image_urls: Mapped[list] = mapped_column(JSON, nullable=False, default=list)
+    # A map/pin link to the property. NEVER leaves this building — see
+    # StructuredProperty.location_url, which explains what enforces that.
+    location_url: Mapped[Optional[str]] = mapped_column(Text, nullable=True)
+    video_available: Mapped[bool] = mapped_column(Boolean, nullable=False, default=False, server_default="false")
+    extra_notes: Mapped[Optional[str]] = mapped_column(Text, nullable=True)
+    # "AVL or Not". NOT NULL with a server default of true so a row written
+    # before this column existed reads as available, which is what every one
+    # of them was.
+    is_available: Mapped[bool] = mapped_column(Boolean, nullable=False, default=True, server_default="true")
     # Derived cache, not content: instagram_reel_url resolved to Instagram's
     # own numeric media id once (Service/InstagramInquiryHandlingService/
     # instagram_reel_matcher.py), so the comment/DM poller can match against

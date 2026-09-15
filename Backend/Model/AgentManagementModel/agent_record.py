@@ -1,5 +1,5 @@
 from datetime import datetime
-from typing import List, Optional
+from typing import List, Literal, Optional
 
 from pydantic import BaseModel, Field
 
@@ -35,6 +35,9 @@ class AssignedClientSummary(BaseModel):
     budget_max_inr: Optional[float] = None
     property_record_id: str
     property_label: str
+    # Whether that is a property or a builder project — see
+    # Database/agent_assignment_models.py's property_source.
+    property_source: Literal["property", "builder_project"] = "property"
     # When this specific visit became active — the Agents page's per-agent
     # dialog lists active visits oldest-first, using this. Optional only
     # for the in-memory fallback's pre-existing rows; every real write

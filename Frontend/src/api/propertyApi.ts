@@ -7,22 +7,26 @@ import type { PropertyRecord } from "./types";
 export interface PropertyContentFields {
   property_type?: string | null;
   bhk?: string | null;
+  unit_no?: string | null;
   society_name?: string | null;
   area_name?: string | null;
   address?: string | null;
-  carpet_area_sqft?: number | null;
-  carpet_area_unit?: string | null;
+  area_sqft?: number | null;
+  area_vaar?: number | null;
   super_built?: string | null;
+  furnishing?: string | null;
   price_text?: string | null;
   price_amount_inr?: number | null;
-  price_per_unit_text?: string | null;
-  price_per_unit_amount_inr?: number | null;
   listing_type?: "Sale" | "Rent";
   contact_name?: string | null;
   contact_phone?: string | null;
   description?: string | null;
   instagram_reel_url?: string | null;
   image_urls?: string[];
+  location_url?: string | null;
+  video_available?: boolean;
+  extra_notes?: string | null;
+  is_available?: boolean;
 }
 
 export interface PropertyUpdateBody extends Partial<PropertyContentFields> {

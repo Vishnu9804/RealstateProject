@@ -124,7 +124,7 @@ def score_client_property(
     purpose_factor = _purpose_gate(client.purpose, prop.listing_type)
     soft = _soft_field_scores(client, prop, client_vector)
     prop_token = normalization.canonical_type_token(prop.property_type) if prop.property_type else ""
-    area_sqft = normalization.property_area_sqft(prop.carpet_area_sqft, prop.carpet_area_unit)
+    area_sqft = normalization.property_area_sqft(prop.area_sqft, prop.area_vaar)
 
     best: Optional[MatchScore] = None
     best_key = None
@@ -306,7 +306,12 @@ def _size_score(wanted: SizeRange, area_sqft: Optional[float]) -> Optional[float
 
 
 def _semantic_score(client_vector: Optional[List[float]], property_vector: Optional[List[float]]) -> Optional[float]:
-    if not client_vector or not property_vector:
+    # Length checks rather than truthiness: a builder project's vector is
+    # held as a compact float32 numpy array (see Service/BuilderProjectService/
+    # builder_project_store.py), and an array has no single truth value. For
+    # the plain lists every property and client carries this is exactly the
+    # old `not vector` test — None and [] are "not comparable", as before.
+    if client_vector is None or property_vector is None or len(client_vector) == 0 or len(property_vector) == 0:
         return None
-    similarity = float(np.dot(np.array(client_vector), np.array(property_vector)))
+    similarity = float(np.dot(np.asarray(client_vector), np.asarray(property_vector)))
     return max(0.0, min(1.0, similarity))

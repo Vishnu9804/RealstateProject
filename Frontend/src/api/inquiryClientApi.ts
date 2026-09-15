@@ -77,6 +77,12 @@ export interface HandoffSendResult {
 export interface ClientDetailsBody {
   name?: string | null;
   email?: string | null;
+  /** Staff-only client details. Only this dialog can write them — every
+   *  other save path (the public form, the WhatsApp pipeline, a website
+   *  enquiry) leaves them untouched by construction, see
+   *  Backend/Database/client_repository.py's PRESERVED_FIELDS. */
+  current_address?: string | null;
+  about_loan?: string | null;
   purpose?: string | null;
   property_type?: string | null;
   bhk?: string | null;
@@ -120,6 +126,19 @@ export const inquiryClientApi = {
    *  site visit out with an agent (name, email and photo never do). */
   updateClient: (phone: string, body: ClientDetailsBody): Promise<InquiryClientRecord> =>
     apiClient.patch(`/whatsapp-inquiry/clients/${encodeURIComponent(phone)}`, body),
+
+  /** Sets (or clears, with null) when this client was last followed up
+   *  with. `at` is an ISO instant in UTC — the picker shows and reads IST,
+   *  and converts at the edge (lib/formatters.ts).
+   *
+   *  Its own endpoint rather than part of updateClient, because it writes
+   *  one column: the automatic post-visit stamp writes the same column, and
+   *  neither must be able to overwrite the other with a stale copy of the
+   *  rest of the record. */
+  setFollowUp: (phone: string, at: string | null): Promise<InquiryClientRecord> =>
+    apiClient.patch(`/whatsapp-inquiry/clients/${encodeURIComponent(phone)}/follow-up`, {
+      last_follow_up_dates: at,
+    }),
 
   /** One client's photo — never part of the client list (see
    *  InquiryClientRecord.has_photo). Go through lib/clientPhotoCache.ts

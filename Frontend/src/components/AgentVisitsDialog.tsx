@@ -2,11 +2,12 @@ import { useEffect, useMemo, useState } from "react";
 import { createPortal } from "react-dom";
 import { agentApi } from "../api/agentApi";
 import { propertyApi } from "../api/propertyApi";
-import type { AgentSummary, AssignedClientSummary, VisitRecord } from "../api/types";
+import type { AgentSummary, AssignedClientSummary, PropertySource, VisitRecord } from "../api/types";
 import { friendlyError } from "../lib/apiError";
 import { formatCompactInr, formatVisitTime, relativeTime } from "../lib/formatters";
 import { setCachedPropertyList } from "../lib/propertyListCache";
 import PropertyReadOnlyDialog from "./PropertyReadOnlyDialog";
+import SourceTag from "./ui/SourceTag";
 import { useToast } from "./ui/Toast";
 import { Avatar, Badge, Button, EmptyState, Segmented } from "./ui/Primitives";
 import { IconCheck, IconClock, IconInbox, IconMessage, IconRefresh, IconX } from "./ui/Icons";
@@ -54,9 +55,12 @@ export default function AgentVisitsDialog({
   const toast = useToast();
   const [tab, setTab] = useState<Tab>("active");
   const [reopeningId, setReopeningId] = useState<string | null>(null);
-  const [viewingPropertyId, setViewingPropertyId] = useState<string | null>(null);
+  // Which listing's read-only view is open — the id plus whether it is a
+  // property or a builder project (a visit can be to either; see
+  // AssignedClientSummary.property_source).
+  const [viewingListing, setViewingListing] = useState<{ recordId: string; source: PropertySource } | null>(null);
 
-  const nestedOpen = viewingPropertyId !== null;
+  const nestedOpen = viewingListing !== null;
 
   useEffect(() => {
     const onKeyDown = (event: KeyboardEvent) => {
@@ -172,7 +176,12 @@ export default function AgentVisitsDialog({
                 <ActiveVisitRow
                   key={`${client.phone}-${client.property_record_id}`}
                   client={client}
-                  onOpenProperty={() => setViewingPropertyId(client.property_record_id)}
+                  onOpenProperty={() =>
+                    setViewingListing({
+                      recordId: client.property_record_id,
+                      source: client.property_source ?? "property",
+                    })
+                  }
                   onCompleteVisit={() => onCompleteVisit(client)}
                 />
               ))}
@@ -186,7 +195,13 @@ export default function AgentVisitsDialog({
                   key={visit.visit_id}
                   visit={visit}
                   reopening={reopeningId === visit.visit_id}
-                  onOpenProperty={() => visit.property_record_id && setViewingPropertyId(visit.property_record_id)}
+                  onOpenProperty={() =>
+                    visit.property_record_id &&
+                    setViewingListing({
+                      recordId: visit.property_record_id,
+                      source: visit.property_source ?? "property",
+                    })
+                  }
                   onReopen={() => handleReopen(visit)}
                 />
               ))}
@@ -200,8 +215,12 @@ export default function AgentVisitsDialog({
         </div>
       </div>
 
-      {viewingPropertyId && (
-        <PropertyReadOnlyDialog recordId={viewingPropertyId} onClose={() => setViewingPropertyId(null)} />
+      {viewingListing && (
+        <PropertyReadOnlyDialog
+          recordId={viewingListing.recordId}
+          source={viewingListing.source}
+          onClose={() => setViewingListing(null)}
+        />
       )}
     </>,
     document.body,
@@ -236,7 +255,10 @@ function ActiveVisitRow({
     >
       <div className="row-flex" style={{ justifyContent: "space-between", flexWrap: "wrap", gap: 10 }}>
         <div className="stack stack-1" style={{ minWidth: 0 }}>
-          <strong className="cell-truncate">{client.property_label}</strong>
+          <div className="row-flex" style={{ gap: 8, minWidth: 0 }}>
+            <SourceTag source={client.property_source} />
+            <strong className="cell-truncate">{client.property_label}</strong>
+          </div>
           <div className="faint small row-flex" style={{ gap: 10, flexWrap: "wrap" }}>
             <span>{client.name || client.phone}</span>
             {budget && <span>{budget}</span>}
@@ -303,7 +325,10 @@ function CompletedVisitRow({
     >
       <div className="row-flex" style={{ justifyContent: "space-between", flexWrap: "wrap", gap: 10 }}>
         <div className="stack stack-1" style={{ minWidth: 0 }}>
-          <strong className="cell-truncate">{visit.property_label ?? "Property"}</strong>
+          <div className="row-flex" style={{ gap: 8, minWidth: 0 }}>
+            <SourceTag source={visit.property_source} />
+            <strong className="cell-truncate">{visit.property_label ?? "Property"}</strong>
+          </div>
           <div className="faint small row-flex" style={{ gap: 10, flexWrap: "wrap" }}>
             <span>{visit.client_name || visit.client_phone}</span>
             {budget && <span>{budget}</span>}

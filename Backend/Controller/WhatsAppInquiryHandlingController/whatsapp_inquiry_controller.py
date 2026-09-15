@@ -83,6 +83,10 @@ class ClientDetailsRequest(BaseModel):
 
     name: Optional[str] = None
     email: Optional[str] = None
+    # Staff-only client details — see Database/client_repository.py's
+    # STAFF_DETAIL_FIELDS. This dialog is the only thing that can write them.
+    current_address: Optional[str] = None
+    about_loan: Optional[str] = None
     purpose: Optional[str] = None
     property_type: Optional[str] = None
     bhk: Optional[str] = None
@@ -159,6 +163,31 @@ def get_client(phone: str) -> ClientRecord:
     if record is None:
         raise HTTPException(status_code=404, detail="No client found for that phone number.")
     return record
+
+
+class ClientFollowUp(BaseModel):
+    """When this client was last followed up with. `null` clears it.
+
+    A full instant (the browser sends UTC, converted from the IST the picker
+    showed), not a date — the automatic stamp records a real moment, and a
+    hand-set one has to be comparable with it."""
+
+    last_follow_up_dates: Optional[datetime] = None
+
+
+@router.patch("/clients/{phone}/follow-up", response_model=ClientRecord)
+def set_follow_up(phone: str, body: ClientFollowUp) -> ClientRecord:
+    """The Inquiries page's editable "Last follow-up" cell.
+
+    Its own endpoint rather than part of the Edit dialog's PATCH, because it
+    writes ONE column: the automatic post-visit stamp
+    (Service/AgentManagementService/visit_reminder_service.py) writes the
+    same column the same way, and neither can overwrite the other's work
+    with a stale copy of the rest of the record."""
+    updated = client_store.set_last_follow_up(phone, _as_utc(body.last_follow_up_dates))
+    if updated is None:
+        raise HTTPException(status_code=404, detail="No client found for that phone number.")
+    return updated
 
 
 @router.patch("/clients/{phone}/assign-agent", response_model=ClientRecord)

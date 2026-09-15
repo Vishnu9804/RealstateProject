@@ -54,6 +54,38 @@ class ClientRow(ClientBase):
     # --- client info ---
     name: Mapped[Optional[str]] = mapped_column(String, nullable=True)
     email: Mapped[Optional[str]] = mapped_column(String, nullable=True)
+    # Where the client lives NOW — not a property requirement, just part of
+    # knowing who they are. Free text: people give this as anything from a
+    # society name to a full postal address.
+    #
+    # Deliberately NOT in Database/client_repository.py's _COLUMNS, for
+    # exactly the reason photo_url isn't (see its own comment below): the
+    # public requirements form, the WhatsApp pipeline and a website enquiry
+    # all build a FRESH ClientRecord and write every column in that list from
+    # it. A field only staff can see and type would therefore be silently
+    # wiped the next time the client touched the public form. It is written
+    # only when upsert_client is explicitly told to (update_staff_fields=True),
+    # which only the Inquiries page's own Add/Edit dialog ever passes.
+    current_address: Mapped[Optional[str]] = mapped_column(Text, nullable=True)
+    # Whatever staff noted about this client's loan situation — pre-approved,
+    # bank, amount, "cash buyer", anything. Free text, same staff-only
+    # treatment as current_address above.
+    about_loan: Mapped[Optional[str]] = mapped_column(Text, nullable=True)
+    # When this client was last followed up with.
+    #
+    # Stamped automatically the moment the post-site-visit follow-up WhatsApp
+    # message actually goes out — 24 hours after a visit is marked complete
+    # (see Service/AgentManagementService/visit_reminder_service.py), and only
+    # on a send that really succeeded, never on one that was skipped or
+    # failed. Staff can also set it by hand from the Inquiries page when they
+    # followed up some other way (a phone call, a walk-in).
+    #
+    # Kept out of _COLUMNS like the two fields above, but for a second reason
+    # as well: its only two writers are the automatic stamp and that one
+    # manual action, and both go through client_repository.set_last_follow_up,
+    # which touches this column ALONE. So an Edit dialog save can never write
+    # back a stale copy over a stamp that landed while the dialog was open.
+    last_follow_up_dates: Mapped[Optional[datetime]] = mapped_column(DateTime(timezone=True), nullable=True)
 
     # --- property requirements ---
     purpose: Mapped[Optional[str]] = mapped_column(String, nullable=True)  # e.g. "buy", "rent", "sell"

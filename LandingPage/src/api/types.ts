@@ -13,8 +13,11 @@ export interface LandingProperty {
   bhk: string | null;
   society_name: string | null;
   area_name: string | null;
-  carpet_area: number | null;
-  carpet_area_unit: string | null;
+  /** The size in whichever unit the listing used — two fields, never
+   *  converted into one another. Usually exactly one is set. */
+  area_sqft: number | null;
+  area_vaar: number | null;
+  furnishing: string | null;
   price_text: string | null;
   price_amount_inr: number | null;
   listing_type: string;
@@ -26,8 +29,6 @@ export interface LandingProperty {
 
 export interface LandingPropertyDetail extends LandingProperty {
   description: string | null;
-  price_per_unit_text: string | null;
-  price_per_unit_amount_inr: number | null;
   instagram_reel_url: string | null;
   /** Already rewritten to Instagram's embeddable form by the backend. */
   instagram_reel_embed_url: string | null;

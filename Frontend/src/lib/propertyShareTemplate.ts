@@ -1,5 +1,5 @@
 import type { BrokerRequirementRecord, InquiryClientRecord, MatchedProperty, PropertyRecord } from "../api/types";
-import { formatCompactInr } from "./formatters";
+import { formatArea, formatCompactInr } from "./formatters";
 import { BUSINESS_NAME, renderTemplate } from "./handoffTemplate";
 
 /**
@@ -29,18 +29,25 @@ export interface SharePropertyLike {
   record_id: string;
   property_type: string | null;
   bhk: string | null;
+  unit_no: string | null;
   society_name: string | null;
   area_name: string | null;
   address: string | null;
   price_text: string | null;
   price_amount_inr: number | null;
   listing_type: "Sale" | "Rent";
-  carpet_area_sqft: number | null;
-  carpet_area_unit: string | null;
+  area_sqft: number | null;
+  area_vaar: number | null;
+  furnishing: string | null;
   contact_name: string | null;
   contact_phone: string | null;
   /** Known for a full PropertyRecord; absent on a bare MatchedProperty. */
   image_count?: number;
+  /* No `location_url`, deliberately. This message is sent to a client or a
+     broker, and the internal map pin must never travel with it — see
+     PropertyRecord.location_url. Widening this interface to include it would
+     be enough to leak it, since describeProperty below reads whatever is
+     here. */
 }
 
 /** Mirrors Backend/Service/PropertySharingService/property_share_service.py's
@@ -67,12 +74,18 @@ function priceLine(property: SharePropertyLike): string | null {
 function describeProperty(property: SharePropertyLike, index: number): string[] {
   const location = [property.society_name, property.area_name].filter(Boolean).join(", ");
   const title = property.society_name || property.property_type || "Property";
-  const size = property.carpet_area_sqft
-    ? `${Math.round(property.carpet_area_sqft)} ${property.carpet_area_unit ?? "sqft"}`
-    : null;
+  const size = formatArea(property.area_sqft, property.area_vaar);
 
   const lines = [`${index + 1}) ${title}${location && location !== title ? `, ${location}` : ""}`];
-  const spec = [property.bhk, property.property_type, size].filter(Boolean).join(" · ");
+  const spec = [
+    property.unit_no && `Unit ${property.unit_no}`,
+    property.bhk,
+    property.property_type,
+    size === "—" ? null : size,
+    property.furnishing,
+  ]
+    .filter(Boolean)
+    .join(" · ");
   if (spec) lines.push(`   ${spec}`);
   const price = priceLine(property);
   if (price) lines.push(`   ${price} (${property.listing_type === "Rent" ? "Rent" : "Sale"})`);

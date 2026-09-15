@@ -18,6 +18,14 @@ class GLMPropertyListing(BaseModel):
         'type, so a "duplex flat" is a "Flat" and a "duplex penthouse" is a "Penthouse".',
     )
     bhk: Optional[str] = Field(default=None, description='Bedroom configuration as written, e.g. "2 BHK", "1 RK".')
+    unit_no: Optional[str] = Field(
+        default=None,
+        description='The individual unit\'s own number inside its building, ONLY if the message states one '
+        'e.g. "Flat no. 402" -> "402", "A-404" -> "A-404", "Shop 12" -> "12". Copy just the identifier, '
+        "without the words \"flat\"/\"unit\"/\"shop\". This is NOT the floor, NOT the number of units "
+        "available, NOT the BHK, and NOT a phone number — leave it null unless the message really is "
+        "naming which unit this listing is.",
+    )
     society_name: Optional[str] = Field(
         default=None,
         description='The specific building/project/society/complex name, e.g. "Black Residency", "Sunrise '
@@ -36,20 +44,31 @@ class GLMPropertyListing(BaseModel):
         "street, road, or landmark). Keep the original address/road/landmark text here even when it was also "
         "used to fill area_name per the rule above — never drop it just because area_name got populated from it.",
     )
-    carpet_area_sqft: Optional[float] = Field(
+    area_sqft: Optional[float] = Field(
         default=None,
-        description="The property's area as a plain number, only if explicitly stated — extract it regardless "
-        'of which area unit the message uses: square feet ("1200 sqft" -> 1200.0), Vaar/Gaj ("500 vaar" -> '
-        '500.0), or Vigha ("2 vigha" -> 2.0). Copy the bare number exactly as written for whichever unit is '
-        "used — never convert between units, never estimate it from the BHK, and never guess when no area is "
-        "stated.",
+        description='The property\'s area IN SQUARE FEET, as a plain number, ONLY if the message states it in '
+        'square feet ("1200 sqft", "1200 sq ft", "1200 sq.ft", "1200 square feet" -> 1200.0). Copy the bare '
+        "number exactly as written. NEVER convert an area given in any other unit into this field, never "
+        "estimate it from the BHK, and never guess when no area is stated.",
     )
-    carpet_area_unit: Optional[str] = Field(
+    area_vaar: Optional[float] = Field(
         default=None,
-        description='The unit carpet_area_sqft was written in — REQUIRED whenever carpet_area_sqft is set, '
-        'null only when carpet_area_sqft is null. Must be exactly one of: "sqft" (for "sqft", "sq ft", '
-        '"sq.ft", "square feet"), "vaar" (for "vaar", "gaj", "sq yard", "square yard"), "vigha" (for '
-        '"vigha"). Never guess a unit that is not the one actually written for that number.',
+        description='The property\'s area IN VAAR, as a plain number, ONLY if the message states it in vaar or '
+        'one of its synonyms — "vaar", "var", "gaj", "sq yard", "square yard" ("500 vaar" -> 500.0). Copy the '
+        "bare number exactly as written. NEVER convert square feet (or any other unit) into vaar, and never "
+        "guess. area_sqft and area_vaar are two different measurements: fill the ONE the message actually "
+        "used, and fill both only when the message itself quotes both separately. If the area is given in a "
+        "unit that is neither of these (e.g. vigha, guntha, acre, square metres), leave BOTH null — the "
+        "figure stays readable in `description` and in the original message.",
+    )
+    furnishing: Optional[str] = Field(
+        default=None,
+        description='How furnished the property is, ONLY if the message says. Normalize to exactly one of: '
+        '"Unfurnished" (for "unfurnished", "non furnished", "no furniture", "bare shell", "empty"), '
+        '"Semi furnished" (for "semi furnished", "semi-furnished", "partly furnished"), "Fully furnished" '
+        '(for "fully furnished", "full furnished", "furnished", "furniture included"). Null when the message '
+        "does not say — a listing that mentions one piece of furniture in passing is not a furnishing "
+        "statement, and an unfurnished property is NOT the safe default.",
     )
     price_text: Optional[str] = Field(
         default=None,
@@ -64,6 +83,23 @@ class GLMPropertyListing(BaseModel):
         description='The TOTAL price converted to a plain INR number only if unambiguous (e.g. "45 Lakh" -> '
         "4500000). Never guess.",
     )
+    # --- the two per-unit rate fields below are EXTRACTION-ONLY -------------
+    #
+    # They are asked of the model but never stored: there is no per-unit
+    # column on a property any more (see StructuredProperty.price_text). They
+    # earn their place for two reasons, both about the TOTAL price's accuracy:
+    #
+    #  1. Telling the model where a rate goes is what keeps a rate OUT of
+    #     price_text. Drop these fields and "85,000/vaar" has nowhere to land
+    #     but the total, which is exactly the wrong number by a factor of the
+    #     area.
+    #  2. A plot listing routinely quotes only "<area> vaar" and "<rate>/vaar"
+    #     and never writes the total at all. area x rate recovers it exactly,
+    #     which is the difference between a priced listing and a blank one
+    #     (see property_structurer._fill_missing_price).
+    #
+    # property_structurer._to_structured_property reads both, uses them, and
+    # drops them — they never reach StructuredProperty.
     price_per_unit_text: Optional[str] = Field(
         default=None,
         description="A PER-UNIT rate — never the total price — only if the message states one explicitly, e.g. "

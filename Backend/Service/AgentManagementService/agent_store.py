@@ -150,6 +150,9 @@ def record_assignments(
     agent = get_agent_by_id(agent_id)
     if agent is None:
         return
+    # Snapshotted with the visit, like its label — see
+    # Database/agent_assignment_models.py's property_source.
+    sources = {property_record_id: _property_source_of(property_record_id) for property_record_id, _, _ in items}
 
     if is_client_database_configured():
         agent_assignment_repository.create_many(
@@ -160,6 +163,7 @@ def record_assignments(
             budget_min_inr=client.budget_min_inr,
             budget_max_inr=client.budget_max_inr,
             items=items,
+            property_sources=sources,
         )
         _notify_visit_schedule_changed()
         return
@@ -190,11 +194,23 @@ def record_assignments(
                 budget_max_inr=client.budget_max_inr,
                 property_record_id=property_record_id,
                 property_label=property_label,
+                property_source=sources[property_record_id],
                 scheduled_at=scheduled_at,
                 created_at=datetime.now(timezone.utc),
             )
         )
     _notify_visit_schedule_changed()
+
+
+def _property_source_of(record_id: str) -> str:
+    """"builder_project" when this id is a Builder Projects page entry,
+    "property" otherwise — a lookup in the builder projects' in-memory
+    cache, never a query once that cache is loaded. Lazy import, the same
+    way this module reaches every other feature."""
+    from Model.BuilderProjectModel.builder_project_candidate import BUILDER_PROJECT_SOURCE, PROPERTY_SOURCE
+    from Service.BuilderProjectService import builder_project_store
+
+    return BUILDER_PROJECT_SOURCE if builder_project_store.get(record_id) is not None else PROPERTY_SOURCE
 
 
 def update_visit_schedule(
@@ -238,6 +254,7 @@ def _to_summary(assignment: ActiveAssignment) -> AssignedClientSummary:
         budget_max_inr=assignment.budget_max_inr,
         property_record_id=assignment.property_record_id,
         property_label=assignment.property_label,
+        property_source=assignment.property_source,
         assigned_at=assignment.created_at,
         scheduled_at=assignment.scheduled_at,
     )
@@ -265,6 +282,7 @@ def complete_visit(agent_id: str, client_phone: str, property_record_id: str, no
             assignment.budget_max_inr,
             notes,
             assignment.scheduled_at,
+            property_source=assignment.property_source,
         )
         agent_assignment_repository.delete(agent_id, client_phone, property_record_id)
         _notify_visit_schedule_changed()
@@ -285,6 +303,7 @@ def complete_visit(agent_id: str, client_phone: str, property_record_id: str, no
         client_name=assignment.client_name,
         property_record_id=property_record_id,
         property_label=assignment.property_label,
+        property_source=assignment.property_source,
         budget_min_inr=assignment.budget_min_inr,
         budget_max_inr=assignment.budget_max_inr,
         notes=notes,
@@ -323,6 +342,7 @@ def reopen_visit(agent_id: str, visit_id: str) -> Optional[AssignedClientSummary
             property_record_id=visit.property_record_id,
             property_label=visit.property_label or "",
             scheduled_at=visit.scheduled_at,
+            property_source=visit.property_source,
         )
         if restored is None:
             raise VisitConflictError()
@@ -353,6 +373,7 @@ def reopen_visit(agent_id: str, visit_id: str) -> Optional[AssignedClientSummary
         budget_max_inr=visit.budget_max_inr,
         property_record_id=visit.property_record_id,
         property_label=visit.property_label or "",
+        property_source=visit.property_source,
         scheduled_at=visit.scheduled_at,
         created_at=datetime.now(timezone.utc),
     )

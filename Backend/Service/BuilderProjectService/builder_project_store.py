@@ -24,6 +24,23 @@ This is safe for the same reason the property snapshot is: this process is
 the only writer (single uvicorn worker, see main.py's lifespan), and every
 write goes through this module.
 
+WHY IT ALSO FEEDS MATCHING
+
+Builder projects are matched against client inquiries and broker
+requirements alongside properties, and — exactly like the property snapshot
+(Service/WhatsAppDataFetchingService/property_snapshot.py) — they are
+scored straight from this cache: each entry holds the project's match
+vector and hands the matching layer a ready-made candidate
+(get_match_candidates), so a full rescore costs no database traffic at all.
+Up to CACHE_LIMIT projects are held, the same ceiling the property side
+scores under.
+
+The vector is a float32 numpy array — about 1.5 KB per project instead of
+the ~12 KB the same 384 numbers take as a Python list — and it is computed
+only when a save changes the words it is built from (see _embedding_text):
+an edit that only touches photos, availability or notes never re-runs the
+model.
+
 WHY WRITES ARE SERIALIZED
 
 Writes take `_write_lock` for the whole database round trip, so the order
@@ -45,28 +62,73 @@ import threading
 from datetime import datetime, timezone
 from typing import Any, Dict, List, Optional
 
+import numpy as np
+
 from Database import builder_project_repository
 from Database.builder_project_repository import EDITABLE_CONTENT_FIELDS
 from Database.session import is_database_configured
+from Middleware import step_logger
 from Model.BuilderProjectModel.builder_project import BuilderProject
+from Model.BuilderProjectModel.builder_project_candidate import BuilderProjectCandidate
+from Service.WhatsAppDataFetchingService import embedding_service
 
-# How many projects are held in memory. Far above any realistic number of
+# How many projects are held in memory — and therefore the most that can be
+# matched against a client or a requirement. The same ceiling the property
+# side holds and scores under (property_snapshot._SNAPSHOT_LIMIT,
+# matching_service's own limit), and far above any realistic number of
 # hand-entered builder projects, so in practice the cache IS the whole table
-# — and each entry is only text fields plus a photo count.
-_CACHE_LIMIT = 5000
+# — each entry being only text fields, a photo count and a compact vector.
+CACHE_LIMIT = 5000
+_CACHE_LIMIT = CACHE_LIMIT
+
+
+def _as_vector(value: Any) -> Optional[np.ndarray]:
+    """A stored or freshly computed vector as a compact float32 array, or
+    None when there is none."""
+    if value is None:
+        return None
+    vector = np.asarray(value, dtype=np.float32)
+    return vector if vector.size else None
+
+
+def _embedding_text(fields: Dict[str, Any]) -> str:
+    return embedding_service.build_embedding_text_from_fields(fields)
+
+
+def _embed_text(text: str, record_id: str) -> Optional[List[float]]:
+    """The model call itself, never allowed to fail a save or a match: a
+    project without a vector is still matched on every other field, and it
+    is simply tried again the next time one is needed."""
+    try:
+        return embedding_service.embed_text(text)
+    except Exception as exc:  # noqa: BLE001
+        step_logger.error(
+            f"[Builder Projects] Could not compute the match vector for {record_id!r} "
+            f"(it is still matched on price, area, BHK and type): {exc!r}"
+        )
+        return None
 
 
 class BuilderProjectEntry:
     """One project as the application sees it: the stored column values plus
-    the real photo count. Deliberately not a pydantic model — the API shape
-    is built from this by builder_project_service, which is also the only
-    place that knows about display formatting."""
+    the real photo count and its match vector. Deliberately not a pydantic
+    model — the API shape is built from this by builder_project_service,
+    which is also the only place that knows about display formatting.
 
-    __slots__ = ("fields", "image_count")
+    `embedding` is kept OUT of `fields`, so no API record can ever carry it."""
 
-    def __init__(self, fields: dict, image_count: int) -> None:
+    __slots__ = ("fields", "image_count", "embedding", "embedding_failed", "_candidate")
+
+    def __init__(self, fields: dict, image_count: int, embedding: Any = None) -> None:
         self.fields = fields
         self.image_count = image_count
+        self.embedding: Optional[np.ndarray] = _as_vector(embedding)
+        # Set when computing the vector failed in this process, so a broken
+        # model is not retried on every single match pass (see
+        # _ensure_embeddings). Cleared by construction on the next write,
+        # which builds a fresh entry.
+        self.embedding_failed = False
+        self._candidate: Optional[BuilderProjectCandidate] = None
 
     @property
     def record_id(self) -> str:
@@ -75,6 +137,18 @@ class BuilderProjectEntry:
     @property
     def updated_at(self) -> Optional[datetime]:
         return self.fields.get("updated_at")
+
+    def candidate(self) -> BuilderProjectCandidate:
+        """This project in the shape the matching engine scores. Built once
+        per entry and reused — every write replaces the entry, so a cached
+        candidate can never outlive the data it was built from. The identity
+        check covers the one in-place change an entry sees (its vector being
+        filled in), even if another thread built a candidate meanwhile."""
+        cached = self._candidate
+        if cached is None or cached.embedding is not self.embedding:
+            cached = BuilderProjectCandidate.from_fields(self.fields, self.embedding)
+            self._candidate = cached
+        return cached
 
 
 # Newest first — the order the repository's own query returns.
@@ -106,7 +180,7 @@ def _ensure_loaded() -> None:
         return
     rows = builder_project_repository.get_snapshot_rows(_CACHE_LIMIT)
     _entries.clear()
-    _entries.extend(BuilderProjectEntry(row.fields, row.image_count) for row in rows)
+    _entries.extend(BuilderProjectEntry(row.fields, row.image_count, row.embedding) for row in rows)
     _by_id.clear()
     _by_id.update({entry.record_id: entry for entry in _entries})
     # Only a load that came back completely full can be hiding older rows,
@@ -157,19 +231,105 @@ def version() -> str:
         return f"{_total}:{newest.isoformat() if newest else '0'}"
 
 
+# --- matching -----------------------------------------------------------------
+
+
+def get_match_candidates(limit: int = CACHE_LIMIT, ensure_embeddings: bool = True) -> List[BuilderProjectCandidate]:
+    """Every held project (up to `limit`, newest first) as a match candidate
+    — served from memory, no query. With `ensure_embeddings`, any project
+    that has no vector yet gets one first (see _ensure_embeddings), which is
+    what every SCORING caller wants; a caller that only needs the projects'
+    display fields passes False and never touches the model."""
+    entries = get_all(limit)
+    if ensure_embeddings:
+        _ensure_embeddings(entries)
+    return [entry.candidate() for entry in entries]
+
+
+def get_match_candidates_changed_since(since: Optional[datetime], limit: int = CACHE_LIMIT) -> List[BuilderProjectCandidate]:
+    """Projects added or edited strictly after `since` (all of them when
+    `since` is None), as match candidates — the builder-project half of
+    "what does the incremental rescore need to look at?". Compared on
+    updated_at, so an edit counts as well as an addition, exactly like
+    property_vector_store.get_properties_changed_since."""
+    entries = get_all(limit)
+    if since is not None:
+        cutoff = _aware(since)
+        entries = [entry for entry in entries if entry.updated_at is None or _aware(entry.updated_at) > cutoff]
+    if entries:
+        _ensure_embeddings(entries)
+    return [entry.candidate() for entry in entries]
+
+
+def _aware(value: datetime) -> datetime:
+    return value if value.tzinfo is not None else value.replace(tzinfo=timezone.utc)
+
+
+def _ensure_embeddings(entries: List[BuilderProjectEntry]) -> None:
+    """Gives every project in `entries` that has no vector yet one — the
+    one-time fill for projects saved before builder projects were matched,
+    and the retry for any whose vector could not be computed at save time.
+
+    A no-op scan (no model, no query) once every project has its vector,
+    which is every call after the first. When there is work, it happens
+    under the write lock, so it can never interleave with a save of the same
+    project, and the new vectors are stored in ONE transaction that leaves
+    each project's updated_at untouched (see
+    builder_project_repository.set_embeddings) — so filling them in is not
+    mistaken for an edit anywhere. The vectors are used in memory at once
+    even if that write fails; the next restart then simply fills them
+    again."""
+    if not any(entry.embedding is None and not entry.embedding_failed for entry in entries):
+        return
+    with _write_lock:
+        with _lock:
+            current = [_by_id.get(entry.record_id) for entry in entries]
+        pending = [
+            entry for entry in current if entry is not None and entry.embedding is None and not entry.embedding_failed
+        ]
+        vectors: Dict[str, List[float]] = {}
+        for entry in pending:
+            vector = _embed_text(_embedding_text(entry.fields), entry.record_id)
+            if vector is None:
+                entry.embedding_failed = True
+            else:
+                vectors[entry.record_id] = vector
+        if not vectors:
+            return
+        if is_database_configured():
+            try:
+                builder_project_repository.set_embeddings(vectors)
+            except Exception as exc:  # noqa: BLE001
+                step_logger.error(
+                    f"[Builder Projects] Could not store {len(vectors)} match vector(s) (they are used "
+                    f"from memory until the next restart, which computes them again): {exc!r}"
+                )
+        for entry in pending:
+            vector = vectors.get(entry.record_id)
+            if vector is not None:
+                entry.embedding = _as_vector(vector)
+                entry._candidate = None
+        step_logger.info(f"[Builder Projects] Computed the match vector for {len(vectors)} builder project(s).")
+
+
+# --- writes -------------------------------------------------------------------
+
+
 def add(project: BuilderProject) -> BuilderProjectEntry:
     with _write_lock:
         with _lock:
             _ensure_loaded()
+        fields_for_text = project.model_dump(exclude={"image_urls"})
+        vector = _embed_text(_embedding_text(fields_for_text), project.record_id)
         if is_database_configured():
-            row = builder_project_repository.add_project(project)
-            entry = BuilderProjectEntry(row.fields, row.image_count)
+            row = builder_project_repository.add_project(project, vector)
+            entry = BuilderProjectEntry(row.fields, row.image_count, row.embedding)
         else:
             now = datetime.now(timezone.utc)
             fields = project.model_dump()
             fields["created_at"] = now
             fields["updated_at"] = now
-            entry = BuilderProjectEntry(fields, len(project.image_urls))
+            entry = BuilderProjectEntry(fields, len(project.image_urls), vector)
         with _lock:
             _fold_in(entry, is_new=True)
         return entry
@@ -177,24 +337,46 @@ def add(project: BuilderProject) -> BuilderProjectEntry:
 
 def update(record_id: str, content_updates: Dict[str, Any]) -> Optional[BuilderProjectEntry]:
     """Applies the editable fields in `content_updates`. None when no
-    project with this record_id exists."""
+    project with this record_id exists.
+
+    The match vector is recomputed only when the words it is built from
+    actually change (or the project has none yet); otherwise the stored one
+    is kept as it is. When the words changed but the model call failed, the
+    old vector is cleared rather than left describing what the project used
+    to say — the next match pass then computes it again."""
     updates = {key: value for key, value in content_updates.items() if key in EDITABLE_CONTENT_FIELDS}
     with _write_lock:
         with _lock:
             _ensure_loaded()
             existing = _by_id.get(record_id)
+        embedding_change: Dict[str, Any] = {}
+        new_vector: Optional[List[float]] = None
+        if existing is not None:
+            old_text = _embedding_text(existing.fields)
+            new_text = _embedding_text({**existing.fields, **updates})
+            if new_text != old_text or existing.embedding is None:
+                new_vector = _embed_text(new_text, record_id)
+                if new_vector is not None or new_text != old_text:
+                    embedding_change["embedding"] = new_vector
+        elif any(name in embedding_service.EMBEDDING_TEXT_FIELDS for name in updates):
+            # Held nowhere in memory (older than the cache window), so the
+            # old words can't be compared — a vector that may no longer
+            # describe the project is cleared instead of trusted.
+            embedding_change["embedding"] = None
+
         if is_database_configured():
-            row = builder_project_repository.update_project(record_id, updates)
+            row = builder_project_repository.update_project(record_id, updates, **embedding_change)
             if row is None:
                 with _lock:
                     _remove(record_id)
                 return None
-            entry = BuilderProjectEntry(row.fields, row.image_count)
+            entry = BuilderProjectEntry(row.fields, row.image_count, row.embedding)
         else:
             if existing is None:
                 return None
             fields = {**existing.fields, **updates, "updated_at": datetime.now(timezone.utc)}
-            entry = BuilderProjectEntry(fields, len(fields.get("image_urls") or []))
+            vector = embedding_change["embedding"] if "embedding" in embedding_change else existing.embedding
+            entry = BuilderProjectEntry(fields, len(fields.get("image_urls") or []), vector)
         with _lock:
             _fold_in(entry, is_new=False)
         return entry

@@ -34,6 +34,25 @@ _COLUMNS = (
     "handoff_sent_at",
 )
 
+# Fields that are READ on every client but never written by an ordinary
+# upsert — the same protection ClientRow.photo_url already has, generalised.
+#
+# Why this exists at all: the loop in upsert_client below writes every name in
+# _COLUMNS from the record it is given, which is right for data the caller
+# owns. But several callers deliberately build a FRESH ClientRecord rather
+# than editing the stored one — the public requirements form, the Instagram
+# form path, the WhatsApp pipeline, a website enquiry. Any staff-only field
+# sitting in _COLUMNS would be silently blanked the next time one of those
+# ran, and nobody would notice until someone looked for a note that was no
+# longer there. Enforcing it HERE, in the one write path, means a future call
+# site cannot reopen the hole by forgetting to carry a field forward.
+STAFF_DETAIL_FIELDS = ("current_address", "about_loan")
+# Written by exactly one function, set_last_follow_up, which touches this
+# column and nothing else — so an Edit dialog save can never overwrite a
+# stamp that landed while the dialog was open. See ClientRow's own comment.
+FOLLOW_UP_FIELD = "last_follow_up_dates"
+PRESERVED_FIELDS = (*STAFF_DETAIL_FIELDS, FOLLOW_UP_FIELD)
+
 
 def get_client_by_phone(phone: str) -> Optional[ClientRecord]:
     with get_client_session() as session:
@@ -41,7 +60,12 @@ def get_client_by_phone(phone: str) -> Optional[ClientRecord]:
         return _to_pydantic(row) if row is not None else None
 
 
-def upsert_client(record: ClientRecord, photo_url: Optional[str] = None, update_photo: bool = False) -> ClientRecord:
+def upsert_client(
+    record: ClientRecord,
+    photo_url: Optional[str] = None,
+    update_photo: bool = False,
+    update_staff_fields: bool = False,
+) -> ClientRecord:
     """Insert-or-update by phone number — phone is the primary key, so this
     is the ONLY write path into the client table, and it's always
     idempotent: submitting the same phone number twice updates one row,
@@ -50,7 +74,13 @@ def upsert_client(record: ClientRecord, photo_url: Optional[str] = None, update_
     The photo is written only when `update_photo` is True (`photo_url=None`
     then clears it) — see ClientRow.photo_url for why it can never ride
     along with the other columns. In the same transaction as the rest of the
-    write, so a save of details plus a photo lands whole or not at all."""
+    write, so a save of details plus a photo lands whole or not at all.
+
+    `update_staff_fields=True` does the same for STAFF_DETAIL_FIELDS. Only
+    the Inquiries page's own Add/Edit dialog passes it; every other caller
+    leaves those columns exactly as they are by simply not passing it, which
+    is the whole point — see PRESERVED_FIELDS. `last_follow_up_dates` is
+    never written here at all, by anyone: set_last_follow_up owns it."""
     with get_client_session() as session:
         row = session.get(ClientRow, record.phone)
         if row is None:
@@ -73,6 +103,9 @@ def upsert_client(record: ClientRecord, photo_url: Optional[str] = None, update_
                 setattr(row, name, max(getattr(row, name) or 0, getattr(record, name) or 0))
                 continue
             setattr(row, name, getattr(record, name))
+        if update_staff_fields:
+            for name in STAFF_DETAIL_FIELDS:
+                setattr(row, name, getattr(record, name))
         if update_photo:
             # Assigned, never read: photo_url is deferred, and assigning to a
             # deferred attribute does not load the old value first. The
@@ -203,8 +236,31 @@ def set_matches_computed_at(watermarks: Dict[str, datetime]) -> None:
                 row.matches_computed_at = when
 
 
+def set_last_follow_up(phone: str, when: Optional[datetime]) -> Optional[ClientRecord]:
+    """Records when this client was last followed up with — `None` clears it.
+
+    The ONLY writer of that column, and it touches nothing else: the
+    automatic post-visit stamp (Service/AgentManagementService/
+    visit_reminder_service.py) and the Inquiries page's own date/time picker
+    both come through here. Writing one column rather than re-saving the
+    whole record is what makes those two safe to interleave, and keeps the
+    automatic stamp about as cheap as a write can be on a database billed by
+    compute-hour.
+
+    None when no client exists for this number — the caller turns that into
+    a 404; the automatic stamp treats it as "nothing to record"."""
+    with get_client_session() as session:
+        row = session.get(ClientRow, phone)
+        if row is None:
+            return None
+        setattr(row, FOLLOW_UP_FIELD, when)
+        session.flush()
+        session.refresh(row)
+        return _to_pydantic(row)
+
+
 def _to_pydantic(row: ClientRow) -> ClientRecord:
-    data = {name: getattr(row, name) for name in _COLUMNS}
+    data = {name: getattr(row, name) for name in (*_COLUMNS, *PRESERVED_FIELDS)}
     # has_photo is a SQL expression loaded with the row (ClientRow.has_photo),
     # so reading it here costs no query and never touches the photo itself.
     return ClientRecord(**data, has_photo=bool(row.has_photo), created_at=row.created_at, updated_at=row.updated_at)

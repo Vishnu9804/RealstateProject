@@ -17,6 +17,21 @@ class ClientRecord(BaseModel):
     status: str = "pending_registration"
     name: Optional[str] = None
     email: Optional[str] = None
+    # --- staff-only client info ---
+    #
+    # Returned on every read, but WRITE-PROTECTED against the callers that
+    # build a fresh record from scratch (the public requirements form, the
+    # WhatsApp pipeline, a website enquiry). See Database/client_models.py's
+    # columns of the same names for why, and Database/client_repository.py's
+    # PRESERVED_FIELDS for how that is enforced in one place rather than by
+    # every call site remembering.
+    current_address: Optional[str] = None
+    about_loan: Optional[str] = None
+    # When the client was last followed up with — stamped automatically when
+    # the post-visit follow-up WhatsApp message goes out, and editable by
+    # hand from the Inquiries page. Written only by
+    # client_store.set_last_follow_up, never by an ordinary save.
+    last_follow_up_dates: Optional[datetime] = None
 
     purpose: Optional[str] = None
     property_type: Optional[str] = None

@@ -45,6 +45,8 @@ interface FormState {
   phone: string;
   name: string;
   email: string;
+  current_address: string;
+  about_loan: string;
   purpose: string;
   property_type: string;
   bhk: string;
@@ -54,13 +56,34 @@ interface FormState {
   additional_requirements: string;
 }
 
-type TextKey = "name" | "email" | "purpose" | "property_type" | "bhk" | "preferred_areas" | "additional_requirements";
-const TEXT_KEYS: TextKey[] = ["name", "email", "purpose", "property_type", "bhk", "preferred_areas", "additional_requirements"];
+type TextKey =
+  | "name"
+  | "email"
+  | "current_address"
+  | "about_loan"
+  | "purpose"
+  | "property_type"
+  | "bhk"
+  | "preferred_areas"
+  | "additional_requirements";
+const TEXT_KEYS: TextKey[] = [
+  "name",
+  "email",
+  "current_address",
+  "about_loan",
+  "purpose",
+  "property_type",
+  "bhk",
+  "preferred_areas",
+  "additional_requirements",
+];
 
 const BLANK_FORM: FormState = {
   phone: "",
   name: "",
   email: "",
+  current_address: "",
+  about_loan: "",
   purpose: "",
   property_type: "",
   bhk: "",
@@ -84,6 +107,8 @@ function toFormState(client: InquiryClientRecord): FormState {
     phone: client.phone,
     name: client.name ?? "",
     email: client.email ?? "",
+    current_address: client.current_address ?? "",
+    about_loan: client.about_loan ?? "",
     purpose: client.purpose ?? "",
     property_type: client.property_type ?? "",
     bhk: client.bhk ?? "",
@@ -524,6 +549,36 @@ export default function ClientFormDialog({
                 placeholder="name@example.com"
                 disabled={saving}
                 maxLength={160}
+              />
+            </Field>
+
+            <Field
+              label="Current address"
+              htmlFor="client-form-current-address"
+              hint="Where they live now — not what they're looking for."
+            >
+              <textarea
+                id="client-form-current-address"
+                className="textarea"
+                rows={2}
+                value={form.current_address}
+                onChange={(event) => set("current_address", event.target.value)}
+                placeholder="e.g. B-402, Shilp Residency, Vesu"
+                disabled={saving}
+                maxLength={500}
+              />
+            </Field>
+
+            <Field label="Loan" htmlFor="client-form-about-loan" hint="Optional — pre-approval, bank, amount, cash buyer.">
+              <textarea
+                id="client-form-about-loan"
+                className="textarea"
+                rows={2}
+                value={form.about_loan}
+                onChange={(event) => set("about_loan", event.target.value)}
+                placeholder="e.g. HDFC pre-approved up to 60L"
+                disabled={saving}
+                maxLength={500}
               />
             </Field>
 

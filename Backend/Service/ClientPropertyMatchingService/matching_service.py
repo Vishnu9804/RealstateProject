@@ -3,8 +3,9 @@ requirement embedding, per-field scoring, and the match-score cache
 together into the two operations the Controller layer needs:
 
   - recompute_for_client: runs the full pipeline for one client (embed
-    requirements, score every matchable stored property — see
-    _is_matchable — and cache the result). Called
+    requirements, score every matchable stored property AND every builder
+    project — see _is_matchable and match_candidates.py — and cache the
+    result). Called
     automatically whenever that client's requirements change (see
     Service/WhatsAppInquiryHandlingService/client_store.py's
     upsert_client) and manually via the dashboard's Refresh action.
@@ -33,8 +34,8 @@ from Model.ClientPropertyMatchingModel.match_score import MatchScore
 from Model.ClientPropertyMatchingModel.matched_property import MatchedProperty
 from Model.WhatsAppDataFetchingModel.embedded_property import EmbeddedProperty
 from Model.WhatsAppInquiryHandlingModel.client_record import ClientRecord
-from Service.ClientPropertyMatchingService import client_requirement_text_builder, scoring
-from Service.WhatsAppDataFetchingService import embedding_service, property_vector_store
+from Service.ClientPropertyMatchingService import client_requirement_text_builder, match_candidates, scoring
+from Service.WhatsAppDataFetchingService import embedding_service
 from Service.WhatsAppInquiryHandlingService import client_store
 
 _REQUIREMENT_FIELDS = (
@@ -48,13 +49,11 @@ _REQUIREMENT_FIELDS = (
     "property_sizes",
 )
 
-# How many stored properties get scored per recompute. The property table
-# is WhatsApp-sourced and, at this project's current scale, realistically
-# in the hundreds to low thousands — scoring every row directly in Python
-# is simpler than adding a pgvector top-K pre-filter and fast enough at
-# this size. Revisit only if property_vector_store.get_property_count()
-# grows well past this.
-_MAX_PROPERTIES_SCORED = 5000
+# How many stored properties get scored per recompute — defined, with the
+# builder-project ceiling beside it, in match_candidates.py, the one place
+# the scored listings are gathered. Kept under this name for anything that
+# still reads it from here.
+_MAX_PROPERTIES_SCORED = match_candidates.MAX_PROPERTIES
 
 # In-memory fallback only — untouched whenever DATABASE_URL is set.
 _score_cache: Dict[str, List[MatchScore]] = {}
@@ -68,8 +67,9 @@ def recompute_for_client(phone: str) -> Optional[ClientMatchResult]:
     vector has (or may have) moved, so every previous score is suspect and
     an incremental pass would be wrong.
 
-    The property list this reads comes from the in-memory snapshot, so a
-    full rescore no longer costs a single row of database traffic."""
+    The listings this reads — properties and builder projects alike — come
+    from their in-memory caches (see match_candidates.py), so a full rescore
+    no longer costs a single row of database traffic."""
     client = client_store.get_client_by_phone(phone)
     if client is None:
         return None
@@ -83,7 +83,7 @@ def recompute_for_client(phone: str) -> Optional[ClientMatchResult]:
         # never reach the cache or the dashboard, in any bucket.
         scores = [
             score
-            for prop in property_vector_store.get_all_properties(limit=_MAX_PROPERTIES_SCORED)
+            for prop in match_candidates.get_all()
             if _is_matchable(prop)
             and (score := scoring.score_client_property(client, prop, vector, plan)) is not None
         ]
@@ -303,10 +303,11 @@ def _read_scores(phone: str) -> tuple[List[MatchScore], Optional[datetime]]:
 
 
 def _build_result(client: ClientRecord, scores: List[MatchScore], computed_at: Optional[datetime]) -> ClientMatchResult:
+    # Display fields only — nothing is scored here, so a builder project
+    # without a vector yet must not trigger the embedding model on a plain
+    # "View matches" open.
     properties_by_id = {
-        prop.record_id: prop
-        for prop in property_vector_store.get_all_properties(limit=_MAX_PROPERTIES_SCORED)
-        if _is_matchable(prop)
+        prop.record_id: prop for prop in match_candidates.get_all(ensure_embeddings=False) if _is_matchable(prop)
     }
     high: List[MatchedProperty] = []
     medium: List[MatchedProperty] = []
@@ -338,19 +339,22 @@ def _display_fields(prop: EmbeddedProperty) -> dict:
     return {
         "property_type": prop.property_type,
         "bhk": prop.bhk,
+        "unit_no": prop.unit_no,
         "society_name": prop.society_name,
         "area_name": prop.area_name,
         "address": prop.address,
         "price_text": prop.price_text,
         "price_amount_inr": prop.price_amount_inr,
         "listing_type": prop.listing_type,
-        "carpet_area_sqft": prop.carpet_area_sqft,
-        "carpet_area_unit": prop.carpet_area_unit,
+        "area_sqft": prop.area_sqft,
+        "area_vaar": prop.area_vaar,
+        "furnishing": prop.furnishing,
         "contact_name": prop.contact_name,
         "contact_phone": prop.contact_phone,
         "description": prop.description,
         "review_status": prop.review_status,
         "needs_review": prop.needs_review,
+        "property_source": match_candidates.source_of(prop),
     }
 
 

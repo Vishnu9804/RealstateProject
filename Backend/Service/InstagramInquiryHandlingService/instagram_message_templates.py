@@ -112,26 +112,35 @@ def _price_line(prop: StructuredProperty) -> str | None:
     return None
 
 
-def _carpet_area_line(prop: StructuredProperty) -> str | None:
-    if prop.carpet_area_sqft is None:
-        return None
-    unit = prop.carpet_area_unit or "sqft"
-    return f"{round(prop.carpet_area_sqft)} {unit}"
+def _area_line(prop: StructuredProperty) -> str | None:
+    """The property's size in whichever unit the listing recorded it in —
+    both, joined, in the rare case it holds both. Never converted between
+    the two: a number only means something next to its own unit."""
+    parts = [
+        f"{round(value)} {unit}"
+        for value, unit in ((prop.area_sqft, "sqft"), (prop.area_vaar, "vaar"))
+        if value is not None
+    ]
+    return " / ".join(parts) if parts else None
 
 
 def build_property_info_message(prop: StructuredProperty) -> str:
-    """Only area, price, carpet area, BHK and type — see the module
-    docstring for why. Any field that's missing on this particular property
-    is simply left out of the list, never shown as a blank/placeholder."""
+    """Only locality, price, size, BHK and type — see the module docstring
+    for why. Any field that's missing on this particular property is simply
+    left out of the list, never shown as a blank/placeholder.
+
+    Note what is NOT here, and must never be added: the address, the contact
+    details, and above all location_url (the internal map pin). This message
+    goes to a stranger on Instagram — see StructuredProperty.location_url."""
     lines = []
     if prop.area_name:
         lines.append(f"📍 Area: {prop.area_name}")
     price = _price_line(prop)
     if price:
         lines.append(f"💰 Price: {price}")
-    carpet_area = _carpet_area_line(prop)
-    if carpet_area:
-        lines.append(f"📐 Carpet area: {carpet_area}")
+    area = _area_line(prop)
+    if area:
+        lines.append(f"📐 Area: {area}")
     if prop.bhk:
         lines.append(f"🛏️ BHK: {prop.bhk}")
     if prop.property_type:

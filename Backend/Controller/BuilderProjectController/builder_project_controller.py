@@ -5,11 +5,12 @@ design; everything lives in Service/BuilderProjectService/.
 
 from typing import Any, List, Literal, Optional
 
-from fastapi import APIRouter, HTTPException, Request, Response
+from fastapi import APIRouter, Depends, HTTPException, Request, Response
 from pydantic import BaseModel, Field
 
 from Middleware import http_cache
 from Model.BuilderProjectModel.builder_project import BuilderProjectRecord
+from Service.AuthManagementService.auth_dependencies import get_current_user
 from Service.BuilderProjectService import builder_project_service
 
 router = APIRouter(prefix="/builder-projects", tags=["builder-projects"])
@@ -24,22 +25,26 @@ class BuilderProjectContentFields(BaseModel):
 
     property_type: Optional[str] = None
     bhk: Optional[str] = None
+    unit_no: Optional[str] = None
     society_name: Optional[str] = None
     area_name: Optional[str] = None
     address: Optional[str] = None
-    carpet_area_sqft: Optional[float] = None
-    carpet_area_unit: Optional[str] = None
+    area_sqft: Optional[float] = None
+    area_vaar: Optional[float] = None
     super_built: Optional[str] = None
+    furnishing: Optional[str] = None
     price_text: Optional[str] = None
     price_amount_inr: Optional[float] = None
-    price_per_unit_text: Optional[str] = None
-    price_per_unit_amount_inr: Optional[float] = None
     listing_type: Literal["Sale", "Rent"] = "Sale"
     contact_name: Optional[str] = None
     contact_phone: Optional[str] = None
     description: Optional[str] = None
     instagram_reel_url: Optional[str] = None
     image_urls: List[str] = Field(default_factory=list)
+    location_url: Optional[str] = None
+    video_available: bool = False
+    extra_notes: Optional[str] = None
+    is_available: bool = True
 
 
 class BuilderProjectUpdateRequest(BuilderProjectContentFields):
@@ -64,6 +69,33 @@ def get_builder_projects(request: Request, response: Response, limit: int = 500)
     etag = http_cache.build_etag("builder-projects", limit, builder_project_service.get_builder_projects_version())
     unchanged = http_cache.conditional(request, response, etag)
     return unchanged if unchanged is not None else builder_project_service.get_builder_projects(limit=limit)
+
+
+@router.get("/{record_id}", response_model=BuilderProjectRecord, dependencies=[Depends(get_current_user)])
+def get_builder_project(record_id: str, request: Request, response: Response) -> Any:
+    """One project, photo-less, served from memory — what the client and
+    broker-requirement match dialogs open for a builder project that was
+    assigned to an agent or already visited (see Frontend/src/components/
+    PropertyReadOnlyDialog.tsx). Conditional like the list: tagged with the
+    project's own updated_at and the 12h/24h setting its formatted timestamp
+    depends on, so a repeat open is a bodyless 304.
+
+    Login-gated on the route itself. Declared after "" and before
+    "/{record_id}/images" — different paths, so the order carries no
+    ambiguity."""
+    version = builder_project_service.get_builder_project_version(record_id)
+    etag = (
+        None
+        if version is None
+        else http_cache.build_etag("builder-project", record_id, version, builder_project_service.get_builder_projects_version())
+    )
+    unchanged = http_cache.conditional(request, response, etag)
+    if unchanged is not None:
+        return unchanged
+    project = builder_project_service.get_builder_project(record_id)
+    if project is None:
+        raise HTTPException(status_code=404, detail="Builder project not found")
+    return project
 
 
 @router.get("/{record_id}/images", response_model=BuilderProjectImages)

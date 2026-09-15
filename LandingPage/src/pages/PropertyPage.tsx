@@ -144,14 +144,14 @@ export default function PropertyPage() {
   }
 
   const images = property?.image_urls ?? base.image_urls;
-  const area = formatArea(base.carpet_area, base.carpet_area_unit);
+  const area = formatArea(base.area_sqft, base.area_vaar);
 
   const specs: Array<{ label: string; value: string }> = [
     { label: "Listing", value: base.listing_type === "Rent" ? "For rent" : "For sale" },
     ...(base.bhk ? [{ label: "Configuration", value: base.bhk }] : []),
     ...(base.property_type ? [{ label: "Property type", value: base.property_type }] : []),
-    ...(area ? [{ label: "Carpet area", value: area }] : []),
-    ...(property?.price_per_unit_text ? [{ label: "Rate", value: property.price_per_unit_text }] : []),
+    ...(area ? [{ label: "Area", value: area }] : []),
+    ...(base.furnishing ? [{ label: "Furnishing", value: base.furnishing }] : []),
     ...(base.society_name ? [{ label: "Society", value: base.society_name }] : []),
     ...(base.area_name ? [{ label: "Locality", value: base.area_name }] : []),
   ];

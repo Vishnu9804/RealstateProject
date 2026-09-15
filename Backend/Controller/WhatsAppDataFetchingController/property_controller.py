@@ -25,18 +25,21 @@ class PropertyContentFields(BaseModel):
 
     property_type: Optional[str] = None
     bhk: Optional[str] = None
+    # Shown as "Unit / Flat number" — the client's two spreadsheets name this
+    # column differently but mean the same thing (StructuredProperty.unit_no).
+    unit_no: Optional[str] = None
+    # Shown as "Society / Building name", for the same reason.
     society_name: Optional[str] = None
     area_name: Optional[str] = None
     address: Optional[str] = None
-    carpet_area_sqft: Optional[float] = None
-    carpet_area_unit: Optional[str] = None
+    area_sqft: Optional[float] = None
+    area_vaar: Optional[float] = None
     # Human-only, like instagram_reel_url — never asked of the LLM (see
     # StructuredProperty.super_built).
     super_built: Optional[str] = None
+    furnishing: Optional[str] = None
     price_text: Optional[str] = None
     price_amount_inr: Optional[float] = None
-    price_per_unit_text: Optional[str] = None
-    price_per_unit_amount_inr: Optional[float] = None
     listing_type: Literal["Sale", "Rent"] = "Sale"
     contact_name: Optional[str] = None
     contact_phone: Optional[str] = None
@@ -45,6 +48,13 @@ class PropertyContentFields(BaseModel):
     # Photos of the property — never required, never touched by the LLM
     # stage. Same "optional, human-only" story as instagram_reel_url.
     image_urls: List[str] = Field(default_factory=list)
+    # The rest are human-only too. location_url is the internal map pin and
+    # is accepted here but never returned by any public endpoint — see
+    # StructuredProperty.location_url.
+    location_url: Optional[str] = None
+    video_available: bool = False
+    extra_notes: Optional[str] = None
+    is_available: bool = True
 
 
 class PropertyUpdateRequest(PropertyContentFields):

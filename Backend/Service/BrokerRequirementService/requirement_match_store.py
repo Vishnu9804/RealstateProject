@@ -91,15 +91,37 @@ def get_run_index(limit: int) -> Dict[str, Tuple[Optional[datetime], Optional[st
     return index
 
 
-def merge_matches_bulk(updates: Dict[str, Tuple[List[MatchScore], Set[str], str]], computed_at: datetime) -> int:
+def merge_matches_bulk(
+    updates: Dict[str, Tuple[List[MatchScore], Set[str], str]],
+    computed_at: datetime,
+    keep_watermarks: bool = False,
+) -> int:
     """merge_matches for many requirements at once (record_id -> (scores,
     considered property ids, fingerprint)), one transaction in database mode.
-    Returns how many match rows were written."""
+    Returns how many match rows were written.
+
+    `keep_watermarks` writes the match rows only and leaves every
+    requirement's computed_at/fingerprint exactly as stored — for a pass
+    that looked at only SOME listings (see requirement_matching_service.
+    score_builder_projects_for_scored_requirements), after which the next
+    read must still catch up on everything else changed since. A
+    requirement with nothing stored is left alone in that mode."""
     if is_database_configured():
-        return broker_requirement_match_repository.merge_matches_bulk(updates, computed_at)
+        return broker_requirement_match_repository.merge_matches_bulk(
+            updates, computed_at, keep_watermarks=keep_watermarks
+        )
+    written = 0
     for record_id, (scores, considered, fingerprint) in updates.items():
-        merge_matches(record_id, scores, considered, computed_at, fingerprint)
-    return sum(len(scores) for scores, _, _ in updates.values())
+        if keep_watermarks:
+            stored = _matches.get(record_id)
+            if stored is None:
+                continue
+            kept = [score for score in stored[0] if score.record_id not in considered]
+            _matches[record_id] = (kept + list(scores), stored[1], stored[2])
+        else:
+            merge_matches(record_id, scores, considered, computed_at, fingerprint)
+        written += len(scores)
+    return written
 
 
 def forget_requirement_in_memory(record_id: str) -> None:

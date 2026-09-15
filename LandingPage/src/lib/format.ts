@@ -131,24 +131,27 @@ export function formatPrice(priceText: string | null, priceAmountInr: number | n
   return "Price on request";
 }
 
-/** Never converted between units — a number is only comparable to another
- *  in the same unit, so the unit travels with it. */
-export function formatArea(area: number | null, unit: string | null): string | null {
-  if (area === null || area === undefined) return null;
-  return `${Math.round(area)} ${unit ?? "sqft"}`;
+/** Never converted between units — a number is only comparable to another in
+ *  the same unit, so each one is shown beside its own. null when the listing
+ *  recorded no size at all. */
+export function formatArea(areaSqft: number | null, areaVaar: number | null): string | null {
+  const parts: string[] = [];
+  if (areaSqft !== null && areaSqft !== undefined) parts.push(`${Math.round(areaSqft)} sqft`);
+  if (areaVaar !== null && areaVaar !== undefined) parts.push(`${Math.round(areaVaar)} vaar`);
+  return parts.length > 0 ? parts.join(" · ") : null;
 }
 
 /** The short chips under a card's title: "3 BHK", "Apartment", "155 vaar". */
 export function propertyChips(property: {
   bhk: string | null;
   property_type: string | null;
-  carpet_area: number | null;
-  carpet_area_unit: string | null;
+  area_sqft: number | null;
+  area_vaar: number | null;
 }): string[] {
   const chips: string[] = [];
   if (property.bhk) chips.push(property.bhk);
   if (property.property_type) chips.push(property.property_type);
-  const area = formatArea(property.carpet_area, property.carpet_area_unit);
+  const area = formatArea(property.area_sqft, property.area_vaar);
   if (area) chips.push(area);
   return chips;
 }

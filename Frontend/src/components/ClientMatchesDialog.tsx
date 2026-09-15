@@ -2,6 +2,7 @@ import { useCallback, useEffect, useMemo, useState } from "react";
 import { createPortal } from "react-dom";
 import { useNavigate } from "react-router-dom";
 import { agentApi } from "../api/agentApi";
+import { BUILDER_PROJECT_LIST_LIMIT, builderProjectApi } from "../api/builderProjectApi";
 import { ApiError } from "../api/client";
 import { inquiryClientApi } from "../api/inquiryClientApi";
 import { landingLeadApi } from "../api/landingLeadApi";
@@ -10,28 +11,25 @@ import { propertyApi } from "../api/propertyApi";
 import type {
   AgentSummary,
   AssignedClientSummary,
+  BuilderProjectRecord,
   ClientMatchResult,
   InquiryClientRecord,
   MatchBucket,
   MatchedProperty,
   PropertyRecord,
+  PropertySource,
   VisitRecord,
 } from "../api/types";
 import { friendlyError } from "../lib/apiError";
 import { getCachedAgents, setCachedAgents } from "../lib/agentListCache";
+import { getCachedBuilderProjectList, setCachedBuilderProjectList } from "../lib/builderProjectListCache";
 import {
   getCachedCompletedVisits,
   getCachedMatchResult,
   setCachedCompletedVisits,
   setCachedMatchResult,
 } from "../lib/clientMatchCache";
-import {
-  formatCarpetArea,
-  formatPrice,
-  formatPricePerUnit,
-  formatVisitTime,
-  relativeTime,
-} from "../lib/formatters";
+import { formatArea, formatPrice, formatVisitTime, relativeTime } from "../lib/formatters";
 import {
   buildVisitTimeMessages,
   propertyLabel,
@@ -51,6 +49,7 @@ import ShareClientPropertiesDialog from "./ShareClientPropertiesDialog";
 import VisitMessagesDialog from "./VisitMessagesDialog";
 import VisitPlannerDialog from "./VisitPlannerDialog";
 import ConfirmDialog from "./ui/ConfirmDialog";
+import SourceTag from "./ui/SourceTag";
 import { useToast } from "./ui/Toast";
 import {
   Badge,
@@ -213,6 +212,12 @@ export interface DialogItem {
   recordId: string;
   section: SectionKey;
   category: PropertyCategory;
+  /** A property or a builder project — both are matched. Read off the
+   *  match itself (MatchedProperty.property_source); hand-picked and
+   *  website-enquired cards are always properties. A builder project never
+   *  has a `property` record (its card reads the match's own fields), files
+   *  under Main, and has no Main/Outsider move. */
+  source: PropertySource;
   match: MatchedProperty | null;
   property: PropertyRecord | null;
   /** Whatever the hand-off flow needs — the full record when we have it,
@@ -235,6 +240,10 @@ interface ActiveVisit {
   agent: AgentSummary;
   active: AssignedClientSummary;
 }
+
+/** The full record behind an Assigned/Completed card, whichever kind of
+ *  listing it is — both carry every field those cards read. */
+type ListingRecord = PropertyRecord | BuilderProjectRecord;
 
 /** The visit planner's answer for one ticked property: which agent and,
  *  optionally, when. Held here, on the card, until "Assign & send" — no
@@ -294,10 +303,11 @@ function snapshotProperty(
     record_id: recordId,
     property_type: null,
     bhk: null,
+    unit_no: null,
     society_name: label,
     area_name: null,
-    carpet_area_sqft: null,
-    carpet_area_unit: null,
+    area_sqft: null,
+    area_vaar: null,
     contact_name: null,
     contact_phone: null,
   };
@@ -356,6 +366,15 @@ export default function ClientMatchesDialog({
   const [properties, setProperties] = useState<PropertyRecord[] | null>(
     () => getCachedPropertyList()?.data ?? null,
   );
+  // The Builder Projects list, for the one thing a matched builder project's
+  // own fields can't give: its full record once it is only an Assigned or
+  // Completed visit (facts on the card, the read-only view). Shares the
+  // Builder Projects page's cache and its exact request (a bodyless 304 from
+  // the backend's memory when nothing changed), and — like `properties` —
+  // never gates anything: those cards fall back to the visit's own snapshot.
+  const [builderProjects, setBuilderProjects] = useState<
+    BuilderProjectRecord[] | null
+  >(() => getCachedBuilderProjectList()?.data ?? null);
   const [client, setClient] = useState<InquiryClientRecord | null>(null);
   const [agents, setAgents] = useState<AgentSummary[] | null>(() =>
     getCachedAgents(),
@@ -425,9 +444,14 @@ export default function ClientMatchesDialog({
     null,
   );
   const [openItemId, setOpenItemId] = useState<string | null>(null);
-  const [viewingCompletedId, setViewingCompletedId] = useState<string | null>(
-    null,
-  );
+  // The read-only view opened from an Assigned/Completed card whose listing
+  // is no longer among the outstanding matches — the id plus which kind of
+  // listing it is, since a property and a builder project are fetched from
+  // different places (see PropertyReadOnlyDialog's `source`).
+  const [viewingListing, setViewingListing] = useState<{
+    recordId: string;
+    source: PropertySource;
+  } | null>(null);
   const [assignFlow, setAssignFlow] = useState<AssignFlow>(null);
   // The "send the shortlist straight to the client" flow, deliberately
   // separate from assignFlow above: it involves no agent and no visit
@@ -523,6 +547,16 @@ export default function ClientMatchesDialog({
       })
       .catch(() => {})
       .finally(() => setLoadingProperties(false));
+
+    // Ungated and allowed to fail quietly, for the reason given at the
+    // `builderProjects` state above.
+    builderProjectApi
+      .getBuilderProjects(BUILDER_PROJECT_LIST_LIMIT)
+      .then((data) => {
+        setBuilderProjects(data);
+        setCachedBuilderProjectList(data);
+      })
+      .catch(() => {});
   }, [phone, reloadAgents]);
 
   // `properties`/`loadingProperties` above already seed from the cache
@@ -535,7 +569,7 @@ export default function ClientMatchesDialog({
 
   const nestedOpen =
     openItemId !== null ||
-    viewingCompletedId !== null ||
+    viewingListing !== null ||
     assignFlow !== null ||
     clearOpen ||
     shareOpen ||
@@ -558,6 +592,24 @@ export default function ClientMatchesDialog({
       map.set(property.record_id, property);
     return map;
   }, [properties]);
+
+  const builderProjectsById = useMemo(
+    () =>
+      new Map(
+        (builderProjects ?? []).map((project) => [project.record_id, project]),
+      ),
+    [builderProjects],
+  );
+
+  /** The full record for a listing of a known kind — looked up only where
+   *  that kind lives, so an id can never be dressed in the wrong record. */
+  const listingFor = useCallback(
+    (recordId: string, source: PropertySource): ListingRecord | null =>
+      source === "builder_project"
+        ? (builderProjectsById.get(recordId) ?? null)
+        : (propertiesById.get(recordId) ?? null),
+    [builderProjectsById, propertiesById],
+  );
 
   const matchById = useMemo(() => {
     const map = new Map<string, MatchedProperty>();
@@ -661,14 +713,17 @@ export default function ClientMatchesDialog({
    *  a label a visit already snapshotted. */
   const titleFor = useCallback(
     (recordId: string, fallback: string | null): string => {
-      const source = propertiesById.get(recordId) ?? matchById.get(recordId);
+      const source =
+        propertiesById.get(recordId) ??
+        builderProjectsById.get(recordId) ??
+        matchById.get(recordId);
       return (
         (source && (source.society_name || source.property_type)) ||
         fallback ||
         "Property"
       );
     },
-    [propertiesById, matchById],
+    [propertiesById, builderProjectsById, matchById],
   );
 
   /** Every card this dialog can show, already sectioned and categorised.
@@ -683,11 +738,17 @@ export default function ClientMatchesDialog({
 
     const pushMatch = (match: MatchedProperty, bucket: MatchBucket) => {
       if (completedByProperty.has(match.record_id)) return;
-      const property = propertiesById.get(match.record_id) ?? null;
+      const source: PropertySource = match.property_source ?? "property";
+      const property =
+        source === "property"
+          ? (propertiesById.get(match.record_id) ?? null)
+          : null;
       byId.set(match.record_id, {
         recordId: match.record_id,
         section: manualIdSet.has(match.record_id) ? "manual" : bucket,
+        // A builder project is always "accepted", so it files under Main.
         category: categoryOf(property ?? match),
+        source,
         match,
         property,
         handoff: property ?? match,
@@ -706,6 +767,7 @@ export default function ClientMatchesDialog({
         recordId,
         section: "manual",
         category: categoryOf(property),
+        source: "property",
         match: null,
         property,
         handoff: property,
@@ -729,6 +791,7 @@ export default function ClientMatchesDialog({
         recordId,
         section: "website",
         category: categoryOf(property),
+        source: "property",
         match: null,
         property,
         handoff: property,
@@ -749,6 +812,24 @@ export default function ClientMatchesDialog({
   const itemsById = useMemo(
     () => new Map(items.map((item) => [item.recordId, item])),
     [items],
+  );
+
+  /** Property or builder project, for any id this dialog can show: the
+   *  live match first, then the snapshot an active or completed visit took
+   *  when it was handed off (right even after the listing is deleted), and
+   *  only then the loaded Builder Projects list. */
+  const sourceFor = useCallback(
+    (recordId: string): PropertySource => {
+      const item = itemsById.get(recordId);
+      if (item) return item.source;
+      const active = activeByProperty.get(recordId);
+      if (active) return active.active.property_source ?? "property";
+      const visits = completedByProperty.get(recordId);
+      if (visits && visits.length > 0)
+        return visits[visits.length - 1].property_source ?? "property";
+      return builderProjectsById.has(recordId) ? "builder_project" : "property";
+    },
+    [itemsById, activeByProperty, completedByProperty, builderProjectsById],
   );
 
   // A ticked property that has since dropped off the list (moved, removed,
@@ -1022,6 +1103,7 @@ export default function ClientMatchesDialog({
             budget_max_inr: client?.budget_max_inr ?? null,
             property_record_id: p.record_id,
             property_label: propertyLabel(p),
+            property_source: sourceFor(p.record_id),
             assigned_at: assignedAt,
             scheduled_at:
               assignment.visitMeta?.[p.record_id]?.scheduledAt ?? null,
@@ -1052,7 +1134,7 @@ export default function ClientMatchesDialog({
     const visits = completedByProperty.get(recordId) ?? [];
     const latest = visits[visits.length - 1] ?? null;
     const property: HandoffPropertyLike =
-      propertiesById.get(recordId) ??
+      listingFor(recordId, sourceFor(recordId)) ??
       matchById.get(recordId) ??
       snapshotProperty(recordId, latest?.property_label ?? null);
     setPlanner(null);
@@ -1163,6 +1245,9 @@ export default function ClientMatchesDialog({
    *  property changing drawers changes nothing about how well it fits
    *  this client, only where it is filed. */
   async function handleMove(item: DialogItem, target: PropertyCategory) {
+    // Main/Outsider is a property's filing — a builder project has neither
+    // (the detail view offers no move for one; this only guards it).
+    if (item.source === "builder_project") return;
     setMovingId(item.recordId);
     try {
       const updated = await propertyApi.updateProperty(
@@ -1334,17 +1419,19 @@ export default function ClientMatchesDialog({
 
   const renderActiveCard = (visit: ActiveVisit) => {
     const recordId = visit.active.property_record_id;
+    const source = sourceFor(recordId);
     return (
       <AssignedVisitCard
         key={`${visit.agent.agent_id}-${recordId}`}
         visit={visit}
-        property={propertiesById.get(recordId) ?? null}
+        source={source}
+        property={listingFor(recordId, source)}
         match={matchById.get(recordId) ?? null}
         revisitNumber={revisitNumberFor(recordId)}
         onOpen={() =>
           itemsById.has(recordId)
             ? setOpenItemId(recordId)
-            : setViewingCompletedId(recordId)
+            : setViewingListing({ recordId, source })
         }
         onEditTime={() => setPlanner({ kind: "reschedule", visit })}
       />
@@ -1620,8 +1707,14 @@ export default function ClientMatchesDialog({
                       <CompletedPropertyCard
                         key={recordId}
                         visits={visits}
-                        property={propertiesById.get(recordId) ?? null}
-                        onOpen={() => setViewingCompletedId(recordId)}
+                        source={sourceFor(recordId)}
+                        property={listingFor(recordId, sourceFor(recordId))}
+                        onOpen={() =>
+                          setViewingListing({
+                            recordId,
+                            source: sourceFor(recordId),
+                          })
+                        }
                         activeVisit={activeByProperty.get(recordId) ?? null}
                         canRevisit={client !== null}
                         onRevisit={() =>
@@ -1794,10 +1887,11 @@ export default function ClientMatchesDialog({
         />
       )}
 
-      {viewingCompletedId && (
+      {viewingListing && (
         <PropertyReadOnlyDialog
-          recordId={viewingCompletedId}
-          onClose={() => setViewingCompletedId(null)}
+          recordId={viewingListing.recordId}
+          source={viewingListing.source}
+          onClose={() => setViewingListing(null)}
         />
       )}
 
@@ -1881,7 +1975,7 @@ export default function ClientMatchesDialog({
           )}
           propertyArea={
             (
-              propertiesById.get(planner.recordId) ??
+              listingFor(planner.recordId, sourceFor(planner.recordId)) ??
               matchById.get(planner.recordId)
             )?.area_name ?? null
           }
@@ -2112,6 +2206,7 @@ function PropertyMatchCard({
 
       <div className="match-card__head">
         <div style={{ minWidth: 0 }}>
+          <SourceTag source={item.source} />
           <div className="pcard__title cell-truncate">{title}</div>
           {location && (
             <div className="pcard__sub cell-truncate">{location}</div>
@@ -2139,10 +2234,10 @@ function PropertyMatchCard({
             {source.area_name}
           </span>
         )}
-        {source.carpet_area_sqft !== null && (
+        {formatArea(source.area_sqft, source.area_vaar) !== "—" && (
           <span className="fact">
             <IconRuler size={12} />
-            {formatCarpetArea(source.carpet_area_sqft, source.carpet_area_unit)}
+            {formatArea(source.area_sqft, source.area_vaar)}
           </span>
         )}
       </div>
@@ -2241,6 +2336,7 @@ function PropertyMatchCard({
  *  clickable to change it. A re-visit is dashed and says which visit it is. */
 function AssignedVisitCard({
   visit,
+  source: listingSource,
   property,
   match,
   revisitNumber,
@@ -2248,7 +2344,10 @@ function AssignedVisitCard({
   onEditTime,
 }: {
   visit: ActiveVisit;
-  property: PropertyRecord | null;
+  /** Property or builder project — see ClientMatchesDialog's sourceFor. */
+  source: PropertySource;
+  /** The full record of whichever kind it is, when loaded. */
+  property: ListingRecord | null;
   match: MatchedProperty | null;
   revisitNumber: number | null;
   onOpen: () => void;
@@ -2281,6 +2380,7 @@ function AssignedVisitCard({
     >
       <div className="match-card__head">
         <div style={{ minWidth: 0 }}>
+          <SourceTag source={listingSource} />
           <div className="pcard__title cell-truncate">{title}</div>
           {location && (
             <div className="pcard__sub cell-truncate">{location}</div>
@@ -2309,13 +2409,10 @@ function AssignedVisitCard({
               {source.area_name}
             </span>
           )}
-          {source.carpet_area_sqft !== null && (
+          {formatArea(source.area_sqft, source.area_vaar) !== "—" && (
             <span className="fact">
               <IconRuler size={12} />
-              {formatCarpetArea(
-                source.carpet_area_sqft,
-                source.carpet_area_unit,
-              )}
+              {formatArea(source.area_sqft, source.area_vaar)}
             </span>
           )}
         </div>
@@ -2382,6 +2479,7 @@ function AssignedVisitCard({
  *  PropertyRecord hasn't loaded yet or the property was since deleted. */
 export function CompletedPropertyCard({
   visits,
+  source,
   property,
   onOpen,
   activeVisit,
@@ -2390,7 +2488,10 @@ export function CompletedPropertyCard({
 }: {
   /** Oldest first; never empty. */
   visits: VisitRecord[];
-  property: PropertyRecord | null;
+  /** Property or builder project — see ClientMatchesDialog's sourceFor. */
+  source: PropertySource;
+  /** The full record of whichever kind it is, when loaded. */
+  property: ListingRecord | null;
   onOpen: () => void;
   /** The re-visit currently out for this property, if any. */
   activeVisit: ActiveVisit | null;
@@ -2427,6 +2528,7 @@ export function CompletedPropertyCard({
     >
       <div className="match-card__head">
         <div style={{ minWidth: 0 }}>
+          <SourceTag source={source} />
           <div className="pcard__title cell-truncate">{title}</div>
           {location && (
             <div className="pcard__sub cell-truncate">{location}</div>
@@ -2463,13 +2565,10 @@ export function CompletedPropertyCard({
               {property.area_name}
             </span>
           )}
-          {property.carpet_area_sqft !== null && (
+          {formatArea(property.area_sqft, property.area_vaar) !== "—" && (
             <span className="fact">
               <IconRuler size={12} />
-              {formatCarpetArea(
-                property.carpet_area_sqft,
-                property.carpet_area_unit,
-              )}
+              {formatArea(property.area_sqft, property.area_vaar)}
             </span>
           )}
         </div>
@@ -2579,11 +2678,16 @@ export function PropertyMatchDetailDialog({
   const fieldScoreEntries = Object.entries(match?.field_scores ?? {}).filter(
     ([, value]) => value !== null,
   ) as [string, number][];
+  const isBuilderProject = item.source === "builder_project";
   // Every drawer except the one it is already in — the whole point of
-  // these buttons is that they never present a no-op.
-  const moveTargets = (["main", "outsider"] as PropertyCategory[]).filter(
-    (target) => target !== item.category,
-  );
+  // these buttons is that they never present a no-op. None at all for a
+  // builder project: Main/Outsider is a property's filing, and a builder
+  // project has no such thing to move.
+  const moveTargets = isBuilderProject
+    ? []
+    : (["main", "outsider"] as PropertyCategory[]).filter(
+        (target) => target !== item.category,
+      );
 
   return createPortal(
     <div
@@ -2606,6 +2710,7 @@ export function PropertyMatchDetailDialog({
               <div className="detail-modal__sub cell-truncate">{subtitle}</div>
             )}
             <div className="detail-modal__badges">
+              <SourceTag source={item.source} />
               {match && (
                 <Badge tone={BUCKET_TONE[match.bucket]}>
                   {Math.round(match.score * 100)}% match
@@ -2617,9 +2722,11 @@ export function PropertyMatchDetailDialog({
               {match?.matched_type && (
                 <Badge tone="accent">For {match.matched_type}</Badge>
               )}
-              <Badge tone={item.category === "main" ? "ok" : "info"}>
-                {CATEGORY_LABEL[item.category]}
-              </Badge>
+              {!isBuilderProject && (
+                <Badge tone={item.category === "main" ? "ok" : "info"}>
+                  {CATEGORY_LABEL[item.category]}
+                </Badge>
+              )}
               {item.section === "manual" && (
                 <Badge tone="info">Manually added</Badge>
               )}
@@ -2634,13 +2741,10 @@ export function PropertyMatchDetailDialog({
                   {source.bhk}
                 </span>
               )}
-              {source.carpet_area_sqft !== null && (
+              {formatArea(source.area_sqft, source.area_vaar) !== "—" && (
                 <span className="fact">
                   <IconRuler size={12} />
-                  {formatCarpetArea(
-                    source.carpet_area_sqft,
-                    source.carpet_area_unit,
-                  )}
+                  {formatArea(source.area_sqft, source.area_vaar)}
                 </span>
               )}
             </div>
@@ -2697,18 +2801,6 @@ export function PropertyMatchDetailDialog({
               )}
             </div>
 
-            {property && (
-              <div className="detail__block">
-                <div className="detail__k">Price per unit</div>
-                <div className="detail__v">
-                  {property.price_per_unit_text ??
-                    formatPricePerUnit(
-                      null,
-                      property.price_per_unit_amount_inr,
-                    )}
-                </div>
-              </div>
-            )}
 
             <div className="detail__block">
               <div className="detail__k">Contact</div>

@@ -1,5 +1,5 @@
 from datetime import datetime
-from typing import Optional
+from typing import Literal, Optional
 
 from pydantic import BaseModel
 
@@ -16,6 +16,10 @@ class VisitRecord(BaseModel):
     client_name: Optional[str] = None
     property_record_id: Optional[str] = None
     property_label: Optional[str] = None
+    # Whether that was a property or a builder project — snapshotted from
+    # the active assignment, like property_label (see
+    # Database/agent_visit_models.py's property_source).
+    property_source: Literal["property", "builder_project"] = "property"
     # Snapshotted from the active assignment at completion time (same
     # reasoning as client_name/property_label above) so a later "Mark as
     # still active" (Service/AgentManagementService/agent_store.py's

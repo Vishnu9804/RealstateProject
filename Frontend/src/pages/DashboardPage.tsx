@@ -7,7 +7,7 @@ import { useAppStatus } from "../state/StatusProvider";
 import { useAuth } from "../state/AuthProvider";
 import { useDebounced, usePersistentState } from "../hooks/useUi";
 import { friendlyError } from "../lib/apiError";
-import { formatCarpetArea, formatPrice, formatPricePerUnit, relativeTime } from "../lib/formatters";
+import { formatArea, formatPrice, relativeTime } from "../lib/formatters";
 import {
   addCachedProperty,
   getCachedPropertyList,
@@ -109,7 +109,7 @@ const FETCH_LIMIT = 500;
 const PAGE_SIZE = 20;
 
 type ViewMode = "table" | "cards";
-export type SortKey = "time" | "price" | "priceUnit" | "area" | "society" | "locality";
+export type SortKey = "time" | "price" | "areaSqft" | "areaVaar" | "society" | "locality";
 export type SortDir = "asc" | "desc";
 
 export interface Column {
@@ -128,19 +128,26 @@ export interface Column {
  *  column set/labels/filter keys as this one, per its own requirement to
  *  filter identically to the Properties page. */
 export const COLUMNS: Column[] = [
-  { key: "society", label: "Society", sort: "society" },
+  { key: "society", label: "Society / Building", sort: "society" },
+  // The unit's own number inside that building. Near-unique free text like
+  // Society/Address, so no filter or sort — the search box covers it.
+  { key: "unitNo", label: "Unit / Flat no." },
   { key: "locality", label: "Area", sort: "locality", filterKey: "locality" },
   { key: "address", label: "Address" },
   { key: "bhk", label: "BHK", filterKey: "bhk" },
   { key: "type", label: "Type", filterKey: "type" },
   { key: "listingType", label: "Sale/Rent", filterKey: "listingType" },
-  { key: "carpet", label: "Carpet area", sort: "area", numeric: true, filterKey: "carpet" },
+  // Two columns, not one: sqft and vaar are different measurements and a
+  // single combined column could only be sorted or bounded by converting one
+  // into the other — see lib/propertyFilters.ts.
+  { key: "areaSqft", label: "Area (sqft)", sort: "areaSqft", numeric: true, filterKey: "areaSqft" },
+  { key: "areaVaar", label: "Area (vaar)", sort: "areaVaar", numeric: true, filterKey: "areaVaar" },
   // Free text a person typed ("1850 sq ft") — see PropertyRecord.super_built.
   // No filter or sort: like Society/Address it is near-unique text, and the
   // search box already searches it.
   { key: "superBuilt", label: "Super built" },
+  { key: "furnishing", label: "Furnishing", filterKey: "furnishing" },
   { key: "price", label: "Price", sort: "price", numeric: true, filterKey: "price" },
-  { key: "priceUnit", label: "Price/unit", sort: "priceUnit", numeric: true, filterKey: "priceUnit" },
   { key: "contact", label: "Contact" },
   { key: "source", label: "Source", filterKey: "source" },
   { key: "time", label: "Received (IST)", sort: "time" },
@@ -152,8 +159,8 @@ export const COLUMNS: Column[] = [
 export const SORT_LABELS: Record<SortKey, { asc: string; desc: string }> = {
   time: { asc: "Oldest first", desc: "Newest first" },
   price: { asc: "Low → High", desc: "High → Low" },
-  priceUnit: { asc: "Low → High", desc: "High → Low" },
-  area: { asc: "Small → Large", desc: "Large → Small" },
+  areaSqft: { asc: "Small → Large", desc: "Large → Small" },
+  areaVaar: { asc: "Small → Large", desc: "Large → Small" },
   society: { asc: "A → Z", desc: "Z → A" },
   locality: { asc: "A → Z", desc: "Z → A" },
 };
@@ -445,6 +452,9 @@ export default function DashboardPage() {
         property.bhk,
         property.property_type,
         property.super_built,
+        property.unit_no,
+        property.furnishing,
+        property.extra_notes,
       ]
         .filter(Boolean)
         .join(" ")
@@ -488,10 +498,10 @@ export default function DashboardPage() {
       switch (sortKey) {
         case "price":
           return compareNullable(a.price_amount_inr, b.price_amount_inr, direction);
-        case "priceUnit":
-          return compareNullable(a.price_per_unit_amount_inr, b.price_per_unit_amount_inr, direction);
-        case "area":
-          return compareNullable(a.carpet_area_sqft, b.carpet_area_sqft, direction);
+        case "areaSqft":
+          return compareNullable(a.area_sqft, b.area_sqft, direction);
+        case "areaVaar":
+          return compareNullable(a.area_vaar, b.area_vaar, direction);
         case "society":
           return compareNullable(a.society_name, b.society_name, direction);
         case "locality":
@@ -1422,6 +1432,9 @@ function PropertyTable({
                     <td className="cell-truncate cell-strong" title={property.society_name ?? undefined}>
                       <Highlight text={property.society_name ?? "—"} query={query} />
                     </td>
+                    <td className="cell-truncate" title={property.unit_no ?? undefined}>
+                      <Highlight text={property.unit_no ?? "—"} query={query} />
+                    </td>
                     <td className="cell-truncate" title={property.area_name ?? undefined}>
                       <Highlight text={property.area_name ?? "—"} query={query} />
                     </td>
@@ -1434,10 +1447,16 @@ function PropertyTable({
                       <Badge tone={property.listing_type === "Rent" ? "info" : "ok"}>{property.listing_type}</Badge>
                     </td>
                     <td className="cell-num" style={{ textAlign: "right" }}>
-                      {formatCarpetArea(property.carpet_area_sqft, property.carpet_area_unit)}
+                      {property.area_sqft === null ? "—" : Math.round(property.area_sqft)}
+                    </td>
+                    <td className="cell-num" style={{ textAlign: "right" }}>
+                      {property.area_vaar === null ? "—" : Math.round(property.area_vaar)}
                     </td>
                     <td className="cell-truncate" title={property.super_built ?? undefined}>
                       <Highlight text={property.super_built ?? "—"} query={query} />
+                    </td>
+                    <td className="cell-truncate">
+                      <Highlight text={property.furnishing ?? "—"} query={query} />
                     </td>
                     <td
                       className="cell-num cell-strong"
@@ -1447,13 +1466,6 @@ function PropertyTable({
                       title={property.price_text ?? undefined}
                     >
                       {formatPrice(property.price_text, property.price_amount_inr)}
-                    </td>
-                    <td
-                      className="cell-num"
-                      style={{ textAlign: "right" }}
-                      title={property.price_per_unit_text ?? undefined}
-                    >
-                      {formatPricePerUnit(property.price_per_unit_text, property.price_per_unit_amount_inr)}
                     </td>
                     <td className="cell-truncate">
                       <Highlight text={property.contact_name ?? "—"} query={query} />
@@ -1539,11 +1551,6 @@ function PropertyCards({
             <div className="pcard__price" title={property.price_text ?? undefined}>
               {formatPrice(property.price_text, property.price_amount_inr)}
             </div>
-            {(property.price_per_unit_text !== null || property.price_per_unit_amount_inr !== null) && (
-              <div className="faint small" title={property.price_per_unit_text ?? undefined}>
-                {formatPricePerUnit(property.price_per_unit_text, property.price_per_unit_amount_inr)} / unit
-              </div>
-            )}
 
             <div className="pcard__facts">
               {property.bhk && (
@@ -1562,10 +1569,10 @@ function PropertyCards({
                 <IconTag size={12} />
                 {property.listing_type}
               </span>
-              {property.carpet_area_sqft !== null && (
+              {formatArea(property.area_sqft, property.area_vaar) !== "—" && (
                 <span className="fact">
                   <IconRuler size={12} />
-                  {formatCarpetArea(property.carpet_area_sqft, property.carpet_area_unit)}
+                  {formatArea(property.area_sqft, property.area_vaar)}
                 </span>
               )}
               {property.super_built && (
@@ -1574,6 +1581,7 @@ function PropertyCards({
                   Super built {property.super_built}
                 </span>
               )}
+              {property.furnishing && <span className="fact">{property.furnishing}</span>}
               {property.area_name && (
                 <span className="fact">
                   <IconPin size={12} />
@@ -1884,10 +1892,10 @@ export function PropertyDetailDialog({
                   {property.bhk}
                 </span>
               )}
-              {property.carpet_area_sqft !== null && (
+              {formatArea(property.area_sqft, property.area_vaar) !== "—" && (
                 <span className="fact">
                   <IconRuler size={12} />
-                  {formatCarpetArea(property.carpet_area_sqft, property.carpet_area_unit)}
+                  {formatArea(property.area_sqft, property.area_vaar)}
                 </span>
               )}
               {property.super_built && (
@@ -1896,6 +1904,13 @@ export function PropertyDetailDialog({
                   Super built {property.super_built}
                 </span>
               )}
+              {property.furnishing && <span className="fact">{property.furnishing}</span>}
+              {!property.is_available && (
+                <span className="fact" title="Marked not available">
+                  Not available
+                </span>
+              )}
+              {property.video_available && <span className="fact">Video available</span>}
             </div>
           </div>
           <button type="button" className="toast__close" onClick={onClose} aria-label="Close">
@@ -1967,18 +1982,6 @@ export function PropertyDetailDialog({
             </div>
 
             <div className="detail__block">
-              <div className="detail__k">Price per unit</div>
-              <div className="detail__v">
-                {property.price_per_unit_text ?? formatPricePerUnit(null, property.price_per_unit_amount_inr)}
-              </div>
-              {property.price_per_unit_amount_inr !== null && (
-                <div className="faint small" style={{ marginTop: 4 }}>
-                  Read as {formatPricePerUnit(null, property.price_per_unit_amount_inr)}
-                </div>
-              )}
-            </div>
-
-            <div className="detail__block">
               <div className="detail__k">Contact</div>
               <div className="detail__v">{property.contact_name ?? "—"}</div>
               {property.contact_phone && (
@@ -2035,6 +2038,30 @@ export function PropertyDetailDialog({
                 {property.needs_review ? "The part of the message about this property" : "Description"}
               </div>
               <div className="detail__v">{property.description}</div>
+            </div>
+          )}
+
+          {property.extra_notes && (
+            <div className="detail__block">
+              <div className="detail__k">Extra</div>
+              <div className="detail__v">{property.extra_notes}</div>
+            </div>
+          )}
+
+          {/* Internal only — this dashboard is staff-facing. The pin is not
+              in MatchedProperty, in the public LandingPage models, or in any
+              message template, so this is one of only two places it is ever
+              rendered (see PropertyRecord.location_url). */}
+          {property.location_url && (
+            <div className="detail__block">
+              <div className="detail__k">
+                <IconPin size={11} /> Location link <span className="faint">· internal only</span>
+              </div>
+              <div className="detail__v">
+                <a href={property.location_url} target="_blank" rel="noreferrer noopener">
+                  Open map
+                </a>
+              </div>
             </div>
           )}
 

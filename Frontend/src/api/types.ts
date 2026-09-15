@@ -158,6 +158,17 @@ export interface InquiryClientRecord {
   status: string;
   name: string | null;
   email: string | null;
+  /** Where the client lives now — staff-only free text, set from the
+   *  Inquiries page's Add/Edit dialog and nowhere else. */
+  current_address: string | null;
+  /** Staff notes about the client's loan situation. Same staff-only rule. */
+  about_loan: string | null;
+  /** When this client was last followed up with, as an ISO instant (UTC).
+   *  Stamped automatically the moment the post-site-visit follow-up WhatsApp
+   *  message goes out — 24h after a visit is marked complete — and editable
+   *  by hand from the Inquiries page's "Last follow-up" cell. Always shown
+   *  to the user in IST (see lib/formatters.ts's IST helpers). */
+  last_follow_up_dates: string | null;
   purpose: string | null;
   property_type: string | null;
   bhk: string | null;
@@ -219,6 +230,11 @@ export interface AssignedClientSummary {
   budget_max_inr: number | null;
   property_record_id: string;
   property_label: string;
+  /** Whether that id is a property or a builder project — snapshotted with
+   *  the visit, so it stays right even if the listing is later deleted.
+   *  Optional only so a response from before this field existed still
+   *  types; absent means "property". */
+  property_source?: PropertySource;
   /** When this specific visit became active — the per-agent dialog lists
    *  active visits oldest-first using this. Null only for rows written
    *  before this field existed. */
@@ -242,6 +258,9 @@ export interface VisitRecord {
   client_name: string | null;
   property_record_id: string | null;
   property_label: string | null;
+  /** Property or builder project, carried over from the active
+   *  assignment. Absent means "property". */
+  property_source?: PropertySource;
   /** Snapshotted from the active assignment at completion time, so
    *  "Mark as still active" can recreate it without the budget it
    *  carried simply vanishing. Null for rows completed before this
@@ -305,6 +324,13 @@ export interface InquiryStatusResponse {
  */
 export type MatchBucket = "high" | "medium" | "low";
 
+/** What a matched listing is: a property (captured from WhatsApp or added
+ *  on the Properties page) or a builder project (the Builder Projects
+ *  page). Both are matched against client inquiries and broker
+ *  requirements by the same scoring engine; every card says which one it
+ *  is (components/ui/SourceTag.tsx). */
+export type PropertySource = "property" | "builder_project";
+
 export interface MatchedProperty {
   record_id: string;
   score: number;
@@ -324,19 +350,31 @@ export interface MatchedProperty {
   matched_type?: string | null;
   property_type: string | null;
   bhk: string | null;
+  unit_no: string | null;
   society_name: string | null;
   area_name: string | null;
   address: string | null;
   price_text: string | null;
   price_amount_inr: number | null;
   listing_type: "Sale" | "Rent";
-  carpet_area_sqft: number | null;
-  carpet_area_unit: string | null;
+  area_sqft: number | null;
+  area_vaar: number | null;
+  furnishing: string | null;
   contact_name: string | null;
   contact_phone: string | null;
   description: string | null;
   review_status: "accepted" | "outsider";
   needs_review: boolean;
+  /** Property or builder project — decided by the backend from the live
+   *  listing each time a result is built. A builder project is always
+   *  "accepted" (filed with Main) and has no Main/Outsider move. Absent on
+   *  a result from before this field existed, which means "property". */
+  property_source?: PropertySource;
+  /* Deliberately no `location_url` here, and it must stay that way — this is
+     the shape the WhatsApp share and agent hand-off messages are built from
+     (lib/propertyShareTemplate.ts, lib/handoffTemplate.ts), so the internal
+     map pin would walk straight out to clients and agents. The backend's
+     MatchedProperty doesn't return it either. */
 }
 
 /** Mirrors Backend/Model/ClientPropertyMatchingModel/match_counts.py —
@@ -457,18 +495,32 @@ export interface PropertyRecord {
   source_message_id: string;
   property_type: string | null;
   bhk: string | null;
+  /** The unit's own number inside its building. The client's two
+   *  spreadsheets call this "unit_no" and "flat_no"; one field, one meaning,
+   *  shown everywhere as "Unit / Flat number". */
+  unit_no: string | null;
+  /** Their two spreadsheets call this "society_name" and "building_name" —
+   *  again one field, shown as "Society / Building name". */
   society_name: string | null;
   area_name: string | null;
   address: string | null;
-  carpet_area_sqft: number | null;
-  carpet_area_unit: string | null;
+  /** The area in whichever unit the listing used. Two separate fields, never
+   *  converted into one another: a number only means something beside its own
+   *  unit, and 1200 sqft must never read as 1200 vaar. Usually exactly one is
+   *  set; both only when the listing itself quoted both. */
+  area_sqft: number | null;
+  area_vaar: number | null;
   /** The "super built" area as a person typed it ("1850 sq ft") — set only
    *  in the Add/Edit dialog, never extracted from WhatsApp by the LLM. */
   super_built: string | null;
+  /** "Unfurnished" | "Semi furnished" | "Fully furnished", or null when
+   *  unknown — a string rather than a union so an unexpected stored value
+   *  still renders instead of breaking the type. */
+  furnishing: string | null;
+  /** The TOTAL price. There is no per-unit rate field: a rate quoted per
+   *  sqft/vaar is used server-side to derive this total and then dropped. */
   price_text: string | null;
   price_amount_inr: number | null;
-  price_per_unit_text: string | null;
-  price_per_unit_amount_inr: number | null;
   listing_type: "Sale" | "Rent";
   contact_name: string | null;
   contact_phone: string | null;
@@ -481,6 +533,23 @@ export interface PropertyRecord {
   image_urls: string[];
   /** Accurate on every response, unlike image_urls above. */
   image_count: number;
+  /** A map/pin link to the property — INTERNAL ONLY. Shown in this staff
+   *  dashboard and nowhere else: it is absent from MatchedProperty, from the
+   *  public LandingPage models, and from every WhatsApp/Instagram message
+   *  template. Never add it to a share message, a hand-off message or the
+   *  public site — a pin is the one field that lets someone reach a property
+   *  without the broker. */
+  location_url: string | null;
+  /** Whether a video of this property exists (a yes/no in the client's own
+   *  records, not a link). */
+  video_available: boolean;
+  /** The client's free-text "Extra" column — human-only, never written by
+   *  the LLM, which uses `description` for its own summary. */
+  extra_notes: string | null;
+  /** The client's "AVL or Not" toggle. Distinct from the Sold out tab, which
+   *  removes a closed deal from the table entirely; this is the softer "off
+   *  the market for now" flag. */
+  is_available: boolean;
   group_name: string;
   chat_type: "group" | "personal";
   sender_name: string;
@@ -557,16 +626,16 @@ export interface BuilderProjectRecord {
   record_id: string;
   property_type: string | null;
   bhk: string | null;
+  unit_no: string | null;
   society_name: string | null;
   area_name: string | null;
   address: string | null;
-  carpet_area_sqft: number | null;
-  carpet_area_unit: string | null;
+  area_sqft: number | null;
+  area_vaar: number | null;
   super_built: string | null;
+  furnishing: string | null;
   price_text: string | null;
   price_amount_inr: number | null;
-  price_per_unit_text: string | null;
-  price_per_unit_amount_inr: number | null;
   listing_type: "Sale" | "Rent";
   contact_name: string | null;
   contact_phone: string | null;
@@ -577,6 +646,11 @@ export interface BuilderProjectRecord {
   image_urls: string[];
   /** Accurate on every response. */
   image_count: number;
+  /** Internal only, exactly as on a property — see PropertyRecord.location_url. */
+  location_url: string | null;
+  video_available: boolean;
+  extra_notes: string | null;
+  is_available: boolean;
   created_at: string | null;
   updated_at: string | null;
   /** When it was added, pre-formatted IST per the 12h/24h setting. */

@@ -46,6 +46,7 @@ def upsert_client(
     defer_recompute: bool = False,
     photo_url: Optional[str] = None,
     update_photo: bool = False,
+    update_staff_fields: bool = False,
 ) -> ClientRecord:
     """`previous` is this client's state BEFORE this write, and is only ever
     an optimisation: callers that have already read the record (the
@@ -68,12 +69,20 @@ def upsert_client(
     dialog ever passes it — see Database/client_models.py's ClientRow.photo_url
     for why every other caller must leave the photo alone, which they do by
     simply not passing it.
+
+    `update_staff_fields=True` does the same for the staff-only client
+    details (current address, loan notes). Same single caller, same reason:
+    every other write path builds a fresh record that knows nothing about
+    them, and would otherwise blank them. See
+    Database/client_repository.py's PRESERVED_FIELDS.
     """
     if previous is None:
         previous = get_client_by_phone(record.phone)
 
     if is_client_database_configured():
-        saved = client_repository.upsert_client(record, photo_url=photo_url, update_photo=update_photo)
+        saved = client_repository.upsert_client(
+            record, photo_url=photo_url, update_photo=update_photo, update_staff_fields=update_staff_fields
+        )
     else:
         global _version_counter
         _version_counter += 1
@@ -84,6 +93,16 @@ def upsert_client(
         updates = {}
         if previous is not None and previous.requirement_submission_count > record.requirement_submission_count:
             updates["requirement_submission_count"] = previous.requirement_submission_count
+        # The in-memory mirror of the database path's PRESERVED_FIELDS rule.
+        # This backend stores the whole ClientRecord, so without this a write
+        # from the public form (which builds a fresh record) would blank the
+        # staff-only fields here while the database path correctly kept them
+        # — two backends quietly disagreeing about the very fields the rule
+        # exists to protect. last_follow_up_dates is carried over ALWAYS, the
+        # same way the database never writes it from an upsert at all.
+        if previous is not None:
+            carried = client_repository.PRESERVED_FIELDS if not update_staff_fields else (client_repository.FOLLOW_UP_FIELD,)
+            updates.update({name: getattr(previous, name) for name in carried})
         if update_photo:
             if photo_url:
                 _client_photos[record.phone] = photo_url
@@ -310,6 +329,29 @@ def assign_agent(phone: str, agent_id: Optional[str]) -> Optional[ClientRecord]:
     if record is None:
         return None
     return upsert_client(record.model_copy(update={"assigned_agent_id": agent_id}))
+
+
+def set_last_follow_up(phone: str, when: Optional[datetime]) -> Optional[ClientRecord]:
+    """Records when this client was last followed up with — None clears it.
+    Returns None when there is no client for this number.
+
+    Two callers, and deliberately no others: the automatic post-visit
+    follow-up (Service/AgentManagementService/visit_reminder_service.py),
+    which stamps the moment its WhatsApp message actually went out, and the
+    Inquiries page's own date/time picker for a follow-up that happened some
+    other way. Never goes through upsert_client — this is one column, and
+    keeping it that way is what stops a save of unrelated details from
+    overwriting a stamp (see Database/client_repository.set_last_follow_up)."""
+    if is_client_database_configured():
+        return client_repository.set_last_follow_up(phone, when)
+    record = _clients.get(phone)
+    if record is None:
+        return None
+    global _version_counter
+    _version_counter += 1
+    updated = record.model_copy(update={client_repository.FOLLOW_UP_FIELD: when})
+    _clients[phone] = updated
+    return updated
 
 
 def mark_handoff_sent(phone: str) -> Optional[ClientRecord]:

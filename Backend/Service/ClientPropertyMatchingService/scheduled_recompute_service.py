@@ -28,10 +28,11 @@ import threading
 import time
 from datetime import datetime, timedelta, timezone
 
+from Database import settings_repository
+from Database.session import is_database_configured
 from Middleware import step_logger
 from Service.BrokerRequirementService import requirement_matching_service
-from Service.ClientPropertyMatchingService import matching_service
-from Service.WhatsAppDataFetchingService import property_vector_store
+from Service.ClientPropertyMatchingService import match_candidates, matching_service
 from Service.WhatsAppInquiryHandlingService import client_store
 
 # Fixed +5:30 offset, not zoneinfo("Asia/Kolkata") — IST has no DST, so a
@@ -42,10 +43,19 @@ _RUN_HOUR_IST = 6
 # Same "effectively all clients" convention already used by
 # Service/AgentManagementService/agent_store.py's own get_all_clients call.
 _ALL_CLIENTS_LIMIT = 5000
-# Matches matching_service._MAX_PROPERTIES_SCORED — the same ceiling a full
-# recompute uses, so an incremental pass can never consider a narrower set
-# of properties than the full pass it is standing in for.
-_ALL_PROPERTIES_LIMIT = 5000
+# The listings an incremental pass considers come from match_candidates —
+# the same source and the same ceilings a full recompute uses, so an
+# incremental pass can never consider a narrower set than the full pass it
+# is standing in for.
+
+# app_settings key recording that the one-time builder-project pass (see
+# start_builder_project_introduction_in_background) has completed. Written
+# only after a pass with no failures, so a failed or interrupted one simply
+# runs again on the next start.
+_BUILDER_PROJECT_INTRODUCTION_KEY = "builder_project_matching_v1"
+# How long after startup that pass waits before doing anything heavy, so it
+# never competes with the WhatsApp connections and the first page loads.
+_BUILDER_PROJECT_INTRODUCTION_DELAY_SECONDS = 120
 
 
 def start_daily_recompute_in_background() -> None:
@@ -53,8 +63,99 @@ def start_daily_recompute_in_background() -> None:
     thread.start()
     step_logger.info(
         f"Daily match recompute scheduled for {_RUN_HOUR_IST:02d}:00 IST every day "
-        "(re-scores every existing client, then every broker requirement, against new/edited properties)."
+        "(re-scores every existing client, then every broker requirement, against new/edited properties "
+        "and builder projects)."
     )
+    start_builder_project_introduction_in_background()
+
+
+def start_builder_project_introduction_in_background() -> None:
+    """Builder projects are matched like properties from now on — a new or
+    edited one reaches every client and requirement through the same
+    incremental catch-up a property does. What that catch-up can NOT reach
+    are the builder projects saved before this: each is older than every
+    existing watermark, so for an existing client or requirement it would
+    only ever appear after a full re-score.
+
+    This closes that gap exactly once: every existing client and every
+    already-scored broker requirement is scored against the builder projects
+    ONLY (never re-scoring a single property), and the result merged into
+    what is stored — without moving any watermark, so properties changed
+    since keep being caught up exactly as before. Recorded in app_settings
+    once it completes cleanly, so every later start costs one primary-key
+    lookup and nothing else.
+
+    Database mode only: without DATABASE_URL nothing survives a restart, so
+    there is nothing older than the current process to catch up. On its own
+    one-shot daemon thread, so neither startup nor the 6 AM schedule ever
+    waits for it."""
+    if not is_database_configured():
+        return
+    threading.Thread(target=_introduce_builder_projects_once, name="builder-project-matching-intro", daemon=True).start()
+
+
+def _introduce_builder_projects_once() -> None:
+    try:
+        if settings_repository.get_value(_BUILDER_PROJECT_INTRODUCTION_KEY):
+            return
+    except Exception as exc:  # noqa: BLE001
+        step_logger.error(f"[Matching] Could not check the builder-project matching flag (retried next start): {exc!r}")
+        return
+    time.sleep(_BUILDER_PROJECT_INTRODUCTION_DELAY_SECONDS)
+    try:
+        client_failures, clients_done = _score_builder_projects_for_existing_clients()
+        requirements_done, requirement_rows, requirement_failures = (
+            requirement_matching_service.score_builder_projects_for_scored_requirements()
+        )
+        if client_failures or requirement_failures:
+            step_logger.warn(
+                f"[Matching] Builder projects were scored for {clients_done} client(s) and {requirements_done} "
+                f"requirement(s), but {client_failures + requirement_failures} failed — the pass runs again on the "
+                "next start."
+            )
+            return
+        settings_repository.set_value(_BUILDER_PROJECT_INTRODUCTION_KEY, {"done": True})
+        step_logger.success(
+            f"[Matching] Existing builder projects are now matched — scored for {clients_done} client(s) and "
+            f"{requirements_done} broker requirement(s) ({requirement_rows} requirement match(es) written)."
+        )
+    except Exception as exc:  # noqa: BLE001
+        step_logger.error(
+            f"[Matching] Builder-project matching pass failed ({type(exc).__name__}): {exc!r} — it runs again on "
+            "the next start."
+        )
+
+
+def _score_builder_projects_for_existing_clients() -> tuple:
+    """(failures, clients scored) — every registered client scored against
+    the builder projects only, merged into their cached matches through the
+    same incremental path the daily run uses (rescore_changed_properties).
+    Their daily watermark (clients.matches_computed_at) is deliberately left
+    alone, for the reason given in start_builder_project_introduction_in_background."""
+    candidates = match_candidates.get_builder_projects()
+    if not candidates:
+        return 0, 0
+    clients = client_store.get_all_clients(limit=_ALL_CLIENTS_LIMIT)
+    if not clients:
+        return 0, 0
+    stored_vectors = client_store.get_requirement_embeddings([client.phone for client in clients])
+    computed_at = datetime.now(timezone.utc)
+    failures = 0
+    scored = 0
+    for client in clients:
+        if not matching_service.has_requirements(client):
+            continue
+        try:
+            matching_service.rescore_changed_properties(
+                client, candidates, computed_at, stored_vector=stored_vectors.get(client.phone)
+            )
+            scored += 1
+        except Exception as exc:  # noqa: BLE001
+            failures += 1
+            step_logger.error(
+                f"[Matching] Builder projects could not be scored for {client.phone} ({type(exc).__name__}): {exc!r}"
+            )
+    return failures, scored
 
 
 def _daily_loop() -> None:
@@ -134,7 +235,7 @@ def _recompute_all_clients() -> None:
     for client in clients:
         try:
             since = watermarks.get(client.phone)
-            changed = property_vector_store.get_properties_changed_since(since, limit=_ALL_PROPERTIES_LIMIT)
+            changed = match_candidates.get_changed_since(since)
             if not changed:
                 # Nothing has arrived or been edited since this client was
                 # last scored — their cached matches are already current, so

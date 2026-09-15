@@ -6,7 +6,7 @@ DATABASE_URL is set.
 from __future__ import annotations
 
 from datetime import datetime
-from typing import Dict, List, Optional, Sequence, Tuple
+from typing import Dict, List, Mapping, Optional, Sequence, Tuple
 
 from sqlalchemy import select, update
 
@@ -38,6 +38,7 @@ def create(
     property_record_id: str,
     property_label: str,
     scheduled_at: Optional[datetime] = None,
+    property_source: Optional[str] = None,
 ) -> ActiveAssignment:
     """Idempotent: this exact (agent, client, property) triple staying
     active across a resent hand-off is a no-op, not a duplicate row (see
@@ -64,6 +65,7 @@ def create(
             budget_max_inr=budget_max_inr,
             property_record_id=property_record_id,
             property_label=property_label,
+            property_source=property_source,
             scheduled_at=scheduled_at,
         )
         session.add(row)
@@ -80,6 +82,7 @@ def create_many(
     budget_min_inr: Optional[float],
     budget_max_inr: Optional[float],
     items: Sequence[Tuple[str, str, Optional[datetime]]],
+    property_sources: Optional[Mapping[str, str]] = None,
 ) -> None:
     """The hand-off's write: every (property_record_id, label, scheduled_at)
     one agent was just given for one client, in ONE transaction — one
@@ -89,7 +92,12 @@ def create_many(
     Same idempotency as create() above: a triple that is already active
     stays one row. The only thing a resend can change on it is the booked
     time, and only when a time was actually passed — a resend without one
-    never wipes a time set earlier."""
+    never wipes a time set earlier.
+
+    `property_sources` maps a record id to "property"/"builder_project" for
+    the new rows' snapshot (see AgentAssignmentRow.property_source); an id
+    missing from it is stored as NULL, which reads as "property"."""
+    sources = property_sources or {}
     wanted: Dict[str, Tuple[str, Optional[datetime]]] = {}
     for property_record_id, label, scheduled_at in items:
         wanted[property_record_id] = (label, scheduled_at)
@@ -122,6 +130,7 @@ def create_many(
                     budget_max_inr=budget_max_inr,
                     property_record_id=property_record_id,
                     property_label=label,
+                    property_source=sources.get(property_record_id),
                     scheduled_at=scheduled_at,
                 )
             )
@@ -137,6 +146,7 @@ def restore_unless_active(
     property_record_id: str,
     property_label: str,
     scheduled_at: Optional[datetime],
+    property_source: Optional[str] = None,
 ) -> Optional[ActiveAssignment]:
     """agent_store.reopen_visit's write. Recreates the assignment a
     completed visit came from — unless this client already has an active
@@ -163,6 +173,7 @@ def restore_unless_active(
             budget_max_inr=budget_max_inr,
             property_record_id=property_record_id,
             property_label=property_label,
+            property_source=property_source,
             scheduled_at=scheduled_at,
         )
         session.add(row)
@@ -286,6 +297,12 @@ def mark_reminders_sent(sent: Sequence[Tuple[int, datetime]]) -> None:
             )
 
 
+def _source(value: Optional[str]) -> str:
+    """A stored property_source as the model's value — NULL (every row
+    written before builder projects could be assigned) is a property."""
+    return value or "property"
+
+
 def _to_pydantic(row: AgentAssignmentRow) -> ActiveAssignment:
     data = {name: getattr(row, name) for name in _COLUMNS}
-    return ActiveAssignment(**data, created_at=row.created_at)
+    return ActiveAssignment(**data, property_source=_source(row.property_source), created_at=row.created_at)

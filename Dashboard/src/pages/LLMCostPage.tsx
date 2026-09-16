@@ -2,10 +2,12 @@ import { useCallback, useEffect, useMemo, useState } from "react";
 import { llmUsageApi } from "../api/llmUsageApi";
 import type { FeedResponse, LLMHourlyItem, LLMUsageMetrics, LLMUsageOverview } from "../api/types";
 import { useFeed } from "../hooks/useFeed";
+import { useTabWatermarks } from "../hooks/useTabWatermarks";
 import { formatInt } from "../lib/formatters";
+import { useToast } from "../components/Toast";
 import { groupByHour, HourlyCards } from "../components/HourlyCards";
 import { Badge, Button, EmptyState, Panel, SkeletonRows } from "../components/Primitives";
-import { IconCpu, IconGrid, IconInbox, IconInfo, IconRefresh, IconUsers } from "../components/Icons";
+import { IconCpu, IconGrid, IconInbox, IconInfo, IconRefresh, IconTrash, IconUsers } from "../components/Icons";
 
 interface SiteTab {
   id: string;
@@ -106,7 +108,9 @@ function modelsOf(rows: LLMHourlyItem[]): { model: string; metrics: LLMUsageMetr
 }
 
 export default function LLMCostPage() {
+  const toast = useToast();
   const [activeSite, setActiveSite] = useState(SITE_TABS[0].id);
+  const { watermarkFor, clear, version } = useTabWatermarks("llm-clear");
 
   const feed = useFeed<LLMHourlyItem, FeedResponse<LLMHourlyItem>>({
     storageKey: "llm-hourly-v1",
@@ -118,7 +122,15 @@ export default function LLMCostPage() {
     intervalMs: 20_000,
   });
 
-  const allHours = useMemo(() => groupByHour(feed.items, (item) => item.hour), [feed.items]);
+  // Each item is kept against its OWN site's cutoff — clearing "Property"
+  // can never touch a "Requirement" or "Intent" row, because they're
+  // filtered against a different key entirely (see useTabWatermarks).
+  const visibleItems = useMemo(
+    () => feed.items.filter((item) => item.hour >= watermarkFor(item.site)),
+    // eslint-disable-next-line react-hooks/exhaustive-deps
+    [feed.items, watermarkFor, version],
+  );
+  const allHours = useMemo(() => groupByHour(visibleItems, (item) => item.hour), [visibleItems]);
   const callsBySite = useMemo(() => {
     const counts: Record<string, number> = {};
     for (const group of allHours) {
@@ -149,6 +161,15 @@ export default function LLMCostPage() {
   useEffect(() => {
     void loadOverview();
   }, [loadOverview, callsIn48h]);
+
+  function clearActiveSite() {
+    clear(activeSite);
+    toast.push({
+      tone: "ok",
+      title: "Cleared",
+      message: `${currentTab.label}'s last-48-hours view is back to 0. All-time totals were kept, and the other tabs are untouched.`,
+    });
+  }
 
   const currentTab = SITE_TABS.find((tab) => tab.id === activeSite) ?? SITE_TABS[0];
   const allTime = overview?.sites[activeSite]?.totals;
@@ -216,14 +237,25 @@ export default function LLMCostPage() {
           </nav>
 
           <Panel className="stack stack-4">
-            <div>
-              <div className="section-head__eyebrow" style={{ marginBottom: 6 }}>
-                <IconCpu size={12} /> {currentTab.label} — last 48 hours
+            <div className="row-between">
+              <div>
+                <div className="section-head__eyebrow" style={{ marginBottom: 6 }}>
+                  <IconCpu size={12} /> {currentTab.label} — last 48 hours
+                </div>
+                <h2>Every model combined</h2>
+                <p className="section-head__sub" style={{ marginTop: 6 }}>
+                  {currentTab.blurb}
+                </p>
               </div>
-              <h2>Every model combined</h2>
-              <p className="section-head__sub" style={{ marginTop: 6 }}>
-                {currentTab.blurb}
-              </p>
+              <Button
+                size="sm"
+                tone="danger"
+                onClick={clearActiveSite}
+                icon={<IconTrash size={15} />}
+                title={`Clears only ${currentTab.label}'s last-48-hours view — all-time totals and the other tabs are kept`}
+              >
+                Clear this tab
+              </Button>
             </div>
             <MetricsGrid metrics={siteTotals} />
             {allTime && (

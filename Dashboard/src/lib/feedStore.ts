@@ -69,3 +69,16 @@ export async function saveFeed<T>(key: string, value: StoredFeed<T>): Promise<vo
     // Storage full or blocked: the page keeps working, it just re-fetches next time.
   }
 }
+
+/** Drops this browser's copy of one feed entirely — used by a page's Clear
+ *  button alongside the matching backend reset, so a stale local copy can
+ *  never repaint numbers the backend just zeroed. */
+export async function deleteFeed(key: string): Promise<void> {
+  const database = await openDatabase();
+  if (!database) return;
+  try {
+    database.transaction(STORE_NAME, "readwrite").objectStore(STORE_NAME).delete(key);
+  } catch {
+    // Storage full or blocked: nothing to clean up.
+  }
+}

@@ -36,6 +36,7 @@ from typing import List, Optional, Tuple
 
 import httpx
 
+from Agent.WhatsAppDataFetchingAgent import glm_gate
 from Config.settings import get_settings
 from Middleware import step_logger
 from Service.LLMUsageService import llm_usage_service
@@ -44,6 +45,15 @@ _client: Optional[httpx.Client] = None
 
 _MAX_ATTEMPTS = 4
 _RETRY_BACKOFF_SECONDS = [3.0, 10.0, 30.0]
+
+# A 429 is counted separately from the attempts above, and allowed more of
+# them, because it is a rejection rather than a failure: Z.ai turned the
+# request away before the model ran, so it cost no tokens and proves nothing
+# about the request itself. Spending the 4-attempt budget on rate limits was
+# what abandoned real batches after ~43 seconds of a rate-limit window that
+# routinely lasts longer than that. Paired with the process-wide gate in
+# glm_gate.py, which is what stops us causing the 429 in the first place.
+_MAX_RATE_LIMIT_RETRIES = 6
 _MAX_STREAM_SECONDS = 600.0
 _MAX_CONTENT_CHARS = 60_000
 _LOOP_CHECK_EVERY_CHUNKS = 150
@@ -220,27 +230,101 @@ def _record_usage(site: str, model: str, usage: Optional[dict]) -> Tuple[int, in
 
 
 def post_with_retries(
-    request_body: dict, description: str, site: str, usage_sink: Optional[List[dict]] = None
+    request_body: dict,
+    description: str,
+    site: str,
+    usage_sink: Optional[List[dict]] = None,
+    failure: Optional[dict] = None,
 ) -> Optional[str]:
     """Sends `request_body` and returns the model's raw reply text, retrying
-    up to _MAX_ATTEMPTS times on transient failures only. Returns None once
-    every attempt has failed. `description` is used purely in log lines
-    (e.g. "a requirement batch of 4"). `site` identifies the calling pipeline
-    stage for the LLM Cost dashboard (e.g. "requirement") — recorded once,
-    only on a successful completion; a failed/retried attempt records
-    nothing, since no usage is known for it.
+    on transient failures only. Returns None once every attempt has failed.
+    `description` is used purely in log lines (e.g. "a requirement batch of
+    4"). `site` identifies the calling pipeline stage for the LLM Cost
+    dashboard (e.g. "requirement") — recorded once, only on a successful
+    completion; a failed/retried attempt records nothing, since no usage is
+    known for it.
+
+    Every request goes out through glm_gate.slot, the process-wide gate that
+    keeps this backend from having several GLM calls in flight at once. That
+    is the actual fix for the repeated 429s: they were our own concurrent
+    batches colliding, not Z.ai being unavailable.
+
+    Two separate budgets, because the two failures are not alike:
+      - _MAX_ATTEMPTS for failures that reached the model (a drop, a timeout,
+        an unusable stream) — each one costs tokens, so the budget is small;
+      - _MAX_RATE_LIMIT_RETRIES for HTTP 429, which is a free rejection and
+        gets a longer, server-directed wait (see glm_gate.note_rate_limited).
 
     `usage_sink`, when given, receives one {"input", "output",
     "prompt_chars"} entry for the successful call. The caller knows which
     messages the call carried and uses it to split the tokens per message
     for the Dashboard's Message to Model tab; leaving it out changes
-    nothing."""
+    nothing.
+
+    `failure`, when given, has ["reason"] set to a short human explanation if
+    this returns None — the caller passes it on to the durable retry queue so
+    a held batch records WHY it is waiting."""
     client = _get_client()
     model = request_body.get("model") or get_settings().zai_model
 
-    for attempt in range(1, _MAX_ATTEMPTS + 1):
+    attempt = 0
+    rate_limit_retries = 0
+
+    while True:
         try:
-            content, usage = _stream_completion(client, request_body)
+            with glm_gate.slot(description):
+                content, usage = _stream_completion(client, request_body)
+        except httpx.HTTPStatusError as exc:
+            status = exc.response.status_code
+            if status == 429:
+                rate_limit_retries += 1
+                explanation = glm_gate.describe(exc.response)
+                out_of_allowance = glm_gate.is_daily_limit(exc.response)
+                if out_of_allowance or rate_limit_retries > _MAX_RATE_LIMIT_RETRIES:
+                    step_logger.error(
+                        f"GLM request for {description} is still rate-limited after "
+                        f"{rate_limit_retries - 1} retr(ies) — {explanation}. Handing this batch to "
+                        "the durable retry queue, which will keep trying until it goes through."
+                    )
+                    return _failed(failure, f"HTTP 429 — {explanation}")
+                wait_for = glm_gate.note_rate_limited(exc.response, rate_limit_retries)
+                step_logger.warn(
+                    f"GLM request for {description} was rate-limited (HTTP 429, rate-limit retry "
+                    f"{rate_limit_retries}/{_MAX_RATE_LIMIT_RETRIES}) — {explanation}. Pausing every "
+                    f"GLM request for {wait_for:.0f}s, then trying again. Nothing is dropped."
+                )
+                time.sleep(wait_for)
+                continue
+            attempt += 1
+            if status < 500 or attempt >= _MAX_ATTEMPTS:
+                step_logger.error(
+                    f"GLM request failed for {description} (attempt {attempt}/{_MAX_ATTEMPTS}, HTTP {status}): {exc!r}"
+                )
+                return _failed(failure, f"HTTP {status} from Z.ai")
+            step_logger.warn(
+                f"GLM request got HTTP {status} for {description} (attempt {attempt}/{_MAX_ATTEMPTS}) — "
+                "retrying, this is a Z.ai-side status that's worth another try, not a request we're sending wrong."
+            )
+        except (httpx.TimeoutException, httpx.TransportError, TransientCompletionError) as exc:
+            attempt += 1
+            if attempt >= _MAX_ATTEMPTS:
+                step_logger.error(
+                    f"GLM request failed for {description} (attempt {attempt}/{_MAX_ATTEMPTS}): {exc!r}"
+                )
+                return _failed(failure, f"the request kept timing out or dropping: {exc!r}")
+            step_logger.warn(
+                f"GLM request timed out/dropped for {description} (attempt {attempt}/{_MAX_ATTEMPTS}) — "
+                f"retrying rather than losing these records: {exc!r}"
+            )
+        except Exception as exc:  # noqa: BLE001
+            # Anything else (bad API key, DNS failure, ...) will fail the
+            # exact same way on every retry — burning more paid calls to
+            # confirm that would just be wasted spend. It still goes to the
+            # durable queue: a key or a DNS entry gets fixed, and the batch
+            # then goes through by itself.
+            step_logger.error(f"GLM request failed for {description}: {exc!r}")
+            return _failed(failure, f"the request could not be sent: {exc!r}")
+        else:
             input_tokens, output_tokens = _record_usage(site, model, usage)
             if usage_sink is not None:
                 usage_sink.append(
@@ -253,35 +337,13 @@ def post_with_retries(
                     }
                 )
             return content
-        except httpx.HTTPStatusError as exc:
-            status = exc.response.status_code
-            transient = status == 429 or status >= 500
-            if not transient or attempt == _MAX_ATTEMPTS:
-                step_logger.error(
-                    f"GLM request failed for {description} (attempt {attempt}/{_MAX_ATTEMPTS}, HTTP {status}): {exc!r}"
-                )
-                return None
-            step_logger.warn(
-                f"GLM request got HTTP {status} for {description} (attempt {attempt}/{_MAX_ATTEMPTS}) — "
-                "retrying, this is a Z.ai-side status that's worth another try, not a request we're sending wrong."
-            )
-        except (httpx.TimeoutException, httpx.TransportError, TransientCompletionError) as exc:
-            if attempt == _MAX_ATTEMPTS:
-                step_logger.error(
-                    f"GLM request failed for {description} (attempt {attempt}/{_MAX_ATTEMPTS}): {exc!r}"
-                )
-                return None
-            step_logger.warn(
-                f"GLM request timed out/dropped for {description} (attempt {attempt}/{_MAX_ATTEMPTS}) — "
-                f"retrying rather than losing these records: {exc!r}"
-            )
-        except Exception as exc:  # noqa: BLE001
-            # Anything else (bad API key, DNS failure, ...) will fail the
-            # exact same way on every retry — burning more paid calls to
-            # confirm that would just be wasted spend.
-            step_logger.error(f"GLM request failed for {description}: {exc!r}")
-            return None
 
-        time.sleep(_RETRY_BACKOFF_SECONDS[attempt - 1])
+        time.sleep(_RETRY_BACKOFF_SECONDS[min(attempt, len(_RETRY_BACKOFF_SECONDS)) - 1])
 
+
+def _failed(failure: Optional[dict], reason: str) -> None:
+    """Records why the call gave up, for the durable retry queue's log, and
+    returns None so callers can `return _failed(...)` in one line."""
+    if failure is not None:
+        failure["reason"] = reason
     return None

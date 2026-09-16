@@ -9,7 +9,7 @@ design — all of the logic lives in those services.
 
 from typing import Optional
 
-from fastapi import APIRouter, Response
+from fastapi import APIRouter, HTTPException, Response
 
 from Model.LLMUsageModel.llm_usage import LLMUsageOverview
 from Service.BackendUsageService import usage_feed
@@ -30,6 +30,17 @@ def get_hourly(cursor: Optional[str] = None) -> Response:
     """Per-IST-hour, per-site, per-model token buckets changed after
     `cursor`, last 48 hours (see usage_feed for the cursor contract)."""
     return usage_feed.json_response(llm_usage_service.get_hourly_changes(cursor))
+
+
+@router.post("/hourly/{site}/reset", status_code=204)
+def reset_hourly(site: str) -> None:
+    """Clears the 48-hour view for one call site (the LLM Cost tab's
+    per-tab Clear button). The all-time counters under /overview are a
+    separate, permanent cost record and are never touched by this."""
+    try:
+        llm_usage_service.reset_hourly_for_site(site)
+    except ValueError:
+        raise HTTPException(status_code=404, detail=f"No such site: {site!r}")
 
 
 @router.get("/messages")

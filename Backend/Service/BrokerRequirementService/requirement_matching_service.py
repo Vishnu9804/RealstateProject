@@ -104,8 +104,11 @@ _DAILY_REQUIREMENTS_WINDOW = 1000
 # record_id -> (the exact text that was embedded, the resulting vector).
 # Keyed on the TEXT, not just the id, so an edited requirement re-embeds
 # instead of silently reusing the vector of what it used to say. Bounded for
-# the same reason every other in-process cache here is.
-_MAX_CACHED_VECTORS = 500
+# the same reason every other in-process cache here is. Kept small on
+# purpose: a miss just re-embeds one short string (cheap), so this cache
+# only needs to cover a dialog being reopened in quick succession, not every
+# requirement ever scored.
+_MAX_CACHED_VECTORS = 150
 _vector_cache: Dict[str, Tuple[str, List[float]]] = {}
 
 

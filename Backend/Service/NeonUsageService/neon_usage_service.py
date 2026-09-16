@@ -363,6 +363,22 @@ def flush() -> None:
             _persist_locked()
 
 
+def reset() -> None:
+    """Clears every tracked wake-up window — the Neon DB tab's Clear button.
+    CU Hours and Network Transfer are two views of the same windows (see the
+    module docstring), so this is one whole-feed reset, triggered from
+    either tab. Purely this module's own local record: it never opens a
+    database connection, so clearing it cannot affect — and has no effect
+    on — Neon's own billing or the actual database."""
+    global _version, _dirty
+    with _lock:
+        _windows.clear()
+        _version += 1
+        _dirty = True
+        _persist_locked()
+    step_logger.info("Neon usage windows cleared from the local record.")
+
+
 def load_from_disk() -> None:
     """Called once at startup (Backend/main.py). Never raises — an unreadable
     file starts this process empty and is left untouched on disk."""

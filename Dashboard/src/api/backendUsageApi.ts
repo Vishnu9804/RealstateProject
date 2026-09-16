@@ -6,4 +6,7 @@ import type { CpuResponse, MemorySnapshot } from "./types";
 export const backendUsageApi = {
   getMemory: (): Promise<MemorySnapshot> => apiClient.get("/backend-usage/memory"),
   getCpu: (cursor: string | null): Promise<CpuResponse> => apiClient.get(withCursor("/backend-usage/cpu", cursor)),
+  /** Clears the 48-hour vCPU view. RAM has no reset: it's a live snapshot
+   *  of what the process holds right now, not an accumulated history. */
+  resetCpu: (): Promise<void> => apiClient.post("/backend-usage/cpu/reset"),
 };

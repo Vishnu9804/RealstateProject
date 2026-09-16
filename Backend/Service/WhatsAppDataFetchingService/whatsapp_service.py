@@ -71,6 +71,7 @@ from Service.BrokerRequirementService import requirement_filter_service, require
 from Service.BuilderProjectService import builder_project_service
 from Service.WhatsAppDataFetchingService import (
     area_filter_service,
+    pending_batch_store,
     property_pipeline_service,
     soldout_property_service,
     whatsapp_connection_manager,
@@ -94,6 +95,11 @@ def start_agent_in_background() -> None:
     _message_buffer = MessageBufferService(
         on_batch_ready=property_pipeline_service.handle_batch_ready,
         batch_window_seconds=batch_window_seconds,
+        # Mirrors the buffer to disk on every message. A batch waits here for
+        # up to a full hour before it is worth sending, and without this,
+        # stopping the server during that hour threw away everything in it —
+        # see message_buffer_service's own docstring.
+        pipeline=pending_batch_store.PROPERTY_PIPELINE,
     )
     # Its own instance, not a shared one: same batch size and same window,
     # but an independent counter and an independent timer, so neither
@@ -102,7 +108,14 @@ def start_agent_in_background() -> None:
     _requirement_buffer = MessageBufferService(
         on_batch_ready=requirement_pipeline_service.handle_batch_ready,
         batch_window_seconds=batch_window_seconds,
+        pipeline=pending_batch_store.REQUIREMENT_PIPELINE,
     )
+    # Before the connection manager below, so anything the last run was still
+    # holding is back in its buffer before a single new message can arrive —
+    # restored messages keep the remainder of their original batch window
+    # rather than starting a fresh one.
+    for buffer in (_message_buffer, _requirement_buffer):
+        buffer.restore_from_disk()
     whatsapp_connection_manager.register_intake_handler(handle_intake_message)
     whatsapp_connection_manager.start_agent_in_background()
 
@@ -121,6 +134,12 @@ def get_status() -> dict:
         "qualified_message_count": len(_qualified_messages),
         "buffered_message_count": _message_buffer.pending_count() if _message_buffer else 0,
         "buffered_requirement_message_count": _requirement_buffer.pending_count() if _requirement_buffer else 0,
+        # Batches whose structuring failed and that are waiting to be retried
+        # (see Service/WhatsAppDataFetchingService/pending_batch_store.py).
+        # Normally 0. A number that stays above 0 across several polls means
+        # something is blocking the LLM stage — the messages are safe on
+        # disk, but the cause needs looking at.
+        "pending_retry_batch_count": pending_batch_store.pending_count(),
         "structured_property_count": property_pipeline_service.get_property_count(),
         "broker_requirement_count": requirement_pipeline_service.get_requirement_count(),
         # Re-posted messages recognised by their content fingerprint and

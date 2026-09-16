@@ -110,7 +110,7 @@ from Service.AuthManagementService import user_store
 from Service.AuthManagementService.auth_dependencies import get_current_user
 from Service.PropertySharingService import property_share_template_service
 from Service.ClientPropertyMatchingService import scheduled_recompute_service
-from Service.WhatsAppDataFetchingService import area_filter_service, area_knowledge_service, display_settings_service, whatsapp_service
+from Service.WhatsAppDataFetchingService import area_filter_service, area_knowledge_service, display_settings_service, pending_batch_store, whatsapp_service
 from Service.WhatsAppInquiryHandlingService import inquiry_connection_store, whatsapp_inquiry_service
 from Service.InstagramInquiryHandlingService import instagram_connection_service, instagram_polling_service
 from Service.BackendUsageService import cpu_usage_service
@@ -232,6 +232,14 @@ async def lifespan(_app: FastAPI):
     # Everything this process has used so far is start-up — recorded once for
     # the Backend tab, before any request or background job can run.
     cpu_usage_service.record_startup()
+
+    # Started BEFORE the connections below, so anything a previous run could
+    # not structure (a Z.ai rate-limit window, an outage, a crash mid-batch)
+    # is already being retried by the time new messages start arriving. With
+    # nothing held it is one directory listing every 20s and no other work —
+    # see pending_batch_store's docstring for why captured messages are never
+    # dropped on a failed batch any more.
+    pending_batch_store.start_retry_worker_in_background()
 
     step_logger.step("FastAPI server is up. Launching WhatsApp connections in the background...")
     # whatsapp_service owns wiring the property-message handler AND starting
@@ -391,7 +399,6 @@ app.include_router(user_management_router, prefix="/api")
 app.include_router(whatsapp_router, prefix="/api", dependencies=[Depends(get_current_user)])
 app.include_router(whatsapp_connections_router, prefix="/api", dependencies=[Depends(get_current_user)])
 app.include_router(area_filter_router, prefix="/api", dependencies=[Depends(get_current_user)])
-app.include_router(area_knowledge_router, prefix="/api", dependencies=[Depends(get_current_user)])
 app.include_router(display_settings_router, prefix="/api", dependencies=[Depends(get_current_user)])
 app.include_router(property_router, prefix="/api", dependencies=[Depends(get_current_user)])
 app.include_router(soldout_property_router, prefix="/api", dependencies=[Depends(get_current_user)])
@@ -406,10 +413,14 @@ app.include_router(requirement_matching_router, prefix="/api", dependencies=[Dep
 app.include_router(instagram_router, prefix="/api", dependencies=[Depends(get_current_user)])
 # The Dashboard's usage endpoints: open by default, gated by DASHBOARD_KEY
 # once one is set (see Middleware/dashboard_access.py) — the Message to Model
-# feed carries raw WhatsApp text, so set it before hosting.
+# feed carries raw WhatsApp text, so set it before hosting. area_knowledge_router
+# lives here too, not in the get_current_user group above: it's the Surat
+# Area Knowledge Base tab, which is part of the Dashboard app (no login of
+# its own) rather than the JWT-authenticated Frontend ops tool.
 app.include_router(llm_usage_router, prefix="/api", dependencies=[Depends(require_dashboard_key)])
 app.include_router(neon_usage_router, prefix="/api", dependencies=[Depends(require_dashboard_key)])
 app.include_router(backend_usage_router, prefix="/api", dependencies=[Depends(require_dashboard_key)])
+app.include_router(area_knowledge_router, prefix="/api", dependencies=[Depends(require_dashboard_key)])
 app.include_router(landing_page_router, prefix="/api")
 app.include_router(agent_router, prefix="/api", dependencies=[Depends(get_current_user)])
 

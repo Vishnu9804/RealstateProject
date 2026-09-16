@@ -1,12 +1,14 @@
-import { Fragment, useMemo, useState } from "react";
+import { Fragment, useCallback, useMemo, useState } from "react";
 import { llmUsageApi } from "../api/llmUsageApi";
 import type { FeedResponse, MessageModelEntry } from "../api/types";
 import { useFeed } from "../hooks/useFeed";
+import { useTabWatermarks } from "../hooks/useTabWatermarks";
 import { formatInt } from "../lib/formatters";
 import { formatIstTime, isoToSeconds } from "../lib/ist";
+import { useToast } from "../components/Toast";
 import { groupByHour, HourlyCards } from "../components/HourlyCards";
 import { Badge, Button, EmptyState, Note, Panel, SkeletonRows } from "../components/Primitives";
-import { IconGrid, IconInbox, IconInfo, IconMessage, IconRefresh } from "../components/Icons";
+import { IconGrid, IconInbox, IconInfo, IconMessage, IconRefresh, IconTrash } from "../components/Icons";
 
 type Filter = "all" | "property" | "requirement";
 
@@ -225,7 +227,9 @@ function sumOf(entries: MessageModelEntry[]) {
 }
 
 export default function MessageToModelPage() {
+  const toast = useToast();
   const [filter, setFilter] = useState<Filter>("all");
+  const { watermarkFor, clear, version } = useTabWatermarks("message-model-clear");
 
   const feed = useFeed<MessageModelEntry, FeedResponse<MessageModelEntry>>({
     storageKey: "message-models-v1",
@@ -235,27 +239,49 @@ export default function MessageToModelPage() {
     intervalMs: 30_000,
   });
 
-  const counts = useMemo(() => {
-    const result: Record<Filter, number> = { all: 0, property: 0, requirement: 0 };
-    for (const group of groupByHour(feed.items, (entry) => entry.at)) {
-      for (const entry of group.items) {
-        result.all += 1;
-        result[entry.site] += 1;
-      }
-    }
-    return result;
-  }, [feed.items]);
+  // Three FULLY independent cutoffs — "All messages" is its own watermark,
+  // not a combination of the other two, so clearing any one tab can never
+  // change what another tab shows. An entry cleared from "Property LLM" can
+  // still show up under "All messages" (and vice versa): each tab's view
+  // only ever depends on its own cutoff.
+  const entriesFor = useCallback(
+    (tab: Filter): MessageModelEntry[] =>
+      feed.items.filter(
+        (entry) => (tab === "all" || entry.site === tab) && entry.at >= watermarkFor(tab),
+      ),
+    // eslint-disable-next-line react-hooks/exhaustive-deps
+    [feed.items, watermarkFor, version],
+  );
+
+  const counts = useMemo(
+    (): Record<Filter, number> => ({
+      all: entriesFor("all").length,
+      property: entriesFor("property").length,
+      requirement: entriesFor("requirement").length,
+    }),
+    [entriesFor],
+  );
 
   const groups = useMemo(
     () =>
-      groupByHour(
-        feed.items.filter((entry) => filter === "all" || entry.site === filter),
-        (entry) => entry.at,
-      ).map((group) => ({ start: group.start, items: [...group.items].sort((a, b) => b.at - a.at) })),
-    [feed.items, filter],
+      groupByHour(entriesFor(filter), (entry) => entry.at).map((group) => ({
+        start: group.start,
+        items: [...group.items].sort((a, b) => b.at - a.at),
+      })),
+    [entriesFor, filter],
   );
   const totals = useMemo(() => sumOf(groups.flatMap((group) => group.items)), [groups]);
   const showData = feed.ready || feed.items.length > 0;
+
+  function clearActiveFilter() {
+    clear(filter);
+    const label = FILTERS.find((tab) => tab.id === filter)?.label ?? filter;
+    toast.push({
+      tone: "ok",
+      title: "Cleared",
+      message: `${label}'s count is back to 0. Nothing was deleted — every real message → model record is still stored, and the other tabs are untouched.`,
+    });
+  }
 
   return (
     <div className="stack stack-6">
@@ -298,6 +324,11 @@ export default function MessageToModelPage() {
             of the reply is each message's own extraction. The split is exact in total: one batch's messages always add
             up to what that call was billed, which is also what the LLM Cost tab counts. Stored in this browser once
             fetched; nothing here touches the database.
+            <br />
+            <strong>Clear never deletes a record.</strong> Every row here is the actual property/requirement a
+            message produced, so Clear only moves that tab's own "count from here" line forward — the real
+            message → model record stays stored either way, and clearing one tab never changes what another tab
+            shows.
           </Note>
 
           <nav className="capsule-tabs" aria-label="Which LLM">
@@ -320,6 +351,12 @@ export default function MessageToModelPage() {
               );
             })}
           </nav>
+
+          <div className="row-flex" style={{ justifyContent: "flex-end" }}>
+            <Button size="sm" tone="danger" onClick={clearActiveFilter} icon={<IconTrash size={15} />}>
+              Clear this tab
+            </Button>
+          </div>
 
           <div className="metrics-grid">
             <div className="metric-tile metric-tile--totals">

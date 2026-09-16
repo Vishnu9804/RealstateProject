@@ -27,3 +27,12 @@ def get_cpu(cursor: Optional[str] = None) -> Response:
     """Hourly CPU entries (per endpoint / job) and per-hour process totals
     changed after `cursor`, last 48 hours."""
     return usage_feed.json_response(cpu_usage_service.get_changes(cursor))
+
+
+@router.post("/cpu/reset", status_code=204)
+def reset_cpu() -> None:
+    """Clears the 48-hour vCPU view (the Backend page's vCPU-tab Clear
+    button). RAM has no reset route: it's a live snapshot of what the
+    process holds right now, not an accumulated history, so there is
+    nothing to clear."""
+    cpu_usage_service.reset()

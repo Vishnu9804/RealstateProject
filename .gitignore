@@ -35,3 +35,7 @@ NeonUsage/
 LLMUsage/
 BackendUsage/
 KnowledgeBase/area_knowledge_stats.json
+
+# Batches held for retry after a failed LLM call (runtime state, see
+# Backend/Service/WhatsAppDataFetchingService/pending_batch_store.py)
+PendingBatches/

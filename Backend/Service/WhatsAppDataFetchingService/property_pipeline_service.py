@@ -71,6 +71,7 @@ from Service.WhatsAppDataFetchingService import (
     display_settings_service,
     embedding_service,
     message_fingerprint,
+    pending_batch_store,
     property_vector_store,
     timestamp_formatting,
 )
@@ -85,9 +86,45 @@ _NON_API_FIELDS = {"embedding", "embedding_model"}
 @cpu_usage_service.tracked("Property batch — LLM structuring, embedding & save", "WhatsApp → Properties")
 def handle_batch_ready(batch: List[WhatsAppChatMessage]) -> None:
     """Called by the buffering stage whenever a batch is flushed (10
-    messages gathered, or 1 hour elapsed). Already runs on its own thread
-    (see message_buffer_service.py), so the blocking GLM call here never
-    stalls WhatsApp message capture."""
+    messages gathered, or 1 hour elapsed), and by the retry worker for a
+    batch held from earlier. Already runs on its own thread (see
+    message_buffer_service.py), so the blocking GLM call here never stalls
+    WhatsApp message capture.
+
+    Never raises, and never loses the batch. This is a thread entry point:
+    an exception escaping it would be swallowed by the thread with no trace
+    anywhere useful, and — worse — would take ten captured broker messages
+    with it.
+
+    The batch is CLAIMED on disk for the whole of this call and finished with
+    exactly one of release() (done — the record and its messages are removed,
+    leaving the queue clear for the next batch) or defer() (try again later).
+    The claim is usually the record the buffering stage already made at
+    hand-off, so the messages are covered from the moment they were captured
+    to the moment they are processed, with no gap in between and nothing left
+    behind afterwards. Re-running a batch later is safe because
+    _drop_duplicate_messages already skips text this pipeline has stored, so
+    whatever did get through the first time is not redone."""
+    batch_id = pending_batch_store.claim(pending_batch_store.PROPERTY_PIPELINE, batch)
+    try:
+        retry_reason = _process_batch(batch)
+    except Exception as exc:  # noqa: BLE001
+        step_logger.error(
+            f"Property batch of {len(batch)} message(s) failed unexpectedly ({exc!r}) — holding it for "
+            "retry rather than dropping it."
+        )
+        retry_reason = f"the batch handler raised: {exc!r}"
+
+    if retry_reason is None:
+        pending_batch_store.release(batch_id)
+    else:
+        pending_batch_store.defer(batch_id, pending_batch_store.PROPERTY_PIPELINE, batch, retry_reason)
+
+
+def _process_batch(batch: List[WhatsAppChatMessage]) -> Optional[str]:
+    """Returns None when the batch is finished with, or the reason it must be
+    retried. Raising is equivalent to returning a reason — the caller treats
+    both as "not finished"."""
     global _needs_review_count, _outsider_count
 
     received_count = len(batch)
@@ -97,10 +134,28 @@ def handle_batch_ready(batch: List[WhatsAppChatMessage]) -> None:
             f"Batch processed: all {received_count} message(s) were text this pipeline has already "
             "structured before — nothing sent to GLM"
         )
-        return
+        return None
 
     step_logger.step(f"Sending batch of {len(batch)} qualified message(s) to GLM for structuring")
-    properties, requirement_messages = property_structurer.structure_batch_with_routing(batch)
+    # See structure_batch_with_routing: this is how a batch that produced
+    # nothing because GLM never answered is told apart from one that produced
+    # nothing because none of its messages were listings. The first must be
+    # retried; the second is a finished, correct batch.
+    outcome: Dict[str, Any] = {}
+    properties, requirement_messages = property_structurer.structure_batch_with_routing(batch, outcome=outcome)
+
+    if outcome.get("llm_failed"):
+        # NOT "0 properties stored" — nothing about these messages has been
+        # decided yet, so the batch stays queued and comes round again. This
+        # is the exact case that used to read "0 properties stored ... out of
+        # 10 message(s) structured" and quietly end ten listings.
+        step_logger.error(
+            f"Batch of {len(batch)} message(s) could not be structured: {outcome.get('reason')}. "
+            "It is queued for retry — none of these messages have been dropped."
+        )
+        return str(outcome.get("reason") or "the GLM call failed")
+
+    _hold_unanswered_messages(batch, outcome)
 
     # Before the property work below, and deliberately not conditional on it:
     # these messages produced no property at all (see
@@ -145,6 +200,32 @@ def handle_batch_ready(batch: List[WhatsAppChatMessage]) -> None:
         f"{len(batch)} message(s) structured"
         + (f" ({received_count - len(batch)} skipped as already-seen text)" if received_count != len(batch) else "")
     )
+    return None
+
+
+def _hold_unanswered_messages(batch: List[WhatsAppChatMessage], outcome: Dict[str, Any]) -> None:
+    """A batch can come back PARTIALLY answered: GLM returns verdicts for
+    eight of the ten messages and simply never mentions the other two. The
+    eight are perfectly good and are stored normally; the two used to be
+    logged as "dropped from this batch" and that was genuinely the end of
+    them.
+
+    Now they are queued as a small batch of their own — only the messages
+    that got no verdict, never the whole batch, so nothing that DID succeed
+    is redone. A re-ask about one or two messages on their own is also the
+    case the model is most likely to answer completely, so this normally
+    clears on the first retry."""
+    unanswered_ids = set(outcome.get("unanswered_message_ids") or [])
+    if not unanswered_ids:
+        return
+    messages = [message for message in batch if message.message_id in unanswered_ids]
+    if not messages:
+        return
+    pending_batch_store.enqueue(
+        pending_batch_store.PROPERTY_PIPELINE,
+        messages,
+        f"GLM returned no verdict at all for {len(messages)} of the {len(batch)} message(s) in this batch",
+    )
 
 
 def _forward_to_requirement_pipeline(messages: List[WhatsAppChatMessage]) -> None:
@@ -175,6 +256,16 @@ def _forward_to_requirement_pipeline(messages: List[WhatsAppChatMessage]) -> Non
         step_logger.error(
             f"Could not re-route {len(messages)} demand message(s) to the requirement pipeline "
             f"(the properties in this batch are unaffected): {exc!r}"
+        )
+        # These are real broker demands that this stage has already decided
+        # are NOT properties, so nothing else downstream will ever look at
+        # them again — logging and moving on would end them here. Held for
+        # the requirement pipeline to pick up instead, like any other batch
+        # it could not process.
+        pending_batch_store.enqueue(
+            pending_batch_store.REQUIREMENT_PIPELINE,
+            messages,
+            f"could not be re-routed from the property stage: {exc!r}",
         )
 
 

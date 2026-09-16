@@ -37,6 +37,7 @@ from typing import Dict, List, Optional, Tuple
 import httpx
 from pydantic import ValidationError
 
+from Agent.WhatsAppDataFetchingAgent import glm_gate
 from Agent.WhatsAppDataFetchingAgent.glm_extraction_schema import (
     GLMExtractionResponse,
     GLMPropertyExtraction,
@@ -76,6 +77,16 @@ _CODE_FENCE_RE = re.compile(r"^```(?:json)?\s*|\s*```$", re.IGNORECASE)
 # majority.
 _MAX_ATTEMPTS = 4
 _RETRY_BACKOFF_SECONDS = [3.0, 10.0, 30.0]
+
+# HTTP 429 is counted separately from the attempts above, and allowed more of
+# them, because it is a REJECTION rather than a failure: Z.ai turned the
+# request away before the model ran, so it cost no tokens and says nothing
+# about the request itself. Spending the 4-attempt budget on rate limits is
+# what abandoned a real 10-message batch after ~43 seconds in production —
+# a rate-limit window routinely outlasts that. The gate in glm_gate.py is
+# what stops those 429s happening at all (they were our own concurrent
+# batches colliding); this is what rides out the ones that still do.
+_MAX_RATE_LIMIT_RETRIES = 6
 
 # Absolute wall-clock ceiling for one streamed response. The per-chunk
 # `read` timeout above already catches a dead connection, but it can never
@@ -229,14 +240,19 @@ def structure_batch(batch: List[WhatsAppChatMessage]) -> List[StructuredProperty
     returns StructuredProperty records for the messages that turned out to
     be actual listings. Never raises: a batch that still fails after retries
     (bad key, unparseable response, a request that keeps failing) is logged
-    and skipped rather than crashing the caller. It is simply lost for now —
-    there is nowhere durable to retry it from once this function returns
-    (until the database gets a durable job queue)."""
+    and skipped rather than crashing the caller.
+
+    Such a batch is no longer lost, which is what this docstring used to have
+    to admit. The durable place to retry it from now exists
+    (Service/WhatsAppDataFetchingService/pending_batch_store.py) — pass
+    `outcome` to structure_batch_with_routing below to find out that a retry
+    is needed, as property_pipeline_service does."""
     return structure_batch_with_routing(batch)[0]
 
 
 def structure_batch_with_routing(
     batch: List[WhatsAppChatMessage],
+    outcome: Optional[dict] = None,
 ) -> tuple[List[StructuredProperty], List[WhatsAppChatMessage]]:
     """structure_batch, plus the second thing this stage now decides: which
     messages in the batch were not listings at all but DEMANDS — someone
@@ -260,20 +276,51 @@ def structure_batch_with_routing(
 
     Strictly additive by construction: a message is only ever re-routed when
     this stage produced NO properties for it, so nothing that would have been
-    stored as a property before can be taken away by it."""
+    stored as a property before can be taken away by it.
+
+    `outcome`, when given, is how the caller tells the two very different
+    meanings of an empty result apart: ["llm_failed"] is set True (with
+    ["reason"]) only when the LLM call itself never succeeded. Without it,
+    "GLM said none of these ten messages were listings" and "GLM never
+    answered, so ten real listings are about to be thrown away" look
+    identical from the outside — which is exactly how batches used to be lost
+    silently. The pipeline uses it to hold the batch for retry instead (see
+    Service/WhatsAppDataFetchingService/pending_batch_store.py). Leaving it
+    out changes nothing."""
     if not batch:
         return [], []
 
     # One entry per successful LLM call below (the corrective re-ask is a
     # second one) — read only by the Message to Model log at the end.
     calls: List[dict] = []
-    content = _post_with_retries(batch, usage_sink=calls)
+    failure: dict = {}
+    content = _post_with_retries(batch, usage_sink=calls, failure=failure)
     if content is None:
+        if outcome is not None:
+            outcome["llm_failed"] = True
+            outcome["reason"] = failure.get("reason") or "the GLM structuring call did not succeed"
         return [], []
 
     extractions = _parse_extractions(content, len(batch))
+    if not extractions:
+        # A reply arrived but nothing usable came out of it — truncated JSON,
+        # a shape that didn't validate, or ids for no message in this batch
+        # (_parse_extractions has already logged which). Treated exactly like
+        # a call that never answered: every message in the batch is still
+        # unprocessed, and the same retry path saves them.
+        if outcome is not None:
+            outcome["llm_failed"] = True
+            outcome["reason"] = "GLM answered, but its reply could not be parsed into any extraction"
+        return [], []
+
     extractions = _recover_missed_properties(extractions, batch, usage_sink=calls)
-    properties, requirement_messages = _merge_with_message_data(extractions, batch)
+    unanswered: List[str] = []
+    properties, requirement_messages = _merge_with_message_data(extractions, batch, unanswered=unanswered)
+    if outcome is not None and unanswered:
+        # A PARTIAL answer: the rest of the batch is fine and is returned
+        # normally, but these particular messages got no verdict at all and
+        # would otherwise vanish. The caller re-queues just them.
+        outcome["unanswered_message_ids"] = unanswered
     _log_message_models(batch, calls, extractions, properties, requirement_messages)
     return properties, requirement_messages
 
@@ -568,13 +615,25 @@ def _post_with_retries(
     batch: List[WhatsAppChatMessage],
     correction: Optional[str] = None,
     usage_sink: Optional[List[dict]] = None,
+    failure: Optional[dict] = None,
 ) -> Optional[str]:
     """Sends the structuring request and returns the model's raw reply text,
-    retrying up to _MAX_ATTEMPTS times on transient failures only: a
-    timeout/connection drop, an empty/overlong stream, or a 5xx/429 from
-    Z.ai — never on a 4xx like bad auth or a malformed request, which will
-    just fail identically (and cost identically) on every retry. Returns
-    None only once every attempt has failed."""
+    retrying on transient failures only: a timeout/connection drop, an
+    empty/overlong stream, or a 5xx/429 from Z.ai — never on any other 4xx
+    like bad auth or a malformed request, which will just fail identically
+    (and cost identically) on every retry. Returns None only once every
+    attempt has failed.
+
+    Every request goes out through glm_gate.slot, the process-wide gate that
+    keeps this backend from having several GLM calls in flight at once —
+    this stage's batches, its own corrective re-asks, and the requirement
+    stage's batches all queue through the same slot. That is the actual fix
+    for the repeated 429s: they were our own concurrent batches colliding,
+    not Z.ai being unavailable.
+
+    `failure`, when given, has ["reason"] set to a short human explanation if
+    this returns None, which the pipeline passes on to the durable retry
+    queue so a held batch records WHY it is waiting."""
     client = _get_client()
     request_body = {
         "model": get_settings().zai_model,
@@ -636,9 +695,72 @@ def _post_with_retries(
         "stream_options": {"include_usage": True},
     }
 
-    for attempt in range(1, _MAX_ATTEMPTS + 1):
+    description = f"a batch of {len(batch)}"
+    attempt = 0
+    rate_limit_retries = 0
+
+    while True:
         try:
-            content, usage = _stream_completion(client, request_body)
+            with glm_gate.slot(description):
+                content, usage = _stream_completion(client, request_body)
+        except httpx.HTTPStatusError as exc:
+            status = exc.response.status_code
+            if status == 429:
+                rate_limit_retries += 1
+                explanation = glm_gate.describe(exc.response)
+                out_of_allowance = glm_gate.is_daily_limit(exc.response)
+                if out_of_allowance or rate_limit_retries > _MAX_RATE_LIMIT_RETRIES:
+                    step_logger.error(
+                        f"GLM structuring request for {description} is still rate-limited after "
+                        f"{rate_limit_retries - 1} retr(ies) — {explanation}. Handing this batch to "
+                        "the durable retry queue, which will keep trying until it goes through."
+                    )
+                    return _failed(failure, f"HTTP 429 — {explanation}")
+                wait_for = glm_gate.note_rate_limited(exc.response, rate_limit_retries)
+                step_logger.warn(
+                    f"GLM structuring request for {description} was rate-limited (HTTP 429, "
+                    f"rate-limit retry {rate_limit_retries}/{_MAX_RATE_LIMIT_RETRIES}) — {explanation}. "
+                    f"Pausing every GLM request for {wait_for:.0f}s, then trying again. "
+                    "These properties are not dropped."
+                )
+                time.sleep(wait_for)
+                continue
+            attempt += 1
+            if status < 500 or attempt >= _MAX_ATTEMPTS:
+                step_logger.error(
+                    f"GLM structuring request failed for {description} "
+                    f"(attempt {attempt}/{_MAX_ATTEMPTS}, HTTP {status}): {exc!r}"
+                )
+                return _failed(failure, f"HTTP {status} from Z.ai")
+            step_logger.warn(
+                f"GLM structuring request got HTTP {status} for {description} "
+                f"(attempt {attempt}/{_MAX_ATTEMPTS}) — retrying, this is a Z.ai-side status "
+                "that's worth another try, not a request we're sending wrong."
+            )
+        except (httpx.TimeoutException, httpx.TransportError, _TransientCompletionError) as exc:
+            attempt += 1
+            if attempt >= _MAX_ATTEMPTS:
+                step_logger.error(
+                    f"GLM structuring request failed for {description} "
+                    f"(attempt {attempt}/{_MAX_ATTEMPTS}): {exc!r}"
+                )
+                return _failed(failure, f"the request kept timing out or dropping: {exc!r}")
+            step_logger.warn(
+                f"GLM structuring request timed out/dropped for {description} "
+                f"(attempt {attempt}/{_MAX_ATTEMPTS}) — retrying rather than losing these "
+                "properties. Now that the reply is streamed, this means the connection "
+                "genuinely went quiet, not merely that generation took a while: "
+                f"{exc!r}"
+            )
+        except Exception as exc:  # noqa: BLE001
+            # Anything else (bad API key, DNS failure, ...) will fail the
+            # exact same way on every retry — burning two more paid calls to
+            # confirm that would just be wasted spend. The batch still goes to
+            # the durable queue: a key or a DNS entry gets fixed, and it then
+            # goes through by itself.
+            step_logger.error(f"GLM structuring request failed for {description}: {exc!r}")
+            return _failed(failure, f"the request could not be sent: {exc!r}")
+        else:
             input_tokens, output_tokens = _record_usage(usage)
             if usage_sink is not None:
                 # For the Dashboard's Message to Model tab: which messages this
@@ -654,43 +776,15 @@ def _post_with_retries(
                     }
                 )
             return content
-        except httpx.HTTPStatusError as exc:
-            status = exc.response.status_code
-            transient = status == 429 or status >= 500
-            if not transient or attempt == _MAX_ATTEMPTS:
-                step_logger.error(
-                    f"GLM structuring request failed for a batch of {len(batch)} "
-                    f"(attempt {attempt}/{_MAX_ATTEMPTS}, HTTP {status}): {exc!r}"
-                )
-                return None
-            step_logger.warn(
-                f"GLM structuring request got HTTP {status} for a batch of {len(batch)} "
-                f"(attempt {attempt}/{_MAX_ATTEMPTS}) — retrying, this is a Z.ai-side status "
-                "that's worth another try, not a request we're sending wrong."
-            )
-        except (httpx.TimeoutException, httpx.TransportError, _TransientCompletionError) as exc:
-            if attempt == _MAX_ATTEMPTS:
-                step_logger.error(
-                    f"GLM structuring request failed for a batch of {len(batch)} "
-                    f"(attempt {attempt}/{_MAX_ATTEMPTS}): {exc!r}"
-                )
-                return None
-            step_logger.warn(
-                f"GLM structuring request timed out/dropped for a batch of {len(batch)} "
-                f"(attempt {attempt}/{_MAX_ATTEMPTS}) — retrying rather than losing these "
-                "properties. Now that the reply is streamed, this means the connection "
-                "genuinely went quiet, not merely that generation took a while: "
-                f"{exc!r}"
-            )
-        except Exception as exc:  # noqa: BLE001
-            # Anything else (bad API key, DNS failure, ...) will fail the
-            # exact same way on every retry — burning two more paid calls to
-            # confirm that would just be wasted spend.
-            step_logger.error(f"GLM structuring request failed for a batch of {len(batch)}: {exc!r}")
-            return None
 
-        time.sleep(_RETRY_BACKOFF_SECONDS[attempt - 1])
+        time.sleep(_RETRY_BACKOFF_SECONDS[min(attempt, len(_RETRY_BACKOFF_SECONDS)) - 1])
 
+
+def _failed(failure: Optional[dict], reason: str) -> None:
+    """Records why the call gave up, for the durable retry queue's log, and
+    returns None so callers can `return _failed(...)` in one line."""
+    if failure is not None:
+        failure["reason"] = reason
     return None
 
 
@@ -1365,10 +1459,18 @@ def _resolve_message_id(returned_id: Optional[str], messages_by_id: dict) -> Opt
 
 
 def _merge_with_message_data(
-    extractions: List[GLMPropertyExtraction], batch: List[WhatsAppChatMessage]
+    extractions: List[GLMPropertyExtraction],
+    batch: List[WhatsAppChatMessage],
+    unanswered: Optional[List[str]] = None,
 ) -> tuple[List[StructuredProperty], List[WhatsAppChatMessage]]:
     """Returns (properties, messages the model identified as DEMANDS rather
-    than offers — see structure_batch_with_routing)."""
+    than offers — see structure_batch_with_routing).
+
+    `unanswered`, when given, collects the id of every message in the batch
+    the model returned NOTHING for. Those used to be logged as "dropped from
+    this batch" and that was the end of them; the caller now hands them back
+    for a retry of their own (see structure_batch_with_routing's `outcome`).
+    Purely a report — nothing else about the merge changes."""
     messages_by_id = {message.message_id: message for message in batch}
     seen_ids = set()
     properties: List[StructuredProperty] = []
@@ -1442,8 +1544,17 @@ def _merge_with_message_data(
                 _to_structured_property(listing, message, single_property_message=len(extraction.properties) == 1)
             )
 
-    for missing_id in set(messages_by_id) - seen_ids:
-        step_logger.warn(f"GLM did not return anything for message id {missing_id!r} — dropped from this batch.")
+    # Ordered by the batch, not by set iteration, so the retry that follows
+    # reads in the same order the messages arrived in.
+    for message in batch:
+        if message.message_id in seen_ids:
+            continue
+        step_logger.warn(
+            f"GLM did not return anything for message id {message.message_id!r} — holding it for a "
+            "retry of its own rather than dropping it from this batch."
+        )
+        if unanswered is not None:
+            unanswered.append(message.message_id)
 
     return properties, requirement_messages
 

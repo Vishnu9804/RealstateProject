@@ -324,6 +324,25 @@ def load_from_disk() -> None:
     step_logger.info(f"vCPU usage history loaded: {loaded} hourly entr{'y' if loaded == 1 else 'ies'} ({_USAGE_PATH}).")
 
 
+def reset() -> None:
+    """Clears the 48-hour vCPU view — the Backend page's vCPU-tab Clear
+    button. A new epoch (same mechanism as a lost file after a redeploy —
+    see the module docstring) means any stale entry a browser still has
+    cached is recognised as belonging to a bygone measurement instead of
+    being added to what comes after. Purely local record-keeping: Railway's
+    own billing is unaffected."""
+    global _epoch, _version, _dirty
+    with _lock:
+        _buckets.clear()
+        _process.clear()
+        _epoch = usage_feed.new_epoch()
+        _version += 1
+        _dirty = True
+        text = _serialize_locked()
+    _write(text)
+    step_logger.info("vCPU usage view cleared.")
+
+
 def flush() -> None:
     """Writes whatever the throttle is still holding — called on shutdown so a
     clean restart loses nothing."""

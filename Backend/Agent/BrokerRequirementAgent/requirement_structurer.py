@@ -102,25 +102,63 @@ _RENT_SIGNAL_RE = re.compile(r"\b(?:" + "|".join(re.escape(w) for w in _RENT_KEY
 _SALE_SIGNAL_RE = re.compile(r"\b(?:" + "|".join(re.escape(w) for w in _SALE_KEYWORDS) + r")\b", re.IGNORECASE)
 
 
-def structure_batch(batch: List[WhatsAppChatMessage]) -> List[StructuredRequirement]:
+def structure_batch(
+    batch: List[WhatsAppChatMessage], outcome: Optional[dict] = None
+) -> List[StructuredRequirement]:
     """Sends one batch (up to 10 messages) to GLM in a single prompt and
     returns StructuredRequirement records for the messages that turned out
     to be actual requirements. Never raises: a batch that still fails after
-    retries is logged and skipped."""
+    retries is logged and skipped.
+
+    `outcome`, when given, is how the caller tells the two very different
+    meanings of an empty result apart: ["llm_failed"] is set True (with
+    ["reason"]) only when the LLM call itself never produced a usable reply,
+    and ["unanswered_message_ids"] lists messages the model simply never
+    answered for. Without it, "GLM said none of these were requirements" and
+    "GLM never answered, so real requirements are about to be thrown away"
+    look identical from the outside — which is exactly how batches used to be
+    lost silently. The pipeline uses it to hold those messages for retry
+    instead (see Service/WhatsAppDataFetchingService/pending_batch_store.py).
+    Leaving it out changes nothing."""
     if not batch:
         return []
 
     request_body = glm_client.build_request_body(_build_system_prompt(), _build_user_prompt(batch))
     # Filled by the successful call — read only by the Message to Model log.
     calls: List[dict] = []
+    failure: dict = {}
     content = glm_client.post_with_retries(
-        request_body, f"a requirement batch of {len(batch)}", site="requirement", usage_sink=calls
+        request_body,
+        f"a requirement batch of {len(batch)}",
+        site="requirement",
+        usage_sink=calls,
+        failure=failure,
     )
     if content is None:
+        if outcome is not None:
+            outcome["llm_failed"] = True
+            outcome["reason"] = failure.get("reason") or "the GLM structuring call did not succeed"
         return []
 
     extractions = _parse_extractions(content, len(batch))
-    requirements = _merge_with_message_data(extractions, batch)
+    if not extractions:
+        # A reply arrived but nothing usable came out of it — truncated JSON,
+        # or a shape that didn't validate (_parse_extractions has already
+        # logged which). Treated exactly like a call that never answered:
+        # every message in the batch is still unprocessed, and the same retry
+        # path saves them.
+        if outcome is not None:
+            outcome["llm_failed"] = True
+            outcome["reason"] = "GLM answered, but its reply could not be parsed into any extraction"
+        return []
+
+    unanswered: List[str] = []
+    requirements = _merge_with_message_data(extractions, batch, unanswered=unanswered)
+    if outcome is not None and unanswered:
+        # A PARTIAL answer: the rest of the batch is fine and is returned
+        # normally, but these particular messages got no verdict at all and
+        # would otherwise vanish. The caller re-queues just them.
+        outcome["unanswered_message_ids"] = unanswered
     _log_message_models(batch, calls, extractions, requirements)
     return requirements
 
@@ -474,8 +512,15 @@ def _resolve_message_id(returned_id: Optional[str], messages_by_id: dict) -> Opt
 
 
 def _merge_with_message_data(
-    extractions: List[GLMRequirementExtraction], batch: List[WhatsAppChatMessage]
+    extractions: List[GLMRequirementExtraction],
+    batch: List[WhatsAppChatMessage],
+    unanswered: Optional[List[str]] = None,
 ) -> List[StructuredRequirement]:
+    """`unanswered`, when given, collects the id of every message in the
+    batch the model returned NOTHING for. Those used to be logged as
+    "dropped from this batch" and that was the end of them; the caller now
+    hands them back for a retry of their own (see structure_batch's
+    `outcome`). Purely a report — nothing else about the merge changes."""
     messages_by_id = {message.message_id: message for message in batch}
     seen_ids = set()
     requirements: List[StructuredRequirement] = []
@@ -525,10 +570,17 @@ def _merge_with_message_data(
                 )
             )
 
-    for missing_id in set(messages_by_id) - seen_ids:
+    # Ordered by the batch, not by set iteration, so the retry that follows
+    # reads in the same order the messages arrived in.
+    for message in batch:
+        if message.message_id in seen_ids:
+            continue
         step_logger.warn(
-            f"GLM did not return anything for requirement message id {missing_id!r} — dropped from this batch."
+            f"GLM did not return anything for requirement message id {message.message_id!r} — holding "
+            "it for a retry of its own rather than dropping it from this batch."
         )
+        if unanswered is not None:
+            unanswered.append(message.message_id)
 
     return requirements
 

@@ -311,6 +311,28 @@ def get_overview() -> Dict[str, Any]:
         return {"sites": sites}
 
 
+def reset_hourly_for_site(site: str) -> None:
+    """Clears the 48-hour view for ONE site only — the LLM Cost tab's
+    per-tab Clear button. The all-time counters (get_overview) are a
+    separate, permanent record of real cost history and are deliberately
+    left untouched, exactly like area_knowledge_service.reset_stats keeps
+    the learned place strings: this only restarts what "the last 48 hours"
+    measures from, it never throws away a real call's cost.
+
+    Rows are deleted outright rather than zeroed in place, so a cleared
+    hour actually disappears (back to the "No calls" empty state) instead
+    of lingering as a wall of 0-call cards."""
+    with _lock:
+        if not _loaded:
+            load_from_disk()
+        if site not in SITES:
+            raise ValueError(f"Unknown site {site!r}")
+        for key in [key for key, row in _hourly.items() if row["site"] == site]:
+            del _hourly[key]
+        _persist_hourly()
+    step_logger.info(f"LLM hourly usage view cleared for site {site!r} — the all-time counters were kept.")
+
+
 def get_hourly_changes(cursor: Optional[str]) -> Dict[str, Any]:
     """The hourly buckets changed after `cursor` (all of them for a new or
     other-process cursor), last 48 hours. Memory only."""

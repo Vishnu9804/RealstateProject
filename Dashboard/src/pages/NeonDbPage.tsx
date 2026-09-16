@@ -2,11 +2,13 @@ import { useMemo, useState } from "react";
 import { neonUsageApi } from "../api/neonUsageApi";
 import type { NeonAssumptions, NeonTransferRow, NeonWindowItem, NeonWindowsResponse } from "../api/types";
 import { useFeed } from "../hooks/useFeed";
+import { useTabWatermarks } from "../hooks/useTabWatermarks";
 import { formatBytes, formatInt } from "../lib/formatters";
 import { formatIstTime, isoToSeconds, nowSeconds } from "../lib/ist";
+import { useToast } from "../components/Toast";
 import { groupByHour, HourlyCards } from "../components/HourlyCards";
 import { Badge, Button, EmptyState, Note, Panel, SkeletonRows } from "../components/Primitives";
-import { IconCheck, IconInfo, IconLayers, IconRefresh, IconServer, IconZap } from "../components/Icons";
+import { IconCheck, IconInfo, IconLayers, IconRefresh, IconServer, IconTrash, IconZap } from "../components/Icons";
 
 type Capsule = "compute" | "transfer";
 
@@ -39,7 +41,9 @@ function share(value: number, total: number): number {
 }
 
 export default function NeonDbPage() {
+  const toast = useToast();
   const [capsule, setCapsule] = useState<Capsule>("compute");
+  const { watermarkFor, clear, version } = useTabWatermarks("neon-clear");
 
   // Reads the backend's in-memory counters only — this poll never reaches
   // Neon, so watching the cost cannot add to the cost.
@@ -53,24 +57,32 @@ export default function NeonDbPage() {
   const assumptions = feed.page?.assumptions ?? DEFAULT_ASSUMPTIONS;
   const idleMinutes = Math.round(assumptions.autosuspend_seconds / 60);
 
+  // CU Hours and Network Transfer are two views of the SAME windows, but
+  // each is filtered against its OWN cutoff — clearing one can never affect
+  // the other, even though both are read off feed.items.
   const computeGroups = useMemo(
     () =>
-      groupByHour(feed.items, (item) => isoToSeconds(item.compute.at)).map((group) => ({
+      groupByHour(
+        feed.items.filter((item) => isoToSeconds(item.compute.at) >= watermarkFor("compute")),
+        (item) => isoToSeconds(item.compute.at),
+      ).map((group) => ({
         start: group.start,
         items: [...group.items].sort((a, b) => isoToSeconds(b.compute.at) - isoToSeconds(a.compute.at)),
       })),
-    [feed.items],
+    // eslint-disable-next-line react-hooks/exhaustive-deps
+    [feed.items, watermarkFor, version],
   );
   const transferGroups = useMemo(
     () =>
       groupByHour(
-        feed.items.flatMap((item) => item.transfer),
+        feed.items.flatMap((item) => item.transfer).filter((row) => isoToSeconds(row.at) >= watermarkFor("transfer")),
         (row: NeonTransferRow) => isoToSeconds(row.at),
       ).map((group) => ({
         start: group.start,
         items: [...group.items].sort((a, b) => isoToSeconds(b.at) - isoToSeconds(a.at) || b.bytes - a.bytes),
       })),
-    [feed.items],
+    // eslint-disable-next-line react-hooks/exhaustive-deps
+    [feed.items, watermarkFor, version],
   );
 
   const totals = useMemo(() => {
@@ -96,6 +108,16 @@ export default function NeonDbPage() {
   }, [computeGroups, transferGroups]);
 
   const showData = feed.ready || feed.items.length > 0;
+
+  function clearCompute() {
+    clear("compute");
+    toast.push({ tone: "ok", title: "Cleared", message: "CU Hours is back to 0. Network Transfer is untouched." });
+  }
+
+  function clearTransfer() {
+    clear("transfer");
+    toast.push({ tone: "ok", title: "Cleared", message: "Network Transfer is back to 0. CU Hours is untouched." });
+  }
 
   return (
     <div className="stack stack-6">
@@ -180,16 +202,21 @@ export default function NeonDbPage() {
 
           {capsule === "compute" ? (
             <Panel className="stack stack-4">
-              <div>
-                <div className="section-head__eyebrow" style={{ marginBottom: 6 }}>
-                  <IconZap size={12} /> What spent CU-hours
+              <div className="row-between">
+                <div>
+                  <div className="section-head__eyebrow" style={{ marginBottom: 6 }}>
+                    <IconZap size={12} /> What spent CU-hours
+                  </div>
+                  <h2>Every time something woke the database, hour by hour</h2>
+                  <p className="section-head__sub" style={{ marginTop: 6 }}>
+                    Neon charges for the time the compute is <strong>awake</strong>, not the time it spends working. It
+                    only sleeps after {idleMinutes} idle minutes — so one stray query at a quiet moment costs the same as
+                    a busy {idleMinutes} minutes. Each card inside an hour is one wake-up that started in that hour.
+                  </p>
                 </div>
-                <h2>Every time something woke the database, hour by hour</h2>
-                <p className="section-head__sub" style={{ marginTop: 6 }}>
-                  Neon charges for the time the compute is <strong>awake</strong>, not the time it spends working. It
-                  only sleeps after {idleMinutes} idle minutes — so one stray query at a quiet moment costs the same as a
-                  busy {idleMinutes} minutes. Each card inside an hour is one wake-up that started in that hour.
-                </p>
+                <Button size="sm" tone="danger" onClick={clearCompute} icon={<IconTrash size={15} />}>
+                  Clear this tab
+                </Button>
               </div>
 
               <HourlyCards
@@ -251,16 +278,21 @@ export default function NeonDbPage() {
             </Panel>
           ) : (
             <Panel className="stack stack-4">
-              <div>
-                <div className="section-head__eyebrow" style={{ marginBottom: 6 }}>
-                  <IconLayers size={12} /> What spent Network Transfer
+              <div className="row-between">
+                <div>
+                  <div className="section-head__eyebrow" style={{ marginBottom: 6 }}>
+                    <IconLayers size={12} /> What spent Network Transfer
+                  </div>
+                  <h2>Every operation that pulled data out of Neon, hour by hour</h2>
+                  <p className="section-head__sub" style={{ marginTop: 6 }}>
+                    Measured from the real size of each result. Operations too small to be worth their own line are
+                    never dropped — they are added together into one &ldquo;smaller operations&rdquo; row, which is how
+                    you catch the quiet ones that add up.
+                  </p>
                 </div>
-                <h2>Every operation that pulled data out of Neon, hour by hour</h2>
-                <p className="section-head__sub" style={{ marginTop: 6 }}>
-                  Measured from the real size of each result. Operations too small to be worth their own line are never
-                  dropped — they are added together into one &ldquo;smaller operations&rdquo; row, which is how you
-                  catch the quiet ones that add up.
-                </p>
+                <Button size="sm" tone="danger" onClick={clearTransfer} icon={<IconTrash size={15} />}>
+                  Clear this tab
+                </Button>
               </div>
 
               <HourlyCards

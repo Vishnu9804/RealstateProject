@@ -14,9 +14,20 @@ import {
 } from "../lib/railway";
 import { useFeed } from "../hooks/useFeed";
 import { usePolling } from "../hooks/usePolling";
+import { useTabWatermarks } from "../hooks/useTabWatermarks";
+import { useToast } from "../components/Toast";
 import { groupByHour, HourlyCards } from "../components/HourlyCards";
 import { Badge, Button, EmptyState, Note, Panel, SkeletonRows } from "../components/Primitives";
-import { IconActivity, IconCheck, IconCpu, IconInfo, IconMemory, IconRefresh, IconServer } from "../components/Icons";
+import {
+  IconActivity,
+  IconCheck,
+  IconCpu,
+  IconInfo,
+  IconMemory,
+  IconRefresh,
+  IconServer,
+  IconTrash,
+} from "../components/Icons";
 
 type Capsule = "ram" | "cpu";
 
@@ -142,7 +153,8 @@ function RamPanel() {
         <strong>A live snapshot, not a history.</strong> Measured inside the backend from its own objects when this tab
         asks (this measurement took {data.took_ms} ms), shared by every open dashboard for 20 seconds, and refreshed
         once a minute — no database, no disk. Sizes marked <strong>≈ sampled</strong> were measured on an evenly spaced
-        sample of the cache and scaled up.
+        sample of the cache and scaled up. No Clear button here: there is nothing accumulated to reset, only what's
+        actually in memory right now.
       </Note>
 
       <div className="metrics-grid">
@@ -383,6 +395,8 @@ function KindBadge({ kind }: { kind: string }) {
 }
 
 function CpuPanel() {
+  const toast = useToast();
+  const { watermarkFor, clear, version } = useTabWatermarks("backend-clear");
   const feed = useFeed<CpuItem, CpuResponse>({
     storageKey: "cpu-hourly-v1",
     fetchPage: backendUsageApi.getCpu,
@@ -391,9 +405,19 @@ function CpuPanel() {
     intervalMs: 30_000,
   });
 
+  function clearCpu() {
+    clear("cpu");
+    toast.push({ tone: "ok", title: "Cleared", message: "The vCPU view is back to 0." });
+  }
+
+  const visibleItems = useMemo(
+    () => feed.items.filter((item) => item.hour >= watermarkFor("cpu")),
+    // eslint-disable-next-line react-hooks/exhaustive-deps
+    [feed.items, watermarkFor, version],
+  );
   const hours = useMemo(
-    () => groupByHour(feed.items, (item) => item.hour).map((group) => ({ ...group, totals: hourTotals(group.items) })),
-    [feed.items],
+    () => groupByHour(visibleItems, (item) => item.hour).map((group) => ({ ...group, totals: hourTotals(group.items) })),
+    [visibleItems],
   );
   const totalsByHour = useMemo(() => new Map(hours.map((hour) => [hour.start, hour.totals])), [hours]);
 
@@ -492,16 +516,21 @@ function CpuPanel() {
       )}
 
       <Panel className="stack stack-4">
-        <div>
-          <div className="section-head__eyebrow" style={{ marginBottom: 6 }}>
-            <IconActivity size={12} /> Hour by hour (IST)
+        <div className="row-between">
+          <div>
+            <div className="section-head__eyebrow" style={{ marginBottom: 6 }}>
+              <IconActivity size={12} /> Hour by hour (IST)
+            </div>
+            <h2>Which request or job used the CPU — click an hour</h2>
+            <p className="section-head__sub" style={{ marginTop: 6 }}>
+              Each card is one hour: the whole process's CPU time, its average vCPU use, how many API requests it
+              served, and what the hour cost on Railway (CPU + RAM). Inside, every endpoint and background job that
+              ran, most expensive first, and the untracked remainder.
+            </p>
           </div>
-          <h2>Which request or job used the CPU — click an hour</h2>
-          <p className="section-head__sub" style={{ marginTop: 6 }}>
-            Each card is one hour: the whole process's CPU time, its average vCPU use, how many API requests it served,
-            and what the hour cost on Railway (CPU + RAM). Inside, every endpoint and background job that ran, most
-            expensive first, and the untracked remainder.
-          </p>
+          <Button size="sm" tone="danger" onClick={clearCpu} icon={<IconTrash size={15} />}>
+            Clear this tab
+          </Button>
         </div>
 
         <HourlyCards

@@ -151,17 +151,27 @@ function WhatsAppTab() {
   const [unlinkBusy, setUnlinkBusy] = useState(false);
   const [onboardingBusy, setOnboardingBusy] = useState(false);
 
+  // Guards against an out-of-order response: the 5s poll and an explicit
+  // reload (e.g. right after unlinking) can both be in flight at once, and
+  // network timing gives no guarantee the one that started first resolves
+  // first. Without this, a slower GET that was already in flight before an
+  // unlink could resolve afterwards and paint the just-removed connection
+  // right back — exactly what looks like "it won't stay unlinked".
+  const loadSeqRef = useRef(0);
   const load = useCallback(async () => {
+    const seq = ++loadSeqRef.current;
     try {
       const data = await whatsappApi.getConnections();
+      if (seq !== loadSeqRef.current) return;
       setConnections(data);
       setStatusError(null);
       setFailures(0);
     } catch (err) {
+      if (seq !== loadSeqRef.current) return;
       setStatusError(friendlyError(err));
       setFailures((count) => count + 1);
     } finally {
-      setInitialLoading(false);
+      if (seq === loadSeqRef.current) setInitialLoading(false);
     }
   }, []);
 
@@ -249,6 +259,10 @@ function WhatsAppTab() {
     try {
       await whatsappApi.unlinkConnection(unlinkTarget.connection_id);
       toast.push({ tone: "ok", title: "Number unlinked", message: `${displayNumber(unlinkTarget)} was logged out and forgotten.` });
+      // Removed immediately, ahead of the reload below — so even a poll
+      // response already in flight when the DELETE completes can't paint
+      // this connection back onto the screen (see loadSeqRef in `load`).
+      setConnections((prev) => prev?.filter((c) => c.connection_id !== unlinkTarget.connection_id) ?? prev);
       setUnlinkTarget(null);
       await load();
     } catch (err) {

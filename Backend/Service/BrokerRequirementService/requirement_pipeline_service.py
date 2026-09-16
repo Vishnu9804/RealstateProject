@@ -58,6 +58,7 @@ from Service.BrokerRequirementService import requirement_store
 from Service.WhatsAppDataFetchingService import (
     display_settings_service,
     message_fingerprint,
+    pending_batch_store,
     timestamp_formatting,
 )
 
@@ -78,9 +79,24 @@ def handle_batch_ready(batch: List[WhatsAppChatMessage]) -> None:
     own thread (see message_buffer_service.py), so the blocking LLM call
     here never stalls WhatsApp message capture.
 
-    Never raises: this is a thread entry point, and an exception escaping it
-    would be swallowed by the thread with no trace anywhere useful."""
+    Never raises, and never loses the batch: this is a thread entry point,
+    and an exception escaping it would be swallowed by the thread with no
+    trace anywhere useful — and would take every captured message in the
+    batch with it.
+
+    The batch is CLAIMED on disk for the whole of this call and finished with
+    exactly one of release() (done — the record and its messages are removed,
+    leaving the queue clear for the next batch) or defer() (try again later).
+    The claim is usually the record the buffering stage already made at
+    hand-off, so the messages are covered from the moment they were captured
+    to the moment they are processed, with no gap in between and nothing left
+    behind afterwards. Re-running a batch later is safe because
+    _drop_duplicate_messages already skips text this pipeline has stored, so
+    whatever did get through the first time is not redone."""
     claimed: Set[str] = set()
+    original_batch = list(batch)
+    batch_id = pending_batch_store.claim(pending_batch_store.REQUIREMENT_PIPELINE, original_batch)
+    retry_reason: Optional[str] = None
     try:
         received_count = len(batch)
         batch, claimed = _drop_duplicate_messages(batch)
@@ -92,7 +108,24 @@ def handle_batch_ready(batch: List[WhatsAppChatMessage]) -> None:
             return
 
         step_logger.step(f"Sending batch of {len(batch)} requirement message(s) to GLM for structuring")
-        requirements = requirement_structurer.structure_batch(batch)
+        # See requirement_structurer.structure_batch: this is how a batch
+        # that produced nothing because GLM never answered is told apart from
+        # one that produced nothing because none of its messages were
+        # requirements. The first must be retried; the second is a finished,
+        # correct batch.
+        outcome: Dict[str, Any] = {}
+        requirements = requirement_structurer.structure_batch(batch, outcome=outcome)
+
+        if outcome.get("llm_failed"):
+            step_logger.error(
+                f"Requirement batch of {len(batch)} message(s) could not be structured: "
+                f"{outcome.get('reason')}. It is queued for retry — none of these messages have been "
+                "dropped."
+            )
+            retry_reason = str(outcome.get("reason") or "the GLM call failed")
+            return
+
+        _hold_unanswered_messages(batch, outcome)
 
         requirement_store.add_requirements(requirements)
         stored = len(requirements)
@@ -108,13 +141,49 @@ def handle_batch_ready(batch: List[WhatsAppChatMessage]) -> None:
         )
         _store_matches_for_new_requirements(requirements)
     except Exception as exc:  # noqa: BLE001
-        step_logger.error(f"Requirement batch failed and was dropped: {exc!r}")
+        step_logger.error(
+            f"Requirement batch of {len(original_batch)} message(s) failed unexpectedly ({exc!r}) — "
+            "holding it for retry rather than dropping it."
+        )
+        retry_reason = f"the batch handler raised: {exc!r}"
     finally:
         # Only after storing has finished (or failed): from here on, a later
         # batch's stored-fingerprint lookup is what recognises this text.
         if claimed:
             with _in_flight_lock:
                 _in_flight_fingerprints.difference_update(claimed)
+        # Exactly one of these, always, however this function was left —
+        # including the early `return` above, which is why it lives here.
+        if retry_reason is None:
+            pending_batch_store.release(batch_id)
+        else:
+            pending_batch_store.defer(
+                batch_id, pending_batch_store.REQUIREMENT_PIPELINE, original_batch, retry_reason
+            )
+
+
+def _hold_unanswered_messages(batch: List[WhatsAppChatMessage], outcome: Dict[str, Any]) -> None:
+    """A batch can come back PARTIALLY answered: GLM returns verdicts for
+    most of the messages and simply never mentions the rest. The answered
+    ones are stored normally; the rest used to be logged as "dropped from
+    this batch" and that was genuinely the end of them.
+
+    Now they are queued as a small batch of their own — only the messages
+    that got no verdict, never the whole batch, so nothing that DID succeed
+    is redone. A re-ask about one or two messages on their own is also the
+    case the model is most likely to answer completely, so this normally
+    clears on the first retry."""
+    unanswered_ids = set(outcome.get("unanswered_message_ids") or [])
+    if not unanswered_ids:
+        return
+    messages = [message for message in batch if message.message_id in unanswered_ids]
+    if not messages:
+        return
+    pending_batch_store.enqueue(
+        pending_batch_store.REQUIREMENT_PIPELINE,
+        messages,
+        f"GLM returned no verdict at all for {len(messages)} of the {len(batch)} message(s) in this batch",
+    )
 
 
 def _store_matches_for_new_requirements(requirements: List[StructuredRequirement]) -> None:

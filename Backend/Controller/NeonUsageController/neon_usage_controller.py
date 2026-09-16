@@ -30,3 +30,12 @@ def get_windows(cursor: Optional[str] = None) -> Response:
     already rendered into its CU-hours row and Network Transfer rows (see
     usage_feed for the cursor contract)."""
     return usage_feed.json_response(neon_usage_service.get_changes(cursor))
+
+
+@router.post("/reset", status_code=204)
+def reset() -> None:
+    """Clears every tracked wake-up window (the Neon DB tab's Clear button,
+    in either the CU Hours or Network Transfer tab — they're two views of
+    the same windows). Purely this module's own local record; Neon's real
+    billing and the database itself are unaffected."""
+    neon_usage_service.reset()

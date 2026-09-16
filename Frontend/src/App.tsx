@@ -1,4 +1,4 @@
-import { BrowserRouter, Navigate, Route, Routes } from "react-router-dom";
+import { BrowserRouter, Route, Routes } from "react-router-dom";
 import Layout from "./components/Layout";
 import RequireAuth from "./components/RequireAuth";
 import AgentsPage from "./pages/AgentsPage";
@@ -42,31 +42,39 @@ export default function App() {
   return (
     <ThemeProvider>
       <ToastProvider>
-        <BrowserRouter>
-          <Routes>
-            <Route
-              element={
-                <StatusProvider>
-                  <Layout />
-                </StatusProvider>
-              }
-            >
-              <Route index element={<ConnectionPage />} />
-              <Route path="dashboard" element={<DashboardPage />} />
-              <Route path="requirements" element={<BrokerRequirementsPage />} />
-              <Route path="landing-page" element={<LandingPagePage />} />
-              <Route path="inquiries" element={<InquiryClientsPage />} />
-              <Route
-                path="inquiries/:phone/matches"
-                element={<ClientMatchesPage />}
-              />
-              <Route path="select-property" element={<SelectPropertyPage />} />
-              <Route path="agents" element={<AgentsPage />} />
-              <Route path="settings" element={<SettingsPage />} />
-              <Route path="temporary" element={<TemporaryPage />} />
-            </Route>
-          </Routes>
-        </BrowserRouter>
+        <AuthProvider>
+          <OwnerVerificationProvider>
+            <BrowserRouter>
+              <Routes>
+                <Route path="login" element={<LoginPage />} />
+                <Route element={<RequireAuth />}>
+                  <Route
+                    element={
+                      <StatusProvider>
+                        <Layout />
+                      </StatusProvider>
+                    }
+                  >
+                    <Route index element={<ConnectionPage />} />
+                    <Route path="dashboard" element={<DashboardPage />} />
+                    <Route path="requirements" element={<BrokerRequirementsPage />} />
+                    <Route path="builder-projects" element={<BuilderProjectsPage />} />
+                    <Route path="landing-page" element={<LandingPagePage />} />
+                    <Route path="inquiries" element={<InquiryClientsPage />} />
+                    <Route
+                      path="inquiries/:phone/matches"
+                      element={<ClientMatchesPage />}
+                    />
+                    <Route path="select-property" element={<SelectPropertyPage />} />
+                    <Route path="agents" element={<AgentsPage />} />
+                    <Route path="team" element={<UserManagementPage />} />
+                    <Route path="settings" element={<SettingsPage />} />
+                  </Route>
+                </Route>
+              </Routes>
+            </BrowserRouter>
+          </OwnerVerificationProvider>
+        </AuthProvider>
       </ToastProvider>
     </ThemeProvider>
   );

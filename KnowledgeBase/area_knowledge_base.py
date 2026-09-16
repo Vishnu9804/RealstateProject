@@ -27,8 +27,17 @@ connections mid-batch every time a new place was learned.
 from typing import Dict, List
 
 AREA_KNOWLEDGE_BASE: Dict[str, List[str]] = {
+    '2nd Vip Road': [
+        '2nd Vip Road',
+    ],
     'Adajan': [
         'Adajan',
+        'Adajan Pal',
+        'Galaxy Aventura',
+        'Parshuram Garden',
+        'Top Floor',
+    ],
+    'Adajan Pal': [
         'Adajan Pal',
         'Galaxy Aventura',
     ],
@@ -43,13 +52,45 @@ AREA_KNOWLEDGE_BASE: Dict[str, List[str]] = {
         'Ghoddod Road',
         'Seema Row House',
     ],
+    'Bhatar': [
+        'Bhatar',
+        'Crimson Palace',
+        'Shree Ram Marble',
+    ],
+    'Canal Road': [
+        'Canal Road',
+        'GD Goenka',
+    ],
+    'Chanakyapuri': [
+        'Chanakyapuri',
+    ],
     'Citylight': [
         'Citylight',
+        'Anurodh Dwar',
         'Chandan Park',
+        'new City Light road',
         'Sarjan Society',
+        'Shyam Mandir',
+    ],
+    'Citylight Char Rasta': [
+        'Citylight Char Rasta',
+        'Anurodh Dwar',
+    ],
+    'Dandi Road': [
+        'Dandi Road',
+        'Silver Stone Villa',
+    ],
+    'Dumas': [
+        'Dumas',
+        'Avadh Carolina',
+    ],
+    'GD Goenka Canal Road': [
+        'GD Goenka Canal Road',
     ],
     'Ghod Dod': [
         'Ghod Dod',
+        'Ghod Dod Road',
+        'Jade Blue',
         'Mira Nagar',
         'Subhash Nagar',
     ],
@@ -61,18 +102,31 @@ AREA_KNOWLEDGE_BASE: Dict[str, List[str]] = {
         'Godadara',
         'Aranya-3 by Pramukh',
     ],
+    'Jahangirpura': [
+        'Jahangirpura',
+        'Anjani Ambrosia',
+        'Vaishnodevi Sky',
+    ],
     'Pal': [
         'Pal',
         'Adajan',
+        'Arjunt',
         'Citylights',
         'Ghod Dod Road',
         'Keshav Park Society',
         'Megh Mayur Plaza',
         'Parle Point',
+        'Sumeru Golden Leaf',
+        'Supath Enclave',
+    ],
+    'Pal - Adajan': [
+        'Pal - Adajan',
         'Supath Enclave',
     ],
     'Parle Point': [
         'Parle Point',
+        'Keshav Park Society',
+        'Megh Mayur Plaza',
         'Rudravan Apartment',
     ],
     'Piplod': [
@@ -86,6 +140,7 @@ AREA_KNOWLEDGE_BASE: Dict[str, List[str]] = {
         'Keshav Nagar',
         'Milan Bungalow',
         'Passport Office',
+        'Piplod (Near Ryan International School',
         'Piplod Main Road',
         'Piplod–Vesu',
         'RahulRaj Mall',
@@ -101,6 +156,9 @@ AREA_KNOWLEDGE_BASE: Dict[str, List[str]] = {
     ],
     'Udhna': [
         'Udhna',
+        'Udhna Magdalla',
+    ],
+    'Udhna Magdalla': [
         'Udhna Magdalla',
     ],
     'Vadod': [
@@ -135,5 +193,8 @@ AREA_KNOWLEDGE_BASE: Dict[str, List[str]] = {
         'Sunrise Glass Factory',
         'Taluka & District Surat',
         'Village Tena (Barbodan Dandi road',
+    ],
+    'VIP Road': [
+        'VIP Road',
     ],
 }

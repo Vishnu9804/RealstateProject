@@ -43,6 +43,15 @@ export interface FeedState<T, P extends FeedPage<T>> {
   /** True once the first poll has succeeded. */
   ready: boolean;
   refresh: () => void;
+  /**
+   * Drops this browser's cached copy of the feed — everything, or only the
+   * items `match` selects — and persists the smaller set. Pairs with a
+   * backend "Clear" call: the backend can only correct rows it still knows
+   * changed, so a page's Clear button must also discard its own local copy
+   * itself, or a stale cached item would keep showing a number the backend
+   * already zeroed.
+   */
+  clear: (match?: (item: T) => boolean) => void;
 }
 
 export function useFeed<T, P extends FeedPage<T> = FeedPage<T>>(options: FeedOptions<T, P>): FeedState<T, P> {
@@ -124,5 +133,18 @@ export function useFeed<T, P extends FeedPage<T> = FeedPage<T>>(options: FeedOpt
   // into an empty map and then be overwritten by the older stored one.
   usePolling(sync, intervalMs, hydrated);
 
-  return { items, page, error, ready, refresh: () => void sync() };
+  const clear = useCallback((match?: (item: T) => boolean) => {
+    if (match) {
+      for (const [key, item] of storeRef.current) {
+        if (match(item)) storeRef.current.delete(key);
+      }
+    } else {
+      storeRef.current.clear();
+    }
+    const remaining = Array.from(storeRef.current.values());
+    setItems(remaining);
+    void saveFeed<T>(optionsRef.current.storageKey, { cursor: cursorRef.current, items: remaining });
+  }, []);
+
+  return { items, page, error, ready, refresh: () => void sync(), clear };
 }

@@ -351,6 +351,12 @@ def _clean_property_sizes(sizes: Optional[dict], property_type: Optional[str]) -
     return cleaned or None
 
 
+# The same rule, for the dashboard's own Add/Edit client dialog (see
+# manual_client_service.py). Exported rather than reimplemented there so the
+# two ways a client's sizes can be recorded can never drift apart.
+clean_property_sizes = _clean_property_sizes
+
+
 def _submit_whatsapp(phone: str, submission: FormSubmissionRequest) -> FormSubmissionResult:
     """`phone` is always an identity the CALLER established (a form token's,
     or one otp_service proved) — submission.phone is never read here, so

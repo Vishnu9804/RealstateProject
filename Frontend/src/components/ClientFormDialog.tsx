@@ -9,7 +9,7 @@ import { formatCompactInr, parseCompactInr } from "../lib/formatters";
 import { fileToClientPhoto } from "../lib/imageProcessing";
 import { useToast } from "./ui/Toast";
 import { Button, Note } from "./ui/Primitives";
-import { IconAlert, IconImage, IconTrash, IconX } from "./ui/Icons";
+import { IconAlert, IconCheck, IconImage, IconTrash, IconX } from "./ui/Icons";
 
 /**
  * The Inquiries page's own Add / Edit client dialog — one tall,
@@ -37,7 +37,69 @@ const PURPOSES = [
   { value: "buy", label: "Buy" },
   { value: "rent", label: "Rent" },
 ];
-const PROPERTY_TYPES = ["Flat", "Penthouse", "Row House", "Bungalow", "Shop", "Office", "Land/Plot", "Warehouse", "Other"];
+const PROPERTY_TYPES = [
+  "Flat",
+  "Penthouse",
+  "Row House",
+  "Bungalow",
+  "Farm House",
+  "Shop",
+  "Office",
+  "Land/Plot",
+  "Warehouse",
+  "Other",
+];
+
+/** Types whose size is given in vaar (square yards) — land, or a home that
+ *  comes with its own plot. Every other type is asked in sq ft. The same
+ *  rule the public form applies, and the same one the matcher reads a bare
+ *  number by (Backend/Service/ClientPropertyMatchingService/
+ *  normalization.py's default_size_unit). */
+const VAAR_TYPE_RE = /bungalow|land|plot|farm/i;
+
+function sizeUnitOf(type: string): "vaar" | "sq ft" {
+  return VAAR_TYPE_RE.test(type) ? "vaar" : "sq ft";
+}
+
+/** The stored comma-separated types ("Flat, Bungalow") back into chips, in
+ *  the order they were picked. A value that isn't one of the options (an
+ *  older free-text one, or one typed on the public form) is kept as a chip
+ *  of its own rather than silently dropped on the next save. */
+function splitTypes(raw: string): string[] {
+  const picked: string[] = [];
+  for (const part of raw.split(",")) {
+    const label = part.trim().replace(/\s+/g, " ");
+    if (!label) continue;
+    const type = PROPERTY_TYPES.find((option) => option.toLowerCase() === label.toLowerCase()) ?? label;
+    if (!picked.some((existing) => existing.toLowerCase() === type.toLowerCase())) picked.push(type);
+  }
+  return picked;
+}
+
+/** Saved sizes re-keyed onto the chips they belong to. */
+function matchSizes(types: string[], sizes: Record<string, string> | null | undefined): Record<string, string> {
+  const matched: Record<string, string> = {};
+  for (const [key, value] of Object.entries(sizes ?? {})) {
+    const type = types.find((candidate) => candidate.toLowerCase() === key.trim().toLowerCase());
+    if (type && value) matched[type] = value;
+  }
+  return matched;
+}
+
+/** The sizes worth sending: one per picked type, in the order picked, blanks
+ *  left out — null when none are left, which is how the backend is told
+ *  there is nothing to keep. A size typed for a type that is then un-ticked
+ *  stays in the boxes (ticking it again brings it back) but is never sent;
+ *  the backend applies the identical rule on the way in (see
+ *  manual_client_service._apply_size_rule). */
+function sizesToSend(form: FormState): Record<string, string> | null {
+  const sizes: Record<string, string> = {};
+  for (const type of splitTypes(form.property_type)) {
+    const size = (form.property_sizes[type] ?? "").trim();
+    if (size) sizes[type] = size;
+  }
+  return Object.keys(sizes).length > 0 ? sizes : null;
+}
 
 const EMAIL_PATTERN = /^\S+@\S+\.\S+$/;
 
@@ -48,7 +110,12 @@ interface FormState {
   current_address: string;
   about_loan: string;
   purpose: string;
+  /** Every picked type, comma-separated ("Flat, Bungalow") — the shape the
+   *  backend stores and the matcher reads one type at a time. */
   property_type: string;
+  /** Free text per picked type, keyed by the type exactly as it appears in
+   *  `property_type`. Sent as `property_sizes`, never as text. */
+  property_sizes: Record<string, string>;
   bhk: string;
   budget_min_inr: string;
   budget_max_inr: string;
@@ -86,6 +153,7 @@ const BLANK_FORM: FormState = {
   about_loan: "",
   purpose: "",
   property_type: "",
+  property_sizes: {},
   bhk: "",
   budget_min_inr: "",
   budget_max_inr: "",
@@ -103,6 +171,9 @@ function budgetText(amount: number | null): string {
 }
 
 function toFormState(client: InquiryClientRecord): FormState {
+  // Read through splitTypes so the chips and the saved string agree from the
+  // start: an edit that touches nothing else then has nothing to send here.
+  const types = splitTypes(client.property_type ?? "");
   return {
     phone: client.phone,
     name: client.name ?? "",
@@ -110,7 +181,8 @@ function toFormState(client: InquiryClientRecord): FormState {
     current_address: client.current_address ?? "",
     about_loan: client.about_loan ?? "",
     purpose: client.purpose ?? "",
-    property_type: client.property_type ?? "",
+    property_type: types.join(", "),
+    property_sizes: matchSizes(types, client.property_sizes),
     bhk: client.bhk ?? "",
     budget_min_inr: budgetText(client.budget_min_inr),
     budget_max_inr: budgetText(client.budget_max_inr),
@@ -186,6 +258,14 @@ function buildBody(
     const value = key === "preferred_areas" ? normalizeAreas(form[key]) : textOrNull(form[key]);
     if (mode === "add" && value === null) continue;
     body[key] = value;
+  }
+
+  // Sizes ride with the types they belong to, and are compared by what
+  // would actually be SENT — so re-typing the same size, or un-ticking a
+  // type whose box was empty anyway, is not a change worth saving.
+  const sizes = sizesToSend(form);
+  if (mode === "add" ? sizes !== null : JSON.stringify(sizes) !== JSON.stringify(sizesToSend(initial))) {
+    body.property_sizes = sizes;
   }
   return { body, error: null };
 }
@@ -308,6 +388,17 @@ export default function ClientFormDialog({
     setForm((prev) => ({ ...prev, [key]: value }));
   }
 
+  /** Ticks or unticks a type, keeping the order they were picked in. The
+   *  size typed against a type survives it being unticked — ticking it
+   *  again brings the size back — but only picked types are ever sent. */
+  function toggleType(type: string) {
+    const picked = splitTypes(form.property_type);
+    const next = picked.some((existing) => existing.toLowerCase() === type.toLowerCase())
+      ? picked.filter((existing) => existing.toLowerCase() !== type.toLowerCase())
+      : [...picked, type];
+    set("property_type", next.join(", "));
+  }
+
   function setPhotoValue(next: string | null) {
     photoDirtyRef.current = true;
     setPhotoDirty(true);
@@ -388,10 +479,10 @@ export default function ClientFormDialog({
 
   const title = mode === "add" ? "Add a client" : client?.name || client?.phone || "Edit client";
   const purposeOptions = withCurrent(PURPOSES, form.purpose);
-  const typeOptions = withCurrent(
-    PROPERTY_TYPES.map((type) => ({ value: type, label: type })),
-    form.property_type,
-  );
+  // Every option, plus any stored type that isn't one of them — the chips'
+  // equivalent of withCurrent above, so opening Edit never drops a type.
+  const pickedTypes = splitTypes(form.property_type);
+  const typeChoices = [...PROPERTY_TYPES, ...pickedTypes.filter((type) => !PROPERTY_TYPES.includes(type))];
   const frameClass = [
     "client-photo__frame",
     photo && "client-photo__frame--filled",
@@ -603,40 +694,112 @@ export default function ClientFormDialog({
               </select>
             </Field>
 
-            <Field label="Property type" htmlFor="client-form-type">
-              <select
-                id="client-form-type"
-                className="select"
-                value={form.property_type}
-                onChange={(event) => set("property_type", event.target.value)}
-                disabled={requirementsLocked || saving}
-              >
-                <option value="">—</option>
-                {typeOptions.map((option) => (
-                  <option key={option.value} value={option.value}>
-                    {option.label}
-                  </option>
-                ))}
-              </select>
+            {/* Chips, not a dropdown: a client happy with a flat OR a
+                bungalow should be able to say both, exactly as the public
+                requirements form lets them say it. Stored as one
+                comma-separated string, which is how the matcher reads it —
+                each picked type scored on its own. */}
+            <Field label="Property type" hint="Pick every type they'd consider — as many as you like.">
+              <div className="type-chips" role="group" aria-label="Property type">
+                {typeChoices.map((type) => {
+                  const active = pickedTypes.some((picked) => picked.toLowerCase() === type.toLowerCase());
+                  return (
+                    <button
+                      key={type}
+                      type="button"
+                      className={`type-chip${active ? " type-chip--on" : ""}`}
+                      onClick={() => toggleType(type)}
+                      aria-pressed={active}
+                      disabled={requirementsLocked || saving}
+                    >
+                      {active && <IconCheck size={13} />}
+                      {type}
+                    </button>
+                  );
+                })}
+              </div>
             </Field>
 
+            {/* One optional box per picked type, in the unit people actually
+                use for it. Free text on purpose — "about 1200", "150–250"
+                both read fine (Backend/Service/ClientPropertyMatchingService/
+                normalization.py's parse_size_requirement) — and it only ever
+                nudges the matching, never rules a property out. */}
+            {pickedTypes.length > 0 && (
+              <Field
+                label="Preferred size (optional)"
+                hint="Only if they have one in mind — a rough number or a range is perfect."
+              >
+                <div className="size-rows">
+                  {pickedTypes.map((type) => {
+                    const unit = sizeUnitOf(type);
+                    const inputId = `client-form-size-${type.toLowerCase().replace(/[^a-z0-9]+/g, "-")}`;
+                    return (
+                      <div className="size-row" key={type}>
+                        <label className="size-row__type" htmlFor={inputId}>
+                          {type}
+                        </label>
+                        <div className="size-row__box">
+                          <input
+                            id={inputId}
+                            className="input"
+                            value={form.property_sizes[type] ?? ""}
+                            onChange={(event) =>
+                              setForm((prev) => ({
+                                ...prev,
+                                property_sizes: { ...prev.property_sizes, [type]: event.target.value },
+                              }))
+                            }
+                            placeholder={unit === "vaar" ? "e.g. 200 or 150–250" : "e.g. 1200 or 1000–1500"}
+                            disabled={requirementsLocked || saving}
+                            maxLength={80}
+                          />
+                          <span className="size-row__unit" aria-hidden="true">
+                            {unit}
+                          </span>
+                        </div>
+                      </div>
+                    );
+                  })}
+                </div>
+              </Field>
+            )}
+
+            {/* Each of these maps to a shape the matcher actually parses
+                (normalization.py's parse_bhk_intent) — "2 to 5" takes
+                everything in between, "3+" opens up everything larger,
+                "exactly 3" closes it down again. */}
             <Field
-              label="BHK / configuration"
+              label="BHK"
               htmlFor="client-form-bhk"
-              hint="However they put it — “3 BHK”, “2 or 3 BHK”, “3+ BHK”, “1 RK”."
+              hint="Write it however they think of it — “3 BHK”, “2 to 5 BHK”, “2 or 3 BHK”, “3+ BHK”, “exactly 3 BHK”, “1 RK”."
             >
               <input
                 id="client-form-bhk"
                 className="input"
                 value={form.bhk}
                 onChange={(event) => set("bhk", event.target.value)}
-                placeholder="e.g. 3 BHK"
+                placeholder="e.g. 3 BHK, 2 to 5 BHK, 3+ BHK"
                 disabled={requirementsLocked || saving}
                 maxLength={40}
               />
             </Field>
 
-            <Field label="Budget (₹)" hint="Type it however you like — 45L, 1.2cr or 4500000.">
+            <Field label="Budget (₹)" hint="Write it the way they'd say it — 2.5 cr, 85 L, or 25 K a month to rent.">
+              {/* The key, before the boxes — it answers "how do I write
+                  this?" before anyone has to wonder, as the public form
+                  does. */}
+              <div className="budget-units">
+                <span>
+                  <b>cr</b> crore
+                </span>
+                <span>
+                  <b>L</b> lakh
+                </span>
+                <span>
+                  <b>K</b> thousand
+                </span>
+              </div>
               <div style={{ display: "grid", gridTemplateColumns: "repeat(2, minmax(0, 1fr))", gap: 10 }}>
                 <input
                   className="input"
@@ -645,7 +808,7 @@ export default function ClientFormDialog({
                   value={form.budget_min_inr}
                   onChange={(event) => set("budget_min_inr", event.target.value)}
                   onBlur={() => onBudgetBlur("budget_min_inr")}
-                  placeholder="Min"
+                  placeholder="Min — e.g. 80 L"
                   disabled={requirementsLocked || saving}
                   maxLength={20}
                 />
@@ -656,7 +819,7 @@ export default function ClientFormDialog({
                   value={form.budget_max_inr}
                   onChange={(event) => set("budget_max_inr", event.target.value)}
                   onBlur={() => onBudgetBlur("budget_max_inr")}
-                  placeholder="Max"
+                  placeholder="Max — e.g. 1.2 cr"
                   disabled={requirementsLocked || saving}
                   maxLength={20}
                 />

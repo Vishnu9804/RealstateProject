@@ -51,6 +51,7 @@ import {
   IconMessage,
   IconPhone,
   IconPin,
+  IconPlus,
   IconRefresh,
   IconSearch,
   IconTag,
@@ -68,10 +69,11 @@ import {
  * click-a-column-heading filter dialogs (lib/requirementFilters.ts, on the
  * Properties page's own FilterPopover) — because it is the same job from the
  * other direction, and an operator switching between the two should not have
- * to learn a second set of habits. What it deliberately does NOT carry over
- * is everything that only makes sense for supply: there is no Main/Outsider
- * split, no Needs-review queue, no photos and no Add button (a requirement
- * only exists because someone asked for it in a monitored chat).
+ * to learn a second set of habits — Add included: a requirement heard on a
+ * call, or in a chat this app does not monitor, is typed in here the same way
+ * a property is. What it deliberately does NOT carry over is everything that
+ * only makes sense for supply: there is no Main/Outsider split, no
+ * Needs-review queue and no photos.
  *
  * The columns are exactly the fields matching and sharing use. Everything
  * else a broker wrote (furnishing, size, who it is for, urgency, ...) is in
@@ -178,7 +180,11 @@ export default function BrokerRequirementsPage() {
   const [page, setPage] = useState(1);
 
   const [detailId, setDetailId] = useState<string | null>(null);
-  const [editing, setEditing] = useState<BrokerRequirementRecord | null>(null);
+  // Add and Edit are one dialog (see RequirementFormDialog), held as one bit
+  // of state exactly like the Properties page's own formDialog.
+  const [formDialog, setFormDialog] = useState<{ mode: "add" | "edit"; requirement?: BrokerRequirementRecord } | null>(
+    null,
+  );
   const [deleteTarget, setDeleteTarget] = useState<BrokerRequirementRecord | null>(null);
   // Which requirement's matched-properties dialog is open. Held as the
   // whole record, not an id: the dialog needs the requirement's own fields
@@ -472,9 +478,19 @@ export default function BrokerRequirementsPage() {
     setColumnFilter("listingType", { kind: "values", selected: [value === "Rent" ? "Rent" : "Buy"] });
   }
 
-  function applySaved(saved: BrokerRequirementRecord) {
-    setRequirements((prev) => (prev ? prev.map((r) => (r.record_id === saved.record_id ? saved : r)) : prev));
-    setEditing(null);
+  /** Patched into the list in place rather than re-fetching it: the saved
+   *  record the backend just returned IS the current one, so a reload would
+   *  only re-download every other row to learn nothing. */
+  function applySaved(saved: BrokerRequirementRecord, mode: "add" | "edit") {
+    if (mode === "add") {
+      setRequirements((prev) => (prev ? [...prev, saved] : [saved]));
+      // Marked as already seen so the new-arrival highlight doesn't fire for
+      // a row this operator just typed themselves.
+      seenIds.current?.add(saved.record_id);
+    } else {
+      setRequirements((prev) => (prev ? prev.map((r) => (r.record_id === saved.record_id ? saved : r)) : prev));
+    }
+    setFormDialog(null);
   }
 
   async function confirmDelete() {
@@ -540,6 +556,9 @@ export default function BrokerRequirementsPage() {
           </span>
           <Button icon={<IconRefresh size={15} />} onClick={() => load(true)} busy={refreshing}>
             Refresh
+          </Button>
+          <Button variant="primary" icon={<IconPlus size={15} />} onClick={() => setFormDialog({ mode: "add" })}>
+            Add requirement
           </Button>
         </div>
       </header>
@@ -652,7 +671,12 @@ export default function BrokerRequirementsPage() {
           <EmptyState
             icon={<IconInbox size={38} />}
             title="Nothing captured yet"
-            body="Requirements appear here automatically once a chat selected under Requirement monitoring receives a message asking for a property. Check the Connection page to confirm something is selected there."
+            body="Requirements appear here automatically once a chat selected under Requirement monitoring receives a message asking for a property. Check the Connection page to confirm something is selected there — or add one by hand if you heard it somewhere this app doesn't watch."
+            action={
+              <Button variant="primary" icon={<IconPlus size={15} />} onClick={() => setFormDialog({ mode: "add" })}>
+                Add requirement
+              </Button>
+            }
           />
         </Panel>
       )}
@@ -685,7 +709,7 @@ export default function BrokerRequirementsPage() {
               countFor={countFor}
               onOpenDetail={(requirement) => setDetailId(requirement.record_id)}
               onMatch={setMatchesFor}
-              onEdit={setEditing}
+              onEdit={(requirement) => setFormDialog({ mode: "edit", requirement })}
               onDelete={setDeleteTarget}
             />
           ) : (
@@ -696,7 +720,7 @@ export default function BrokerRequirementsPage() {
               countFor={countFor}
               onOpenDetail={(requirement) => setDetailId(requirement.record_id)}
               onMatch={setMatchesFor}
-              onEdit={setEditing}
+              onEdit={(requirement) => setFormDialog({ mode: "edit", requirement })}
               onDelete={setDeleteTarget}
             />
           )}
@@ -721,7 +745,7 @@ export default function BrokerRequirementsPage() {
           requirement={detailRequirement}
           onClose={() => setDetailId(null)}
           onMatch={(requirement) => setMatchesFor(requirement)}
-          onEdit={(requirement) => setEditing(requirement)}
+          onEdit={(requirement) => setFormDialog({ mode: "edit", requirement })}
           onDelete={(requirement) => setDeleteTarget(requirement)}
         />
       )}
@@ -737,8 +761,13 @@ export default function BrokerRequirementsPage() {
         />
       )}
 
-      {editing && (
-        <RequirementFormDialog requirement={editing} onClose={() => setEditing(null)} onSaved={applySaved} />
+      {formDialog && (
+        <RequirementFormDialog
+          mode={formDialog.mode}
+          requirement={formDialog.requirement}
+          onClose={() => setFormDialog(null)}
+          onSaved={applySaved}
+        />
       )}
 
       {deleteTarget && (

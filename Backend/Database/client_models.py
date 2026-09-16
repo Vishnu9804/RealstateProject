@@ -103,6 +103,13 @@ class ClientRow(ClientBase):
     # Service/ClientPropertyMatchingService/normalization.py reads what it
     # can out of it. NULL for every client written before this existed.
     property_sizes: Mapped[Optional[dict]] = mapped_column(JSON(none_as_null=True), nullable=True)
+    # How furnished the client wants it — one of the same three values a
+    # PROPERTY's furnishing is normalized onto ("Fully furnished", "Semi
+    # furnished", "Unfurnished"), so the two sides compare directly (see
+    # Service/ClientPropertyMatchingService/normalization.furnishing_score).
+    # NULL for every client written before this existed, which correctly
+    # means "no preference stated" and is never scored as a mismatch.
+    furnishing: Mapped[Optional[str]] = mapped_column(String, nullable=True)
 
     # --- public-form abuse guard ---
     # How many times the PUBLIC requirements form has been completed for
@@ -261,6 +268,7 @@ class InstagramContactRow(ClientBase):
     preferred_areas: Mapped[Optional[str]] = mapped_column(String, nullable=True)
     additional_requirements: Mapped[Optional[str]] = mapped_column(Text, nullable=True)
     property_sizes: Mapped[Optional[dict]] = mapped_column(JSON(none_as_null=True), nullable=True)
+    furnishing: Mapped[Optional[str]] = mapped_column(String, nullable=True)
 
     created_at: Mapped[datetime] = mapped_column(DateTime(timezone=True), server_default=func.now())
     updated_at: Mapped[datetime] = mapped_column(

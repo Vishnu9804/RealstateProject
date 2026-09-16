@@ -14,6 +14,10 @@ export interface RequirementContentFields {
   area_name?: string | null;
   preferred_areas?: string[];
   society_name?: string | null;
+  /** "Fully furnished" | "Semi furnished" | "Unfurnished", or null for "not
+   *  stated" — the same three values a property's furnishing uses, which is
+   *  what lets matching compare the two. */
+  furnishing?: string | null;
   budget_text?: string | null;
   budget_min_inr?: number | null;
   budget_max_inr?: number | null;

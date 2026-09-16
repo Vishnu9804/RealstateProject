@@ -99,6 +99,10 @@ class ClientDetailsRequest(BaseModel):
     # Model/WhatsAppInquiryHandlingModel/form_submission.py), so a client's
     # sizes read identically however they were recorded.
     property_sizes: Optional[Dict[str, str]] = None
+    # "Fully furnished" | "Semi furnished" | "Unfurnished", or null for no
+    # preference — the same three values the public requirements form offers.
+    # Anything else is dropped server-side (manual_client_service).
+    furnishing: Optional[str] = None
     # A data URL, already resized in the browser.
     photo_url: Optional[str] = None
 

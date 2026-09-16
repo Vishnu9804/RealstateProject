@@ -43,6 +43,13 @@ class ClientRecord(BaseModel):
     # Per-type size preference, keyed by a type named in property_type —
     # see Database/client_models.py's column of the same name.
     property_sizes: Optional[Dict[str, str]] = None
+    # How furnished the client wants the property: one of
+    # Service/ClientPropertyMatchingService/normalization.FURNISHING_OPTIONS
+    # ("Fully furnished" | "Semi furnished" | "Unfurnished"), or None when
+    # they did not say — which is every client stored before this field
+    # existed, and is never treated as a preference (see
+    # normalization.furnishing_score).
+    furnishing: Optional[str] = None
 
     # How many times the public requirements form has been completed for
     # this number -- 1 is the original registration, every later one an

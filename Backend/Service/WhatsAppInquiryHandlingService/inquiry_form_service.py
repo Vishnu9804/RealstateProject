@@ -92,6 +92,7 @@ _REQUIREMENT_FIELDS = (
     "preferred_areas",
     "additional_requirements",
     "property_sizes",
+    "furnishing",
 )
 
 # Bounds on the multi-select property type and its per-type sizes. Far above
@@ -305,14 +306,39 @@ def _extract_requirement_fields(submission: FormSubmissionRequest) -> dict:
 
     property_type may now name several types ("Flat, Bungalow"), and
     property_sizes carries an optional size for each — cleaned together, so
-    a size is only ever kept for a type that was actually picked."""
+    a size is only ever kept for a type that was actually picked.
+
+    furnishing is put onto the three-value vocabulary both sides share
+    (normalization.FURNISHING_OPTIONS) and DROPPED when it is anything else —
+    unlike every other text field here, which is free text a person may write
+    however they like. This one is a dropdown with three options, so a value
+    that is none of them did not come from the form, and storing it would only
+    produce a preference nothing can ever match against."""
     fields = {field: getattr(submission, field) for field in _REQUIREMENT_FIELDS}
     for field in fields:
         if field not in ("budget_min_inr", "budget_max_inr", "property_sizes"):
             fields[field] = _blank_to_none(fields[field])
     fields["property_type"] = _clean_property_types(fields["property_type"])
     fields["property_sizes"] = _clean_property_sizes(submission.property_sizes, fields["property_type"])
+    fields["furnishing"] = clean_furnishing(fields["furnishing"])
     return fields
+
+
+def clean_furnishing(value: Optional[str]) -> Optional[str]:
+    """One of normalization.FURNISHING_OPTIONS, or None. Shared with the
+    dashboard's own Add/Edit client dialog (manual_client_service.py) and the
+    broker-requirement Add/Edit dialog, so a furnishing preference reads
+    identically however it was recorded.
+
+    Lazily imported: this module belongs to whatsappInquiryHandling and the
+    matching feature is the one that owns the vocabulary — the same
+    cross-feature pattern client_store.upsert_client already uses."""
+    from Service.ClientPropertyMatchingService import normalization
+
+    if value is None:
+        return None
+    canonical = normalization.canonical_furnishing(value)
+    return canonical if canonical in normalization.FURNISHING_OPTIONS else None
 
 
 def _split_property_types(value: Optional[str]) -> list:

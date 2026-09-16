@@ -78,6 +78,16 @@ from Service.WhatsAppDataFetchingService import (
 _in_flight_lock = threading.Lock()
 _in_flight_fingerprints: Set[str] = set()
 
+# The editable requirement fields no score is built from — the broker's own
+# name and number. Every other editable field reaches the scored text (see
+# requirement_matching_service._as_pseudo_client and
+# client_requirement_text_builder.build_requirement_text), so changing one
+# genuinely changes what this requirement asks for and its matches are
+# re-scored. These two do not, so an edit confined to them leaves the stored
+# shortlist exactly as it stands. The listing-side twin of this rule lives in
+# match_invalidation_service.MATCH_NEUTRAL_FIELDS.
+MATCH_NEUTRAL_REQUIREMENT_FIELDS = frozenset({"contact_name", "contact_phone"})
+
 
 @cpu_usage_service.tracked("Requirement batch — LLM structuring, save & matching", "WhatsApp → Requirements")
 def handle_batch_ready(batch: List[WhatsAppChatMessage]) -> None:
@@ -419,6 +429,7 @@ def create_requirement(content_fields: Dict[str, Any]) -> BrokerRequirementRecor
     )
     requirement.bhk = requirement_normalization.canonical_bhk(requirement.bhk)
     requirement.requirement_type = requirement_normalization.canonical_requirement_type(requirement.requirement_type)
+    requirement.furnishing = requirement_normalization.canonical_furnishing(requirement.furnishing)
     # The structurer's own post-model clean-ups, reused rather than repeated:
     # both are pure functions over the record (no LLM call, no I/O), and this
     # is what lets someone type just "80L-1cr" into Budget and still get the
@@ -439,26 +450,50 @@ def update_requirement(record_id: str, content_updates: Dict[str, Any]) -> Optio
     never editable. Returns None if no requirement with this record_id
     exists."""
     filtered = {key: value for key, value in content_updates.items() if key in EDITABLE_CONTENT_FIELDS}
+    if "furnishing" in filtered:
+        # Tidied BEFORE the comparison below, so re-saving the same level
+        # written slightly differently is not counted as a change and does
+        # not trigger a re-score. The dialog offers exactly the three
+        # canonical values, so in practice this only catches a value that
+        # arrived some other way.
+        filtered["furnishing"] = requirement_normalization.canonical_furnishing(filtered["furnishing"])
     if not filtered:
         # Nothing editable was sent — return the record unchanged rather
         # than writing an empty update (which would still bump updated_at
         # and make every polling page re-fetch for no reason).
         return get_requirement(record_id)
+    # Read BEFORE the write, so the values that actually moved can be told
+    # apart from the ones the dialog simply re-posted: its Save sends the
+    # whole form every time (RequirementFormDialog.tsx's toPayload), so the
+    # keys that arrived say nothing about what a person changed. One
+    # primary-key read per manual edit, against a full re-score of every
+    # candidate property that this then avoids on a contact-only correction.
+    existing = requirement_store.get_requirement(record_id)
+    if existing is None:
+        return None
+    moved = {key for key, value in filtered.items() if getattr(existing, key, None) != value}
     updated = requirement_store.update_requirement(record_id, filtered)
     if updated is None:
         return None
-    # The edit may have changed what the requirement asks for, so its stored
-    # matches are re-scored now rather than left describing the old version.
+    # The edit may have changed what the requirement ASKS FOR, in which case
+    # its stored matches describe the old version and are re-scored now.
+    # A change to the contact name or number is not that: neither reaches
+    # the scored text (requirement_matching_service._as_pseudo_client maps
+    # contact_name onto a name nothing embeds, and drops contact_phone
+    # entirely), so no score can move and the broker's shortlist must not be
+    # torn down and rebuilt to arrive at the same answer.
+    #
     # Swallowed for the same reason as delete_requirement's cache eviction: a
     # matching failure must never turn a saved edit into an error (and the
     # next time the matches are opened, the changed text is detected and
     # they are re-scored anyway).
-    try:
-        from Service.BrokerRequirementService import requirement_matching_service
+    if moved - MATCH_NEUTRAL_REQUIREMENT_FIELDS:
+        try:
+            from Service.BrokerRequirementService import requirement_matching_service
 
-        requirement_matching_service.recompute_for_requirement(record_id)
-    except Exception as exc:  # noqa: BLE001
-        step_logger.error(f"[Matching] Could not re-score requirement {record_id} after its edit: {exc!r}")
+            requirement_matching_service.recompute_for_requirement(record_id)
+        except Exception as exc:  # noqa: BLE001
+            step_logger.error(f"[Matching] Could not re-score requirement {record_id} after its edit: {exc!r}")
     return _to_record(updated)
 
 

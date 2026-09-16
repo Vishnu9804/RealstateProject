@@ -23,6 +23,18 @@ WhatsAppDataFetchingService/embedding_service.py) and the same canonical
 requirement text (client_requirement_text_builder), the same cutoffs, the
 same MatchBucket.
 
+SEVERAL ACCEPTABLE TYPES ARE SCORED SEPARATELY
+
+A requirement very often names more than one acceptable type ("2/3 BHK full
+furnished, row house chale" -> "Flat, Row House"). Each of them is an equal
+preference, so — exactly as for a client who ticked several types on the
+requirements form — the property is scored once per type and keeps its best
+result, tagged with the type it was for. That tag (MatchScore.matched_type)
+is what the matches dialog's Property type row splits on, and it is produced
+by scoring.score_client_property, the same function the client side uses. A
+requirement with one type, or none, goes through scoring.score_property
+exactly as it always did.
+
 THE ONE RULE ADDED ON TOP: A BHK MEANS A HOME
 
 A broker requirement very often names no property type ("2 BHK Fully
@@ -346,6 +358,22 @@ def drop_property_from_memory_cache(property_record_id: str) -> None:
     requirement_match_store.drop_property_in_memory(property_record_id)
 
 
+def _type_plan(pseudo_client: ClientRecord) -> List[Tuple[str, None]]:
+    """The requirement's property types, one entry each, in the shape
+    scoring.score_client_property takes — with no size against any of them,
+    because a requirement has nowhere to state one (see _as_pseudo_client).
+
+    A requirement naming SEVERAL types ("Flat, Row House") means all of them
+    are acceptable, which is exactly what a client's own multi-select means,
+    so it is now scored the same way: each type on its own, best result kept,
+    tagged with the type it was for (MatchScore.matched_type) so the matches
+    dialog can split the shortlist one tab per type. One type, or none, takes
+    scoring.score_property unchanged — see score_client_property's own
+    fall-through, which is what keeps every single-type requirement's score
+    byte-for-byte what it always was."""
+    return [(group, None) for group in normalization.split_type_groups(pseudo_client.property_type)]
+
+
 def _score(
     requirement: StructuredRequirement, pseudo_client: ClientRecord, properties: Iterable[EmbeddedProperty]
 ) -> List[MatchScore]:
@@ -358,11 +386,12 @@ def _score(
         return []
     vector = _requirement_vector(requirement, pseudo_client)
     bhk_without_type = _asks_bhk_without_type(requirement)
+    plan = _type_plan(pseudo_client)
     best: Dict[str, MatchScore] = {}
     for prop in candidates:
         if _excluded_for_requirement(bhk_without_type, prop):
             continue
-        score = scoring.score_property(pseudo_client, prop, vector)
+        score = scoring.score_client_property(pseudo_client, prop, vector, plan)
         if score is None:
             continue
         previous = best.get(score.record_id)
@@ -371,11 +400,27 @@ def _score(
     return list(best.values())
 
 
+# Appended to a MULTI-TYPE requirement's fingerprint, and to nothing else.
+#
+# The fingerprint answers "is what is stored still the result of scoring this
+# requirement?", and for a requirement naming several types the answer changed
+# when _type_plan above started scoring each type on its own. Marking that
+# makes every such requirement re-score itself once, on its next read or on
+# the next nightly catch-up, which is also what fills in the matched_type its
+# type tabs split on. A requirement with one type or none is scored by exactly
+# the same code as before, so its fingerprint is left untouched and it is
+# never re-scored for nothing.
+_PER_TYPE_SCORING_MARKER = "|| per-type scoring v1"
+
+
 def _fingerprint(pseudo_client: ClientRecord) -> str:
     """sha256 of the exact text the requirement is scored and embedded from.
     Every field scoring reads — buy/rent, type, BHK, budget, areas, society,
-    description — is part of that text, so any change to them changes this."""
+    furnishing, description — is part of that text, so any change to them
+    changes this."""
     text = client_requirement_text_builder.build_requirement_text(pseudo_client)
+    if len(_type_plan(pseudo_client)) > 1:
+        text = f"{text} {_PER_TYPE_SCORING_MARKER}"
     return hashlib.sha256(text.encode("utf-8")).hexdigest()
 
 
@@ -407,8 +452,12 @@ def _as_pseudo_client(requirement: StructuredRequirement) -> ClientRecord:
       - property_type: requirement_type — written with the same names
         StructuredProperty.property_type uses, which is exactly what
         normalization.property_type_gate compares against. Several types
-        arrive comma-separated main-first, which is the shape that gate
-        already splits on ("Flat, Row House").
+        arrive comma-separated ("Flat, Row House") and are scored one at a
+        time, each on its own gate — see _type_plan.
+      - furnishing: copied straight across. Both sides are written with the
+        same three words (normalization.FURNISHING_OPTIONS), so the scoring
+        engine's furnishing field compares them without knowing which side
+        is a requirement and which is a client.
       - preferred_areas: the full list, comma-joined, because scoring's
         location score splits a client's own free-text field on commas and
         slashes. area_name is only the first of that list (see
@@ -440,6 +489,7 @@ def _as_pseudo_client(requirement: StructuredRequirement) -> ClientRecord:
         purpose="rent" if requirement.listing_type == "Rent" else "buy",
         property_type=requirement.requirement_type,
         bhk=requirement.bhk,
+        furnishing=requirement.furnishing,
         budget_min_inr=requirement.budget_min_inr,
         budget_max_inr=requirement.budget_max_inr,
         preferred_areas=", ".join(areas) if areas else None,
@@ -517,6 +567,7 @@ def _summarize(requirement: StructuredRequirement) -> str:
         areas = [requirement.area_name]
     parts = [
         " ".join(part for part in (requirement.bhk, requirement.requirement_type) if part) or None,
+        requirement.furnishing,
         "to rent" if requirement.listing_type == "Rent" else "to buy",
         ", ".join(areas) if areas else None,
     ]

@@ -47,6 +47,7 @@ const REQUIREMENT_FIELDS: [string, string][] = [
   ["area_name", "Primary area"],
   ["preferred_areas", "Preferred areas"],
   ["society_name", "Society"],
+  ["furnishing", "Furnishing"],
   ["budget_text", "Budget"],
   ["budget_min_inr", "Budget min (₹)"],
   ["budget_max_inr", "Budget max (₹)"],

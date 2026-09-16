@@ -32,8 +32,17 @@ from Database.session import get_session
 from Model.ClientPropertyMatchingModel.match_bucket import MatchBucket
 from Model.ClientPropertyMatchingModel.match_score import MatchScore
 
-_SCORE_COLUMNS = ("score", "bucket", "evidence_ratio", "is_partial_match", "property_category", "field_scores", "reason")
-# Rows per multi-row upsert: 9 columns each keeps one statement far under
+_SCORE_COLUMNS = (
+    "score",
+    "bucket",
+    "evidence_ratio",
+    "is_partial_match",
+    "property_category",
+    "field_scores",
+    "reason",
+    "matched_type",
+)
+# Rows per multi-row upsert: 10 columns each keeps one statement far under
 # Postgres's 65,535 bind-parameter ceiling.
 _UPSERT_CHUNK = 1000
 
@@ -312,6 +321,7 @@ def _row_values(requirement_id: int, match: MatchScore) -> dict:
         "property_category": match.property_category,
         "field_scores": match.field_scores,
         "reason": match.reason,
+        "matched_type": match.matched_type,
     }
 
 
@@ -325,4 +335,5 @@ def _to_score(row: BrokerRequirementMatchRow) -> MatchScore:
         property_category=row.property_category,
         field_scores=row.field_scores,
         reason=row.reason,
+        matched_type=row.matched_type,
     )

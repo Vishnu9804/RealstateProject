@@ -105,8 +105,12 @@ def get_session() -> Iterator[Session]:
 # nothing matched, shared or computed on them (see StructuredRequirement's
 # docstring). Text columns with the label their value is kept under in
 # `description`; the size and the two flags are rendered separately below.
+#
+# `furnishing` is deliberately NOT in either list any more. It was retired
+# with the rest (its values moved into `description`, so nothing was lost),
+# and it is a real, scored column again — see BrokerRequirementRow.furnishing.
+# Leaving it here would drop that column on every single startup.
 _RETIRED_REQUIREMENT_TEXT_COLUMNS = (
-    ("furnishing", "Furnishing"),
     ("address", "Location"),
     ("occupant_profile", "For"),
     ("food_preference", "Food"),
@@ -114,7 +118,6 @@ _RETIRED_REQUIREMENT_TEXT_COLUMNS = (
     ("broker_chain", "Deal via"),
 )
 _RETIRED_REQUIREMENT_COLUMNS = (
-    "furnishing",
     "carpet_area_min",
     "carpet_area_max",
     "carpet_area_unit",
@@ -135,8 +138,6 @@ def _retired_requirement_details_sql(present: set) -> str:
     them existed simply lacks those). concat_ws skips NULLs, so a row with
     none of them renders as ''."""
     parts = []
-    if "furnishing" in present:
-        parts.append("CASE WHEN btrim(COALESCE(furnishing, '')) <> '' THEN 'Furnishing: ' || btrim(furnishing) END")
     if "carpet_area_min" in present or "carpet_area_max" in present:
         low = "carpet_area_min" if "carpet_area_min" in present else "NULL::float8"
         high = "carpet_area_max" if "carpet_area_max" in present else "NULL::float8"
@@ -148,7 +149,7 @@ def _retired_requirement_details_sql(present: set) -> str:
             f"|| COALESCE(' ' || NULLIF(btrim({unit}), ''), '') END"
         )
     for column, label in _RETIRED_REQUIREMENT_TEXT_COLUMNS:
-        if column == "furnishing" or column not in present:
+        if column not in present:
             continue
         parts.append(f"CASE WHEN btrim(COALESCE({column}, '')) <> '' THEN '{label}: ' || btrim({column}) END")
     if "is_urgent" in present:
@@ -546,6 +547,14 @@ def init_db() -> None:
         connection.execute(
             text("ALTER TABLE broker_requirements ADD COLUMN IF NOT EXISTS source_connection_id VARCHAR")
         )
+        # The furnishing level a broker requirement asks for — see
+        # BrokerRequirementRow.furnishing. IF NOT EXISTS matters more than
+        # usual here: on a database that has not yet run the column-retiring
+        # migration this column is still present (with its old free-text
+        # values, which the matcher reads perfectly well), and on one that
+        # has, this is what brings it back. Nullable either way, so both
+        # cases end up with the same shape and no row is rewritten.
+        connection.execute(text("ALTER TABLE broker_requirements ADD COLUMN IF NOT EXISTS furnishing VARCHAR"))
         # The sold-out snapshot's copy of PropertyRow.super_built — see
         # soldout_property_repository._PROPERTY_COLUMNS, whose INSERT ... SELECT
         # carries it across. Nullable, so existing sold-out rows read "not set".
@@ -583,6 +592,25 @@ def init_db() -> None:
         connection.execute(text("ALTER TABLE instagram_contacts ADD COLUMN IF NOT EXISTS property_sizes JSON"))
         connection.execute(
             text("ALTER TABLE client_property_matches ADD COLUMN IF NOT EXISTS matched_type VARCHAR")
+        )
+        # The furnishing PREFERENCE — "Fully furnished" / "Semi furnished" /
+        # "Unfurnished" — on a client inquiry and on an Instagram-only
+        # contact, matching StructuredProperty.furnishing's own vocabulary so
+        # the two sides compare directly (see Service/
+        # ClientPropertyMatchingService/normalization.furnishing_score).
+        # Nullable, no default, no backfill: catalog-only in Postgres, and
+        # NULL already means exactly what every existing row should say —
+        # "no preference stated", which is never scored as a mismatch.
+        connection.execute(text("ALTER TABLE clients ADD COLUMN IF NOT EXISTS furnishing VARCHAR"))
+        connection.execute(text("ALTER TABLE instagram_contacts ADD COLUMN IF NOT EXISTS furnishing VARCHAR"))
+        # Which of a broker requirement's several types a stored match was
+        # for (BrokerRequirementMatchRow.matched_type) — the demand-side twin
+        # of client_property_matches.matched_type just above, and what lets
+        # the requirement matches dialog split its cards one tab per type.
+        # NULL for a single-type requirement and for every row stored before
+        # this existed (those cards simply show on every tab).
+        connection.execute(
+            text("ALTER TABLE broker_requirement_matches ADD COLUMN IF NOT EXISTS matched_type VARCHAR")
         )
         # The stored, indexed E.164 number on landing-page leads -- see
         # LandingLeadRow.phone_e164. The index is what turns the repeat-

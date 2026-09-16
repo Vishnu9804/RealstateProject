@@ -180,6 +180,12 @@ export interface InquiryClientRecord {
    *  (which lists every type they picked, comma-separated):
    *  {"Flat": "1200 sqft", "Bungalow": "200 vaar"}. Null when none. */
   property_sizes?: Record<string, string> | null;
+  /** How furnished they want it — "Fully furnished" | "Semi furnished" |
+   *  "Unfurnished", or null for no preference. The same three values a
+   *  property's own furnishing uses, so the matcher compares them directly
+   *  (at a deliberately low weight — it is the easiest thing to change
+   *  about a property). */
+  furnishing?: string | null;
   /** AgentManagement feature — which agent (if any) is handling this
    *  client's site visit, and whether the WhatsApp hand-off messages were
    *  ever sent. See Backend/Database/client_models.py's own comment. */
@@ -716,6 +722,11 @@ export interface BrokerRequirementRecord {
   /** Every locality the requirement named, exactly as written. */
   preferred_areas: string[];
   society_name: string | null;
+  /** How furnished the broker asked for — "Fully furnished" | "Semi
+   *  furnished" | "Unfurnished", or null when the message did not say. The
+   *  same three values a property's furnishing uses, so matching compares
+   *  them directly; the broker's own wording stays in `description`. */
+  furnishing: string | null;
   /** The broker's own budget wording ("21k max"), shown on hover. */
   budget_text: string | null;
   budget_min_inr: number | null;

@@ -22,6 +22,13 @@ def build_requirement_text(client: ClientRecord) -> str:
         client.bhk,
         _budget_text(client.budget_min_inr, client.budget_max_inr),
         client.preferred_areas,
+        # Only ever present for someone who actually picked one, so every
+        # client and every broker requirement stored before this field
+        # existed produces byte-for-byte the text it always did — which
+        # matters twice over: their vector is unchanged, and so is the
+        # fingerprint a broker requirement's stored matches are keyed on
+        # (requirement_matching_service._fingerprint).
+        client.furnishing,
         client.additional_requirements,
     ]
     return " | ".join(part for part in parts if part)

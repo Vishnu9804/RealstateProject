@@ -116,13 +116,20 @@ class BrokerRequirementRow(Base):
     # queried by element, exactly like PropertyRow.image_urls.
     preferred_areas: Mapped[list] = mapped_column(JSON, nullable=False, default=list)
     society_name: Mapped[Optional[str]] = mapped_column(String, nullable=True)
+    # Back as a column of its own — see StructuredRequirement.furnishing.
+    # It was retired with the other unmatched detail columns (its values
+    # moved into `description`, which is why nothing was lost) and returns
+    # only now that matching actually scores it. NULL for every row written
+    # in between, which correctly means "not stated" and is never scored as
+    # a mismatch.
+    furnishing: Mapped[Optional[str]] = mapped_column(String, nullable=True)
     budget_text: Mapped[Optional[str]] = mapped_column(String, nullable=True)
     budget_min_inr: Mapped[Optional[float]] = mapped_column(Float, nullable=True)
     budget_max_inr: Mapped[Optional[float]] = mapped_column(Float, nullable=True)
     listing_type: Mapped[str] = mapped_column(String, nullable=False, default="Sale", server_default="Sale")
-    # address / carpet_area_min / carpet_area_max / carpet_area_unit /
-    # furnishing (and the short-lived occupant_profile, food_preference,
-    # possession_timeline, broker_chain, is_urgent, token_ready) are no
+    # address / carpet_area_min / carpet_area_max / carpet_area_unit (and the
+    # short-lived occupant_profile, food_preference, possession_timeline,
+    # broker_chain, is_urgent, token_ready) are no
     # longer columns: nothing matched, shared or computed on them. Their
     # content lives in `description` — see StructuredRequirement's docstring
     # and Database/session.py's _retire_extra_requirement_columns, which

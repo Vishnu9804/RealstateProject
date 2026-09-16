@@ -381,6 +381,7 @@ export default function BrokerRequirementsPage() {
         requirement.requirement_type,
         requirement.bhk,
         requirement.society_name,
+        requirement.furnishing,
         areasLabel(requirement),
         requirement.budget_text,
         requirement.contact_name,
@@ -1181,6 +1182,9 @@ function RequirementDetailDialog({
                   {requirement.bhk}
                 </span>
               )}
+              {/* A field of its own again now that matching scores it — the
+                  broker's own wording is still in the description below. */}
+              {requirement.furnishing && <span className="fact">{requirement.furnishing}</span>}
             </div>
           </div>
           <button type="button" className="toast__close" onClick={onClose} aria-label="Close">

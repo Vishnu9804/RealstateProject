@@ -4,6 +4,7 @@ import { requirementApi, type RequirementContentFields } from "../api/requiremen
 import type { BrokerRequirementRecord } from "../api/types";
 import { friendlyError } from "../lib/apiError";
 import { REQUIREMENT_TYPE_OPTIONS } from "../lib/requirementFilters";
+import { FURNISHING_OPTIONS } from "./PropertyFormDialog";
 import { useToast } from "./ui/Toast";
 import { Button, Segmented } from "./ui/Primitives";
 import { IconX } from "./ui/Icons";
@@ -32,6 +33,10 @@ interface FormState {
   bhk: string;
   preferred_areas: string;
   society_name: string;
+  /** One of FURNISHING_OPTIONS, or "" for "not stated" — the same three
+   *  values a property's furnishing uses, which is what lets matching
+   *  compare the two sides at all. */
+  furnishing: string;
   budget_text: string;
   budget_min_inr: string;
   budget_max_inr: string;
@@ -53,6 +58,7 @@ function toFormState(requirement?: BrokerRequirementRecord): FormState {
     // "Vesu, Althan" is faster than managing chips for two of them.
     preferred_areas: requirement?.preferred_areas.join(", ") ?? "",
     society_name: requirement?.society_name ?? "",
+    furnishing: requirement?.furnishing ?? "",
     budget_text: requirement?.budget_text ?? "",
     budget_min_inr: requirement?.budget_min_inr?.toString() ?? "",
     budget_max_inr: requirement?.budget_max_inr?.toString() ?? "",
@@ -81,6 +87,7 @@ function toPayload(form: FormState): RequirementContentFields {
     // stage sets it, so the two can never disagree after an edit.
     area_name: areas[0] ?? null,
     society_name: text(form.society_name),
+    furnishing: text(form.furnishing),
     budget_text: text(form.budget_text),
     budget_min_inr: num(form.budget_min_inr),
     budget_max_inr: num(form.budget_max_inr),
@@ -239,6 +246,32 @@ export default function RequirementFormDialog({
                   placeholder="e.g. Black Residency"
                 />
               </Field>
+              {/* A dropdown, not free text: this value is MATCHED against a
+                  property's own furnishing, which only ever holds these
+                  three words. Anything else typed here would simply never
+                  compare. Weighed low on purpose — see Backend/Service/
+                  ClientPropertyMatchingService/scoring.py. The broker's own
+                  wording still belongs in Description below. */}
+              <Field label="Furnishing" hint="Optional — nudges matching gently, never rules a property out.">
+                <select
+                  className="select"
+                  value={form.furnishing}
+                  onChange={(e) => set("furnishing", e.target.value)}
+                >
+                  <option value="">—</option>
+                  {/* A stored value that is none of the three (an older
+                      free-text one) is offered as well, so opening Edit can
+                      never silently blank it. */}
+                  {form.furnishing && !FURNISHING_OPTIONS.includes(form.furnishing) && (
+                    <option value={form.furnishing}>{form.furnishing}</option>
+                  )}
+                  {FURNISHING_OPTIONS.map((option) => (
+                    <option key={option} value={option}>
+                      {option}
+                    </option>
+                  ))}
+                </select>
+              </Field>
               <Field label="Buy or Rent">
                 <Segmented
                   ariaLabel="Buy or Rent"
@@ -300,7 +333,7 @@ export default function RequirementFormDialog({
 
             <Field
               label="Description & other details"
-              hint="Furnishing, size, location detail, who it is for, food, possession, urgency, token ready, vaya — anything else the broker asked for."
+              hint="Size, location detail, who it is for, food, possession, urgency, token ready, vaya — anything else the broker asked for. The broker's own furnishing wording belongs here too; the field above holds only the level."
             >
               <textarea
                 className="textarea"

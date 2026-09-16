@@ -37,6 +37,7 @@ AREA_KNOWLEDGE_BASE: Dict[str, List[str]] = {
         'Anand Mahal Road',
         'Galaxy Aventura',
         'Parshuram Garden',
+        'Supath Enclave Pal',
         'Top Floor',
     ],
     'Adajan Pal': [
@@ -70,9 +71,11 @@ AREA_KNOWLEDGE_BASE: Dict[str, List[str]] = {
         'Citylight',
         'Anurodh Dwar',
         'Chandan Park',
+        'Citylight Char Rasta',
         'new City Light road',
         'Sarjan Society',
         'Shyam Mandir',
+        'Shyam Mandir new City Light road',
     ],
     'Citylight Char Rasta': [
         'Citylight Char Rasta',
@@ -104,8 +107,11 @@ AREA_KNOWLEDGE_BASE: Dict[str, List[str]] = {
     ],
     'Ghod Dod Road': [
         'Ghod Dod Road',
+        'Athwa',
+        'City Light',
         'Jade Blue',
         'Kakadia Complex Ghod Dod Road',
+        'Seema Row House',
     ],
     'Godadara': [
         'Godadara',
@@ -119,6 +125,7 @@ AREA_KNOWLEDGE_BASE: Dict[str, List[str]] = {
         'Jahangirpura',
         'Anjani Ambrosia',
         'Vaishnodevi Sky',
+        'Vaishnodevi Sky Jahangirpura',
     ],
     'Nanpura': [
         'Nanpura',
@@ -127,6 +134,7 @@ AREA_KNOWLEDGE_BASE: Dict[str, List[str]] = {
     'Pal': [
         'Pal',
         'Adajan',
+        'Arjun',
         'Arjunt',
         'Citylights',
         'Ghod Dod Road',
@@ -175,6 +183,10 @@ AREA_KNOWLEDGE_BASE: Dict[str, List[str]] = {
         'Vacanza',
         'Vacanza Bungalows',
         'Vijay Sales',
+    ],
+    'Piplod–Vesu': [
+        'Piplod–Vesu',
+        'Vacanza',
     ],
     'Udhana Darwaja': [
         'Udhana Darwaja',
@@ -229,5 +241,6 @@ AREA_KNOWLEDGE_BASE: Dict[str, List[str]] = {
     ],
     'VIP Road': [
         'VIP Road',
+        'Vanilla Sky',
     ],
 }

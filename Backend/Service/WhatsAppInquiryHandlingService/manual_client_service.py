@@ -57,6 +57,9 @@ DETAIL_FIELDS = (
     # One optional size per type named in property_type — a dict, not free
     # text, and only ever kept for a type actually picked (_apply_size_rule).
     "property_sizes",
+    # "Fully furnished" | "Semi furnished" | "Unfurnished" — a dropdown, so
+    # anything else is dropped rather than stored (_apply_furnishing_rule).
+    "furnishing",
 )
 _NUMBER_FIELDS = {"budget_min_inr", "budget_max_inr"}
 # Not free text either, so the blank-to-None rule must leave it alone rather
@@ -171,6 +174,13 @@ def _clean_details(fields: Dict[str, Any]) -> Dict[str, Any]:
             continue
         value = fields[name]
         cleaned[name] = value if name in _NUMBER_FIELDS or name in _DICT_FIELDS else _blank_to_none(value)
+    if "furnishing" in cleaned:
+        # The public form's own rule, reused rather than reimplemented, so a
+        # client's furnishing reads identically whether they picked it
+        # themselves or a member of staff did (see clean_property_sizes).
+        from Service.WhatsAppInquiryHandlingService import inquiry_form_service
+
+        cleaned["furnishing"] = inquiry_form_service.clean_furnishing(cleaned["furnishing"])
     return cleaned
 
 

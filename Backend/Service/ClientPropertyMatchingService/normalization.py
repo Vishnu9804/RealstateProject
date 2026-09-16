@@ -309,6 +309,114 @@ def property_area_sqft(area_sqft: Optional[float], area_vaar: Optional[float]) -
     return None
 
 
+# --- furnishing ------------------------------------------------------------
+#
+# The three values BOTH sides are written with — a property's furnishing is
+# normalized onto them by the extractor (Agent/WhatsAppDataFetchingAgent/
+# glm_extraction_schema.py) and a client/broker requirement picks one of them
+# from a dropdown. Kept here, next to the scoring helper that reads them, so
+# the vocabulary has exactly one home: the property form
+# (Frontend/src/components/PropertyFormDialog.tsx's FURNISHING_OPTIONS), the
+# requirement form and the public requirements form all spell them the same.
+UNFURNISHED = "Unfurnished"
+SEMI_FURNISHED = "Semi furnished"
+FULLY_FURNISHED = "Fully furnished"
+FURNISHING_OPTIONS = (FULLY_FURNISHED, SEMI_FURNISHED, UNFURNISHED)
+
+# 0 = nothing, 1 = some, 2 = everything. A plain ladder, because that is what
+# furnishing actually is: "semi furnished" sits between the other two, and a
+# miss by one step is a far smaller miss than a miss by two.
+_FURNISHING_LEVEL = {UNFURNISHED: 0, SEMI_FURNISHED: 1, FULLY_FURNISHED: 2}
+
+# Tried IN THIS ORDER, and every match is blanked out before the next pattern
+# runs — which is the whole trick. "semi-furnished" contains "furnished" and
+# "unfurnished" contains "furnish", so a naive "does it say furnished?" test
+# reads all three as Fully furnished. Consuming the more specific wording
+# first leaves nothing for the looser pattern to find.
+_FURNISHING_PATTERNS = (
+    (
+        UNFURNISHED,
+        re.compile(
+            r"un[\s\-]*furnish\w*|non[\s\-]*furnish\w*|not[\s\-]*furnish\w*|with\s*out[\s\-]*furnitur\w*"
+            r"|no[\s\-]*furnitur\w*|bare[\s\-]*shell|empty[\s\-]*(?:flat|house|unit)|naked",
+            re.IGNORECASE,
+        ),
+    ),
+    (
+        SEMI_FURNISHED,
+        re.compile(r"semi[\s\-]*furnish\w*|part(?:ly|ial(?:ly)?)[\s\-]*furnish\w*|half[\s\-]*furnish\w*", re.IGNORECASE),
+    ),
+    (
+        FULLY_FURNISHED,
+        # A bare mention only counts as "furnished" itself — the label word
+        # "furnishing" on its own says nothing about the level, and must not
+        # be read as one.
+        re.compile(
+            r"(?:full?y?|complete(?:ly)?)[\s\-]*furnish\w*|(?<![a-z])furnished|furnitur\w*\s*includ\w*",
+            re.IGNORECASE,
+        ),
+    ),
+)
+
+
+def read_furnishing(text: Optional[str]) -> Optional[str]:
+    """The furnishing level literally stated in `text`, as one of
+    FURNISHING_OPTIONS — or None when the text states none, or states more
+    than one ("2 BHK unfurnished, 3 BHK fully furnished"), where guessing
+    either would be worse than leaving it unknown.
+
+    Used for BOTH jobs a furnishing value needs: tidying a stored/typed value
+    onto the vocabulary (canonical_furnishing) and recovering one the LLM left
+    empty from the words a requirement actually used."""
+    if not text or not text.strip():
+        return None
+    remaining = text
+    found: List[str] = []
+    for label, pattern in _FURNISHING_PATTERNS:
+        if pattern.search(remaining):
+            found.append(label)
+            remaining = pattern.sub(" ", remaining)
+    return found[0] if len(found) == 1 else None
+
+
+def canonical_furnishing(raw: Optional[str]) -> Optional[str]:
+    """A furnishing value rewritten onto FURNISHING_OPTIONS. A value that
+    names no level at all is kept as written (whitespace collapsed) rather
+    than dropped — an unusual but deliberate note a human typed stays theirs,
+    exactly as canonical_bhk treats one."""
+    if raw is None:
+        return None
+    text = " ".join(str(raw).split())
+    if not text:
+        return None
+    return read_furnishing(text) or text
+
+
+def furnishing_level(raw: Optional[str]) -> Optional[int]:
+    """0/1/2 on the ladder above, or None when this side says nothing
+    readable — which scoring treats as "not comparable", never as a miss."""
+    canonical = canonical_furnishing(raw)
+    return _FURNISHING_LEVEL.get(canonical) if canonical else None
+
+
+def furnishing_score(client_raw: Optional[str], property_raw: Optional[str]) -> Optional[float]:
+    """Soft field score in [0, 1], or None when either side has no readable
+    furnishing (never scored as a match or a mismatch).
+
+    Deliberately gentle, and deliberately low-weight in scoring.py: furnishing
+    is the easiest thing about a property to change, so wanting a furnished
+    flat and being shown a semi-furnished one is a nudge down the list, not a
+    reason to bury it."""
+    wanted = furnishing_level(client_raw)
+    offered = furnishing_level(property_raw)
+    if wanted is None or offered is None:
+        return None
+    distance = abs(wanted - offered)
+    if distance == 0:
+        return 1.0
+    return 0.55 if distance == 1 else 0.2
+
+
 _NON_RESIDENTIAL_WORDS_RE = re.compile(
     r"\b(?:plots?|land|shops?|offices?|showrooms?|warehouses?|godowns?|commercial|industrial|factory|shed)\b"
 )

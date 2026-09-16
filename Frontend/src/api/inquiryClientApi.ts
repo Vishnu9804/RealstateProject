@@ -94,6 +94,10 @@ export interface ClientDetailsBody {
    *  type: {"Flat": "1200"}. The same shape the public requirements form
    *  sends; null clears every stored size. */
   property_sizes?: Record<string, string> | null;
+  /** "Fully furnished" | "Semi furnished" | "Unfurnished", or null for no
+   *  preference — the same three values the public requirements form offers
+   *  and a property's own furnishing uses. */
+  furnishing?: string | null;
   /** A data URL, already resized in the browser (lib/imageProcessing.ts). */
   photo_url?: string | null;
 }

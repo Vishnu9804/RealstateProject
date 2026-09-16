@@ -115,6 +115,8 @@ def summarize_requirements(record: Optional[ClientRecord]) -> str:
             lines.append(f"- Preferred size: {sizes}")
     if record.bhk:
         lines.append(f"- BHK: {record.bhk}")
+    if record.furnishing:
+        lines.append(f"- Furnishing: {record.furnishing}")
     if record.budget_min_inr or record.budget_max_inr:
         lines.append(f"- Budget: {_budget_line(record.budget_min_inr, record.budget_max_inr)}")
     if record.preferred_areas:

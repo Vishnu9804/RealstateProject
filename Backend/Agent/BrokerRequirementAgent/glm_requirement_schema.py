@@ -42,11 +42,11 @@ class GLMRequirementItem(BaseModel):
     what keeps its behaviour predictable.
 
     Deliberately only the fields something downstream actually USES —
-    matching (type, BHK, areas, budget, buy/rent, society), sharing (contact
-    name, budget, areas) or the budget fallback (budget_text). Every other
-    detail a broker writes (furnishing, size, road/landmark, who it is for,
-    food, possession, urgency, token, "vaya") is kept, in the broker's own
-    words, in `description`."""
+    matching (type, BHK, areas, budget, buy/rent, society, furnishing),
+    sharing (contact name, budget, areas) or the budget fallback
+    (budget_text). Every other detail a broker writes (size, road/landmark,
+    who it is for, food, possession, urgency, token, "vaya") is kept, in the
+    broker's own words, in `description`."""
 
     requirement_type: Optional[str] = Field(
         default=None,
@@ -76,6 +76,16 @@ class GLMRequirementItem(BaseModel):
         default=None,
         description='A specific building/project/society/complex asked for by name, e.g. "Black Residency" — '
         "NOT a general locality (those go in preferred_areas). Null unless a named building is actually asked for.",
+    )
+    furnishing: Optional[str] = Field(
+        default=None,
+        description='How furnished THIS requirement asks for, normalized to EXACTLY one of "Fully furnished", '
+        '"Semi furnished" or "Unfurnished". "full furnished"/"fully furnished"/"furnished"/"with furniture"/'
+        '"FF" -> "Fully furnished"; "semi furnished"/"semi-furnished"/"partly furnished"/"SF" -> "Semi '
+        'furnished"; "unfurnished"/"non furnished"/"no furniture"/"naked"/"bare shell"/"empty" -> '
+        '"Unfurnished". Null when this requirement says nothing about furnishing — never guess one, and a '
+        "passing mention of one item of furniture is not a furnishing statement. Keep the broker's own wording "
+        "in description as well, exactly as before.",
     )
     budget_text: Optional[str] = Field(
         default=None,
@@ -140,7 +150,7 @@ class GLMRequirementItem(BaseModel):
     # requirement_structurer._parse_extractions).
     _coerce_bhk = field_validator("bhk", mode="before")(coerce_bhk_field)
     _coerce_text = field_validator(
-        "requirement_type", "contact_name", "contact_phone", "description", mode="before"
+        "requirement_type", "furnishing", "contact_name", "contact_phone", "description", mode="before"
     )(_coerce_text_field)
     _coerce_areas = field_validator("preferred_areas", mode="before")(_coerce_list_field)
 

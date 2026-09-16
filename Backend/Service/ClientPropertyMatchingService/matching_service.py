@@ -38,16 +38,44 @@ from Service.ClientPropertyMatchingService import client_requirement_text_builde
 from Service.WhatsAppDataFetchingService import embedding_service
 from Service.WhatsAppInquiryHandlingService import client_store
 
-_REQUIREMENT_FIELDS = (
-    "purpose",
-    "property_type",
-    "bhk",
-    "budget_min_inr",
-    "budget_max_inr",
-    "preferred_areas",
-    "additional_requirements",
-    "property_sizes",
+# Everything on a client that is NOT a requirement: who they are and how we
+# reach them (phone, name, email, photo), the two staff-only notes the
+# Inquiries dialog keeps (current address, loan), and the bookkeeping columns
+# nobody edits by hand. Changing any of these must leave that client's
+# matched properties exactly where they are — correcting a spelling or
+# adding a photo is not a new brief.
+CLIENT_MATCH_NEUTRAL_FIELDS = frozenset(
+    {
+        # identity and contact details
+        "phone",
+        "name",
+        "email",
+        "has_photo",
+        # staff-only notes (Database/client_repository.py's STAFF_DETAIL_FIELDS)
+        "current_address",
+        "about_loan",
+        # lifecycle and bookkeeping — written by the pipeline, never by the
+        # Edit dialog, and read by nothing in scoring.py
+        "status",
+        "pending_action",
+        "last_follow_up_dates",
+        "requirement_submission_count",
+        "assigned_agent_id",
+        "handoff_sent_at",
+        "created_at",
+        "updated_at",
+    }
 )
+
+# A requirement field is simply every OTHER field the record has — the rule
+# stated as a blacklist, on purpose. Listing the requirement fields by hand
+# meant this tuple and the Add/Edit dialog's own field list
+# (manual_client_service.DETAIL_FIELDS) had to be kept in step by memory: add
+# a new requirement to the form and forget this line, and that requirement
+# would be saved and then silently never re-run anyone's matches. Derived,
+# a new field is match-relevant until someone deliberately declares it
+# neutral above. Sorted so the order is stable across runs.
+_REQUIREMENT_FIELDS = tuple(sorted(set(ClientRecord.model_fields) - CLIENT_MATCH_NEUTRAL_FIELDS))
 
 # How many stored properties get scored per recompute — defined, with the
 # builder-project ceiling beside it, in match_candidates.py, the one place
@@ -268,6 +296,7 @@ def has_requirements(client: ClientRecord) -> bool:
             client.preferred_areas,
             client.additional_requirements,
             client.property_sizes,
+            client.furnishing,
         ]
     )
 

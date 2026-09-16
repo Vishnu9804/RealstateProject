@@ -68,6 +68,20 @@ _UNDER_BUDGET_ANCHORS: Tuple[Tuple[float, float], ...] = ((0.0, 1.0), (0.15, 0.8
 _SIZE_WEIGHT = 0.08
 _SIZE_ANCHORS: Tuple[Tuple[float, float], ...] = ((0.0, 1.0), (0.10, 0.85), (0.25, 0.6), (0.50, 0.35), (1.0, 0.2))
 
+# Furnishing — "Fully furnished" / "Semi furnished" / "Unfurnished", stated on
+# the requirements form (and, for a broker requirement, extracted from the
+# message). The LOWEST-weighted field here, on purpose: furnishing is the
+# easiest thing about a property to change, so it is a tie-breaker between
+# otherwise comparable listings, never something that moves a genuinely good
+# match out of its bucket. Its curve lives in normalization.furnishing_score.
+#
+# Like the size weight above, it is added to the weight total ONLY when both
+# sides actually state a furnishing (normalization.furnishing_score returns
+# None otherwise). So every client and every requirement that says nothing
+# about furnishing — which is all of them until someone fills the new field
+# in — scores byte-for-byte what it always did, evidence_ratio included.
+_FURNISHING_WEIGHT = 0.06
+
 SizeRange = Tuple[Optional[float], Optional[float]]
 
 
@@ -85,6 +99,7 @@ def score_property(client: ClientRecord, prop: EmbeddedProperty, client_vector: 
         _purpose_gate(client.purpose, prop.listing_type),
         normalization.property_type_gate(client.property_type, prop.property_type),
         _soft_field_scores(client, prop, client_vector),
+        furnishing=normalization.furnishing_score(client.furnishing, prop.furnishing),
     )
 
 
@@ -125,6 +140,9 @@ def score_client_property(
     soft = _soft_field_scores(client, prop, client_vector)
     prop_token = normalization.canonical_type_token(prop.property_type) if prop.property_type else ""
     area_sqft = normalization.property_area_sqft(prop.area_sqft, prop.area_vaar)
+    # Furnishing is stated once for the whole brief, not per type, so it is
+    # worked out once here rather than inside the loop below.
+    furnishing = normalization.furnishing_score(client.furnishing, prop.furnishing)
 
     best: Optional[MatchScore] = None
     best_key = None
@@ -136,6 +154,7 @@ def score_client_property(
             soft,
             size=_size_score(wanted, area_sqft) if wanted else None,
             size_stated=wanted is not None,
+            furnishing=furnishing,
         )
         if score is None:
             continue
@@ -163,18 +182,27 @@ def _score(
     soft: Dict[str, Optional[float]],
     size: Optional[float] = None,
     size_stated: bool = False,
+    furnishing: Optional[float] = None,
 ) -> Optional[MatchScore]:
     critical_gate = purpose_factor * type_factor
 
     field_scores: Dict[str, Optional[float]] = dict(soft)
-    weights = _SOFT_WEIGHTS
+    extra_weights: Dict[str, float] = {}
     if size_stated:
         field_scores["size"] = size
         # Weighed only when this property has an area to compare. Plenty of
         # listings don't, and an optional preference the client was unsure
         # of anyway must not flag all of those as "Partial data".
         if size is not None:
-            weights = {**_SOFT_WEIGHTS, "size": _SIZE_WEIGHT}
+            extra_weights["size"] = _SIZE_WEIGHT
+    # Already None unless BOTH sides state a furnishing (see
+    # normalization.furnishing_score), so a brief that says nothing about it
+    # adds no field and no weight — and scores exactly as it did before this
+    # field existed.
+    if furnishing is not None:
+        field_scores["furnishing"] = furnishing
+        extra_weights["furnishing"] = _FURNISHING_WEIGHT
+    weights = {**_SOFT_WEIGHTS, **extra_weights} if extra_weights else _SOFT_WEIGHTS
 
     comparable_weight = sum(weights[name] for name, score in field_scores.items() if score is not None)
     total_weight = sum(weights.values())
@@ -210,7 +238,7 @@ def _score(
         is_partial_match=evidence_ratio < PARTIAL_EVIDENCE_CUTOFF,
         property_category=_category_of(prop),
         field_scores=field_scores,
-        reason=_build_reason(purpose_factor, type_factor, evidence_ratio, size),
+        reason=_build_reason(purpose_factor, type_factor, evidence_ratio, size, furnishing),
     )
 
 
@@ -221,7 +249,11 @@ def _category_of(prop: EmbeddedProperty) -> str:
 
 
 def _build_reason(
-    purpose_factor: float, type_factor: float, evidence_ratio: float, size: Optional[float] = None
+    purpose_factor: float,
+    type_factor: float,
+    evidence_ratio: float,
+    size: Optional[float] = None,
+    furnishing: Optional[float] = None,
 ) -> str:
     notes: List[str] = []
     if purpose_factor < 0.5:
@@ -232,6 +264,10 @@ def _build_reason(
         notes.append("property type is a partial fit")
     if size is not None and size < 0.6:
         notes.append("size is outside the preferred range")
+    # Said, but said last and said mildly — it is the lowest-weighted field
+    # here and never on its own a reason to look elsewhere.
+    if furnishing is not None and furnishing < 1.0:
+        notes.append("furnishing is not what was asked for")
     if evidence_ratio < PARTIAL_EVIDENCE_CUTOFF:
         notes.append("limited data available for a full comparison")
     return "; ".join(notes) if notes else "Matches on the fields that were compared."

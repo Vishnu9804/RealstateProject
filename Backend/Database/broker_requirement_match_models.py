@@ -60,6 +60,12 @@ class BrokerRequirementMatchRow(Base):
     property_category: Mapped[str] = mapped_column(String, nullable=False)
     field_scores: Mapped[dict] = mapped_column(JSON, nullable=False, default=dict)
     reason: Mapped[str] = mapped_column(String, nullable=False, default="")
+    # Which of the requirement's property types this property was matched
+    # under, for a requirement that named more than one ("Flat, Row House")
+    # — lets the matches dialog split them into one tab per type, exactly as
+    # client_property_matches.matched_type does on the client side. NULL for
+    # single-type requirements and every row stored before this existed.
+    matched_type: Mapped[Optional[str]] = mapped_column(String, nullable=True)
 
 
 class BrokerRequirementMatchRunRow(Base):

@@ -7,6 +7,7 @@ import { friendlyError } from "../lib/apiError";
 import { loadClientPhoto, setCachedClientPhoto } from "../lib/clientPhotoCache";
 import { formatCompactInr, parseCompactInr } from "../lib/formatters";
 import { fileToClientPhoto } from "../lib/imageProcessing";
+import { FURNISHING_OPTIONS } from "./PropertyFormDialog";
 import { useToast } from "./ui/Toast";
 import { Button, Note } from "./ui/Primitives";
 import { IconAlert, IconCheck, IconImage, IconTrash, IconX } from "./ui/Icons";
@@ -117,6 +118,10 @@ interface FormState {
    *  `property_type`. Sent as `property_sizes`, never as text. */
   property_sizes: Record<string, string>;
   bhk: string;
+  /** One of FURNISHING_OPTIONS, or "" for no preference — the same three
+   *  values a property's own furnishing uses, which is what lets the matcher
+   *  compare them at all. */
+  furnishing: string;
   budget_min_inr: string;
   budget_max_inr: string;
   preferred_areas: string;
@@ -131,6 +136,7 @@ type TextKey =
   | "purpose"
   | "property_type"
   | "bhk"
+  | "furnishing"
   | "preferred_areas"
   | "additional_requirements";
 const TEXT_KEYS: TextKey[] = [
@@ -141,6 +147,7 @@ const TEXT_KEYS: TextKey[] = [
   "purpose",
   "property_type",
   "bhk",
+  "furnishing",
   "preferred_areas",
   "additional_requirements",
 ];
@@ -155,6 +162,7 @@ const BLANK_FORM: FormState = {
   property_type: "",
   property_sizes: {},
   bhk: "",
+  furnishing: "",
   budget_min_inr: "",
   budget_max_inr: "",
   preferred_areas: "",
@@ -184,6 +192,7 @@ function toFormState(client: InquiryClientRecord): FormState {
     property_type: types.join(", "),
     property_sizes: matchSizes(types, client.property_sizes),
     bhk: client.bhk ?? "",
+    furnishing: client.furnishing ?? "",
     budget_min_inr: budgetText(client.budget_min_inr),
     budget_max_inr: budgetText(client.budget_max_inr),
     preferred_areas: client.preferred_areas ?? "",
@@ -479,6 +488,10 @@ export default function ClientFormDialog({
 
   const title = mode === "add" ? "Add a client" : client?.name || client?.phone || "Edit client";
   const purposeOptions = withCurrent(PURPOSES, form.purpose);
+  const furnishingOptions = withCurrent(
+    FURNISHING_OPTIONS.map((option) => ({ value: option, label: option })),
+    form.furnishing,
+  );
   // Every option, plus any stored type that isn't one of them — the chips'
   // equivalent of withCurrent above, so opening Edit never drops a type.
   const pickedTypes = splitTypes(form.property_type);
@@ -783,6 +796,33 @@ export default function ClientFormDialog({
                 disabled={requirementsLocked || saving}
                 maxLength={40}
               />
+            </Field>
+
+            {/* A gentle preference, and matching treats it as one: it is the
+                lowest-weighted field the matcher scores (Backend/Service/
+                ClientPropertyMatchingService/scoring.py's _FURNISHING_WEIGHT),
+                because furnishing is the easiest thing about a property to
+                change. Left at "—" it is not a preference at all and is never
+                scored. */}
+            <Field
+              label="Furnishing"
+              htmlFor="client-form-furnishing"
+              hint="Optional — nudges matching gently, never rules a property out."
+            >
+              <select
+                id="client-form-furnishing"
+                className="select"
+                value={form.furnishing}
+                onChange={(event) => set("furnishing", event.target.value)}
+                disabled={requirementsLocked || saving}
+              >
+                <option value="">—</option>
+                {furnishingOptions.map((option) => (
+                  <option key={option.value} value={option.value}>
+                    {option.label}
+                  </option>
+                ))}
+              </select>
             </Field>
 
             <Field label="Budget (₹)" hint="Write it the way they'd say it — 2.5 cr, 85 L, or 25 K a month to rent.">

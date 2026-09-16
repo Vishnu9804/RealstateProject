@@ -148,6 +148,7 @@ const FIELD_SCORE_LABEL: Record<string, string> = {
   bhk: "BHK",
   semantic: "Overall fit",
   size: "Size",
+  furnishing: "Furnishing",
   purpose_gate: "Purpose match",
   property_type_gate: "Property type match",
 };

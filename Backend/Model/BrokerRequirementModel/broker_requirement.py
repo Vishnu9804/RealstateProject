@@ -24,8 +24,9 @@ class StructuredRequirement(BaseModel):
     budget, buy/rent, society, description), the WhatsApp shortlist message
     (contact name, budget, areas) or the budget fallback (budget_text) — or
     is the broker's own contact number. Every other detail a broker writes
-    (furnishing, size, road/landmark, who it is for, food, possession,
-    urgency, token, "vaya") is kept in `description`, in their words.
+    (size, road/landmark, who it is for, food, possession, urgency, token,
+    "vaya") is kept in `description`, in their words. Furnishing earned a
+    field of its own once matching began scoring it — see that field below.
 
     Just like a property, a SINGLE WhatsApp message can carry more than one
     requirement, so `source_message_id` is not unique per record —
@@ -65,6 +66,21 @@ class StructuredRequirement(BaseModel):
     preferred_areas: List[str] = Field(default_factory=list)
     # A specific building/project/society the requirement asks for by name.
     society_name: Optional[str] = None
+    # How furnished the broker wants it — one of
+    # Service/ClientPropertyMatchingService/normalization.FURNISHING_OPTIONS
+    # ("Fully furnished" | "Semi furnished" | "Unfurnished"), the same three
+    # words StructuredProperty.furnishing uses, so the two compare directly
+    # in matching (normalization.furnishing_score). None when the message
+    # said nothing about it — never guessed.
+    #
+    # It is a field of its own again (it used to live only inside
+    # `description`, see Database/session.py's retired columns) for one
+    # reason: it is now SCORED. The class docstring's rule still holds for
+    # everything else — a detail with no field of its own stays in
+    # `description`, in the broker's words — and the wording about furnishing
+    # stays there too, so nothing a broker wrote is lost by this field
+    # holding only the level.
+    furnishing: Optional[str] = None
 
     # Budget, the requirement-side counterpart of a property's price.
     # Either end can be None (an open-ended "50L+" sets only the min); both

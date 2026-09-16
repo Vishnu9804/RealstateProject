@@ -1,6 +1,6 @@
 """Deterministic clean-up of the fields a broker requirement is FILTERED and
-MATCHED on by name — property type and BHK — so the values the LLM
-returns (and the values already stored from before this module existed)
+MATCHED on by name — property type, BHK and furnishing — so the values the
+LLM returns (and the values already stored from before this module existed)
 land in one small, predictable vocabulary.
 
 Why it matters: the Broker Requirements page builds its Type/BHK filters
@@ -13,10 +13,17 @@ comparable; "2 BHK, 3 BHK" is both.
 Everything here is plain regex/lookup and never invents information: a
 value is only ever reformatted, or — when the LLM left a field empty —
 recovered from words that are literally present in the requirement's own
-text. Pure functions with no project imports, so the structuring stage
-(requirement_structurer.py) and the one-time clean-up of stored rows
+text. Pure functions, so the structuring stage (requirement_structurer.py)
+and the one-time clean-up of stored rows
 (Database/broker_requirement_repository.normalize_existing_requirements)
 apply exactly the same rules.
+
+The furnishing pair at the bottom is deliberately a thin wrapper over
+Service/ClientPropertyMatchingService/normalization.py rather than a second
+copy of the same word list. Furnishing is the one field here whose vocabulary
+is shared with the PROPERTY side (a property's furnishing is normalized onto
+the same three values), and the matcher is what has to compare the two — so
+the words live where the comparison happens, and this module points at them.
 """
 
 from __future__ import annotations
@@ -266,3 +273,30 @@ def infer_bhk(text: Optional[str]) -> Optional[str]:
         return None
     tokens = _bhk_tokens(text)
     return ", ".join(tokens) if tokens else None
+
+
+# --- furnishing ------------------------------------------------------------
+
+
+def canonical_furnishing(raw: Optional[str]) -> Optional[str]:
+    """The LLM's (or a stored) furnishing value rewritten onto the three
+    words both sides share: "full furnished" -> "Fully furnished",
+    "non furnished" -> "Unfurnished". A value naming no level at all is kept
+    as written rather than dropped, exactly as canonical_bhk treats one.
+
+    Imported lazily for the same reason the rest of this module takes no
+    imports at module scope: it stays a pure function of its argument, and
+    nothing here is evaluated at import time."""
+    from Service.ClientPropertyMatchingService import normalization
+
+    return normalization.canonical_furnishing(raw)
+
+
+def infer_furnishing(text: Optional[str]) -> Optional[str]:
+    """Recovers a furnishing level the LLM left empty, from words literally
+    present in the requirement's own text. None when the text names none —
+    and also None when it names MORE than one ("2 BHK unfurnished, 3 BHK
+    fully furnished"), where either answer would be a guess."""
+    from Service.ClientPropertyMatchingService import normalization
+
+    return normalization.read_furnishing(text)

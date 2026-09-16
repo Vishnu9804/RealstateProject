@@ -46,6 +46,11 @@ class FormSubmissionRequest(BaseModel):
     # Cleaned server-side against property_type (inquiry_form_service), so
     # only sizes for types actually picked are ever stored.
     property_sizes: Optional[Dict[str, Optional[str]]] = None
+    # "Fully furnished" | "Semi furnished" | "Unfurnished", or blank/None for
+    # "no preference". Normalized server-side onto those three (see
+    # inquiry_form_service._extract_requirement_fields), so a hand-crafted
+    # request cannot park arbitrary text on a client row.
+    furnishing: Optional[str] = None
 
 
 class FormPrefillResponse(BaseModel):
@@ -87,6 +92,7 @@ class FormPrefillResponse(BaseModel):
     preferred_areas: Optional[str] = None
     additional_requirements: Optional[str] = None
     property_sizes: Optional[Dict[str, str]] = None
+    furnishing: Optional[str] = None
 
 
 class FormSubmissionResult(BaseModel):

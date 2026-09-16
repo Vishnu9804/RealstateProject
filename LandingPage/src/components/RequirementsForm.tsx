@@ -72,6 +72,15 @@ const PURPOSES = [
   { value: "rent", label: "Rent" },
 ] as const;
 
+/** The three values a PROPERTY's furnishing is normalized onto by the
+ *  extractor (Backend/Agent/WhatsAppDataFetchingAgent/glm_extraction_schema.py),
+ *  offered here word-for-word so the two sides compare directly in matching.
+ *  Optional: left unanswered it is not a preference and is never scored — and
+ *  even when answered it only nudges the order (Backend/Service/
+ *  ClientPropertyMatchingService/scoring.py weighs it lowest of everything),
+ *  because furnishing is the easiest thing about a home to change. */
+const FURNISHING_OPTIONS = ["Fully furnished", "Semi furnished", "Unfurnished"];
+
 const PHONE_REQUIRED_MESSAGE =
   "Please enter your WhatsApp number first, so we can send you the properties matched to your requirements.";
 
@@ -175,6 +184,9 @@ export default function RequirementsForm({
   // but only sizes for types still picked are ever sent — see sizesToSubmit.
   const [propertySizes, setPropertySizes] = useState<Record<string, string>>({});
   const [bhk, setBhk] = useState("");
+  // "" means "no preference", which is exactly what most people have — see
+  // FURNISHING_OPTIONS. Sent as null in that case.
+  const [furnishing, setFurnishing] = useState("");
   // Each budget box holds exactly what was typed — "2.5 cr", "85 L" — and
   // is never rewritten under the visitor's fingers. The rupee figure the
   // backend stores is read out of it (lib/format.ts's readBudget), and a box
@@ -324,6 +336,7 @@ export default function RequirementsForm({
     setPropertyTypes(types);
     setPropertySizes(matchSizes(types, data.property_sizes));
     setBhk(data.bhk ?? "");
+    setFurnishing(data.furnishing ?? "");
     // Written back the way they'd type it — a returning visitor reads their
     // own saved budget as "85 L", never as a wall of zeroes to count.
     setBudgetMin(data.budget_min_inr != null ? formatBudgetDisplay(data.budget_min_inr) : "");
@@ -512,6 +525,7 @@ export default function RequirementsForm({
       property_type: propertyTypes.join(", ") || null,
       property_sizes: sizesToSubmit(),
       bhk: bhk.trim() || null,
+      furnishing: furnishing || null,
       // The full rupee figure, always — "2.5 cr" is only ever what the BOX
       // holds. Nothing downstream (the matcher's budget curve, the agent
       // hand-off, the stored client record) sees anything but the number.
@@ -898,6 +912,32 @@ export default function RequirementsForm({
               it down again. */}
           <span className="field__hint">
             Write it however you think of it — “3 BHK”, “2 to 5 BHK”, “2 or 3 BHK”, “3+ BHK”, “exactly 3 BHK”, “1 RK”.
+          </span>
+        </div>
+
+        {/* A dropdown rather than free text, because this value is compared
+            directly against a property's own furnishing, which only ever
+            holds these three words. "No preference" is the default and is a
+            real answer: it is never scored, and a stated preference only
+            nudges the order — see FURNISHING_OPTIONS. */}
+        <div className="field">
+          <label className="field__label" htmlFor={`${idPrefix}-furnishing`}>
+            Furnishing (optional)
+          </label>
+          <select
+            id={`${idPrefix}-furnishing`}
+            value={furnishing}
+            onChange={(event) => setFurnishing(event.target.value)}
+          >
+            <option value="">No preference</option>
+            {FURNISHING_OPTIONS.map((option) => (
+              <option key={option} value={option}>
+                {option}
+              </option>
+            ))}
+          </select>
+          <span className="field__hint">
+            Only if it matters to you — we'll lean towards it, but you'll still see everything else that fits.
           </span>
         </div>
 

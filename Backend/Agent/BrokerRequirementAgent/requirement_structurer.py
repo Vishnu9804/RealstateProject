@@ -206,6 +206,7 @@ _MESSAGE_MODEL_FIELDS = {
     "area_name",
     "preferred_areas",
     "society_name",
+    "furnishing",
     "budget_text",
     "budget_min_inr",
     "budget_max_inr",
@@ -383,15 +384,42 @@ def _build_system_prompt() -> str:
             "  - Set it whenever THIS requirement's own text names a type: \"REQ FLAT FOR RENT\" -> \"Flat\"; "
             '"Req for Bungalow in vesu" -> "Bungalow"; "500 vaar residential Plot" -> "Plot"; "2 BHK FLAT" -> '
             '"Flat".',
-            '  - Several acceptable types -> comma-separated, main one first: "Flat, Row House". "X chale" / '
-            '"X chalse" / "X bhi chalega" / "X also ok" makes X an ALSO-acceptable alternative, not the only '
-            'option — "2 BHK FULL FURNISHED 3 BHK FULL FURNISHED CHALE ROW HOUSE" -> "Flat, Row House".',
+            "  - LIST EVERY TYPE THIS REQUIREMENT WOULD ACCEPT, comma-separated, main one first: "
+            '"Flat, Row House". This is the rule most often got wrong, so read it twice: when the requirement '
+            "names two or more kinds of property anywhere in ITS OWN entry, EVERY one of them belongs in "
+            "requirement_type. Returning only the first is WRONG, and so is picking whichever is mentioned "
+            "last.",
+            '    * "X chale" / "X chalse" / "X chalega" / "X bhi chalega" / "X also ok" / "or X" / "X too" makes '
+            "X an ALSO-acceptable alternative, not the only option, so BOTH go in: "
+            '"2 BHK FULL FURNISHED 3 BHK FULL FURNISHED CHALE ROW HOUSE" -> "Flat, Row House" (the BHKs say '
+            'flat, "chale row house" adds the row house).',
+            '    * "Flat or Row House", "flat / bungalow", "2 BHK flat ya row house", "flat, row house both ok" '
+            '-> "Flat, Row House" / "Flat, Bungalow" — both of them, in the order the message names them.',
+            "    * Never split those into two separate requirements: one entry sharing one area list and one "
+            "budget is ONE requirement that accepts several types (see PART 2).",
             "  - If the requirement names NO type at all, leave requirement_type null — never guess one from the "
             'budget, the area or the BHK ("2 BHK Fully Furnished, Vesu" -> null).',
             "",
             'bhk holds ONLY bedroom configurations, as "N BHK" / "N RK", several joined with ", ": "2bhk" -> '
             '"2 BHK"; "1/2 BHK" -> "1 BHK, 2 BHK"; "4bhk , 5bhk" -> "4 BHK, 5 BHK"; "3+ BHK" -> "3+ BHK". Never put '
             "furnishing, type or any other word in bhk. Null if no BHK is stated.",
+            "",
+            "=====================================================================",
+            "FURNISHING",
+            "=====================================================================",
+            "furnishing is how furnished THIS requirement asks for, normalized to EXACTLY one of "
+            '"Fully furnished", "Semi furnished" or "Unfurnished".',
+            '  - "full furnished" / "fully furnished" / "furnished" / "with furniture" / "FF" -> '
+            '"Fully furnished".',
+            '  - "semi furnished" / "semi-furnished" / "partly furnished" / "SF" -> "Semi furnished".',
+            '  - "unfurnished" / "non furnished" / "no furniture" / "naked" / "bare shell" / "empty" -> '
+            '"Unfurnished".',
+            "  - Null when this requirement says nothing about furnishing. Never guess one, and one item of "
+            'furniture mentioned in passing ("with wardrobe", "AC fitted") is not a furnishing statement.',
+            "  - In a message carrying several requirements, judge each one on ITS OWN entry plus any header "
+            "that covers it — a furnishing word on one entry says nothing about a different entry.",
+            "  - Keep the broker's own furnishing wording in description as well: this field holds only the "
+            "level, description keeps what they actually wrote (\"fully furnished with electronics\").",
             "",
             "=====================================================================",
             "RENT VS SALE CLASSIFICATION",
@@ -467,6 +495,7 @@ def _build_system_prompt() -> str:
             '      "requirements": [',
             "        {",
             '          "requirement_type": null, "bhk": null, "preferred_areas": [], "society_name": null,',
+            '          "furnishing": null,',
             '          "budget_text": null, "budget_min_inr": null, "budget_max_inr": null,',
             '          "listing_type_reason": "...", "listing_type": "Sale",',
             '          "contact_name": null, "contact_phone": null, "description": null',
@@ -690,6 +719,7 @@ def _to_structured_requirement(
         area_name=areas[0] if areas else None,
         preferred_areas=areas,
         society_name=item.society_name,
+        furnishing=item.furnishing,
         budget_text=item.budget_text,
         budget_min_inr=item.budget_min_inr,
         budget_max_inr=item.budget_max_inr,
@@ -716,9 +746,9 @@ def _to_structured_requirement(
 def _normalize_filter_fields(
     requirement: StructuredRequirement, single_requirement_message: bool, snippet: Optional[str]
 ) -> None:
-    """Puts type and BHK into requirement_normalization's vocabulary, and
-    recovers a type/BHK the model left empty from THIS requirement's own
-    words: its snippet and its description always, the whole message only
+    """Puts type, BHK and furnishing into requirement_normalization's
+    vocabulary, and recovers one the model left empty from THIS requirement's
+    own words: its snippet and its description always, the whole message only
     when the message holds just this one requirement (in a multi-requirement
     message the text covers every requirement, so a word there could belong
     to a different one — same reasoning as _sanitize_listing_type)."""
@@ -733,6 +763,13 @@ def _normalize_filter_fields(
     ) or requirement_normalization.infer_requirement_type(
         f"{context} {requirement.bhk or ''}", has_bhk=bool(requirement.bhk)
     )
+    # Same two-step as above: tidy what the model gave onto the three-value
+    # vocabulary, and only if it gave nothing, read one out of this
+    # requirement's own words. The inference returns None whenever the text
+    # names more than one level, so an entry mentioning both never guesses.
+    requirement.furnishing = requirement_normalization.canonical_furnishing(
+        requirement.furnishing
+    ) or requirement_normalization.infer_furnishing(context)
 
 
 def _fill_missing_budget_amounts(requirement: StructuredRequirement) -> None:

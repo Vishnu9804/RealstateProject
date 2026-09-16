@@ -29,6 +29,7 @@ class InstagramContactRecord(BaseModel):
     preferred_areas: Optional[str] = None
     additional_requirements: Optional[str] = None
     property_sizes: Optional[Dict[str, str]] = None
+    furnishing: Optional[str] = None
 
     # Mirrors ClientRecord.requirement_submission_count, for the
     # Instagram-only submission path -- same quota, same guard.

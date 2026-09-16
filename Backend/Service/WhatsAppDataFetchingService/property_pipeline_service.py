@@ -473,6 +473,10 @@ def update_property(
     never touch it (see StructuredProperty.qualified_at)."""
     embedding_kwargs: Dict[str, Any] = {}
     filtered_updates: Optional[Dict[str, Any]] = None
+    # The fields this edit actually MOVED, which is what the match-
+    # invalidation rule is allowed to see — never filtered_updates, which is
+    # the dialog's whole form. See match_invalidation_service.changed_fields.
+    moved_updates: Optional[Dict[str, Any]] = None
     qualified_at: Optional[datetime] = None
     if content_updates:
         filtered_updates = {key: value for key, value in content_updates.items() if key in EDITABLE_CONTENT_FIELDS}
@@ -487,6 +491,12 @@ def update_property(
         if found is None:
             return None
         existing = found[0]
+        # Same copy, asked a second question: which of these values are
+        # genuinely different from what is stored. Lazy import for the same
+        # reason the call further down uses one.
+        from Service.ClientPropertyMatchingService import match_invalidation_service as _invalidation
+
+        moved_updates = _invalidation.changed_fields(existing, filtered_updates)
         merged_data = existing.model_dump(exclude={"embedding", "embedding_model"})
         merged_data.update(filtered_updates)
         merged_structured = StructuredProperty(**merged_data)
@@ -516,9 +526,13 @@ def update_property(
         # match_invalidation_service.py. Lazy import and non-fatal by
         # construction, the same way this module's other cross-feature calls
         # are: a stale cache must never turn a saved edit into an error.
+        #
+        # Judged on moved_updates, not on filtered_updates: the Edit dialog
+        # posts every field it has, so asking "which fields arrived?" said
+        # yes to an edit that only added a photo.
         from Service.ClientPropertyMatchingService import match_invalidation_service
 
-        if match_invalidation_service.edit_affects_matching(filtered_updates, needs_review):
+        if match_invalidation_service.edit_affects_matching(moved_updates, needs_review):
             match_invalidation_service.handle_listing_edited(record_id)
     return _to_record(updated) if updated is not None else None
 

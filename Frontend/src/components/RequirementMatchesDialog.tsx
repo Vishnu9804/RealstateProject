@@ -13,6 +13,7 @@ import type {
 import { friendlyError } from "../lib/apiError";
 import { formatArea, formatPrice, relativeTime } from "../lib/formatters";
 import { getCachedPropertyList, patchCachedProperty, setCachedPropertyList } from "../lib/propertyListCache";
+import { requirementTypes } from "../lib/requirementFilters";
 import type { SharePropertyLike } from "../lib/propertyShareTemplate";
 import { PropertyMatchDetailDialog, type DialogItem } from "./ClientMatchesDialog";
 import ShareRequirementPropertiesDialog from "./ShareRequirementPropertiesDialog";
@@ -38,12 +39,15 @@ import {
  * demand side's answer to ClientMatchesDialog.tsx.
  *
  * WHAT IT SHARES with the client-inquiry dialog, and why: the two Main /
- * Outsider drawers, the High / Medium / Low sections, the score badges and
- * the tick-then-send flow. A broker requirement and a client inquiry are
- * scored by literally the same engine (see Backend/Service/
- * ClientPropertyMatchingService/requirement_matching_service.py), so
- * presenting the result differently would be a lie about how it was
- * produced.
+ * Outsider drawers, the per-property-type row under them, the High / Medium
+ * / Low sections, the score badges and the tick-then-send flow. A broker
+ * requirement and a client inquiry are scored by literally the same engine
+ * (see Backend/Service/BrokerRequirementService/requirement_matching_service.py),
+ * so presenting the result differently would be a lie about how it was
+ * produced. That is exactly why the type row belongs here too: a
+ * requirement naming several acceptable types ("Flat, Row House") is scored
+ * once per type, the same way a client's multi-select is, and each card
+ * carries the type it matched under.
  *
  * WHAT IT DELIBERATELY DOES NOT HAVE: any agent assignment. No agent
  * picker, no hand-off, no "Assigned to" badge, no Clear-assignments, no
@@ -71,6 +75,14 @@ const BUCKET_LABEL: Record<MatchBucket, string> = {
   low: "Low matches",
 };
 const BUCKET_TONE: Record<MatchBucket, "ok" | "warn" | "bad"> = { high: "ok", medium: "warn", low: "bad" };
+
+/** The type row's "everything" option — a value no real type can have.
+ *  Same sentinel, for the same reason, as ClientMatchesDialog's. */
+const ALL_TYPES = "__all__";
+
+function sameType(a: string, b: string): boolean {
+  return a.trim().toLowerCase() === b.trim().toLowerCase();
+}
 
 /** One card. `property` is the full record when the property list has
  *  landed and `match` is always present — unlike the client dialog there
@@ -148,6 +160,9 @@ export default function RequirementMatchesDialog({
   const [error, setError] = useState<string | null>(null);
 
   const [category, setCategory] = useState<PropertyCategory>("main");
+  // null = every type. Only meaningful for a requirement that named more
+  // than one acceptable type — see requirementTypeList below.
+  const [typeView, setTypeView] = useState<string | null>(null);
   const [selectedIds, setSelectedIds] = useState<Set<string>>(new Set());
   const [shareOpen, setShareOpen] = useState(false);
   // The card whose full property details are open on top of this dialog —
@@ -241,13 +256,49 @@ export default function RequirementMatchesDialog({
 
   const visibleItems = useMemo(() => items.filter((item) => item.category === category), [items, category]);
 
+  /** The types this requirement would accept, when it named more than one
+   *  ("Flat, Row House") — each gets a capsule of its own under the
+   *  Main/Outsider row, exactly as a client's do in ClientMatchesDialog.
+   *  Read with the page's own splitter, so the capsules here and the Type
+   *  column's filter over there can never disagree about what the field
+   *  says. The backend tags every scored match with the type it matched
+   *  under (MatchedProperty.matched_type — see requirement_matching_service's
+   *  _type_plan), so a capsule is an exact split, not a guess made here. */
+  const requirementTypeList = useMemo(() => requirementTypes(requirement), [requirement]);
+  const showTypeTabs = requirementTypeList.length > 1;
+  const typeFilter =
+    showTypeTabs && typeView !== null && requirementTypeList.some((type) => sameType(type, typeView))
+      ? typeView
+      : null;
+
+  /** A match scored before per-type scoring existed carries no matched_type.
+   *  It stays on every capsule rather than vanishing from all of them — the
+   *  same rule the client dialog applies, and it is what keeps a requirement
+   *  readable in the moment between this shipping and its next re-score. */
+  const typeVisibleItems = useMemo(
+    () =>
+      typeFilter === null
+        ? visibleItems
+        : visibleItems.filter((item) => !item.match.matched_type || sameType(item.match.matched_type, typeFilter)),
+    [visibleItems, typeFilter],
+  );
+
+  const countByType = useMemo(() => {
+    const counts = new Map<string, number>();
+    for (const item of visibleItems) {
+      const type = item.match.matched_type?.trim().toLowerCase();
+      if (type) counts.set(type, (counts.get(type) ?? 0) + 1);
+    }
+    return counts;
+  }, [visibleItems]);
+
   const sections = useMemo(
     () =>
       BUCKET_ORDER.map((bucket) => ({
         bucket,
-        items: visibleItems.filter((item) => item.bucket === bucket).sort((a, b) => b.match.score - a.match.score),
+        items: typeVisibleItems.filter((item) => item.bucket === bucket).sort((a, b) => b.match.score - a.match.score),
       })).filter((section) => section.items.length > 0),
-    [visibleItems],
+    [typeVisibleItems],
   );
 
   /** Only the ticked cards, and only ones still on screen somewhere — so a
@@ -417,6 +468,33 @@ export default function RequirementMatchesDialog({
             )}
           </div>
 
+          {/* Shown only when the broker named more than one acceptable type
+              — the same row, the same styling and the same behaviour as the
+              client-inquiry dialog's, because it is the same question being
+              asked of the same scoring. */}
+          {showTypeTabs && (
+            <div className="matches-dialog__tabs matches-dialog__tabs--types">
+              <span className="section-head__eyebrow" style={{ marginBottom: 0 }}>
+                Property type
+              </span>
+              <Segmented<string>
+                ariaLabel="Which of the requirement's property types to show"
+                value={typeFilter ?? ALL_TYPES}
+                onChange={(value) => setTypeView(value === ALL_TYPES ? null : value)}
+                options={[
+                  {
+                    value: ALL_TYPES,
+                    label: `All${visibleItems.length ? ` (${visibleItems.length})` : ""}`,
+                  },
+                  ...requirementTypeList.map((type) => {
+                    const count = countByType.get(type.toLowerCase()) ?? 0;
+                    return { value: type, label: `${type}${count ? ` (${count})` : ""}` };
+                  }),
+                ]}
+              />
+            </div>
+          )}
+
           <div className="detail-modal__body">
             {error && (
               <Note tone="bad" icon={<IconAlert size={16} />}>
@@ -445,8 +523,16 @@ export default function RequirementMatchesDialog({
             {!loading && total > 0 && sections.length === 0 && (
               <EmptyState
                 icon={<IconInbox size={36} />}
-                title={`Nothing in ${CATEGORY_LABEL[category]}`}
-                body="Every property matched for this requirement is filed under the other tab above."
+                title={
+                  typeFilter
+                    ? `No ${typeFilter} matches in ${CATEGORY_LABEL[category]}`
+                    : `Nothing in ${CATEGORY_LABEL[category]}`
+                }
+                body={
+                  typeFilter
+                    ? "Nothing here matched that part of the requirement yet — try one of its other property types above, or the other tab."
+                    : "Every property matched for this requirement is filed under the other tab above."
+                }
               />
             )}
 
@@ -615,6 +701,9 @@ function RequirementMatchCard({
 
       <div className="match-card__badges">
         <Badge tone={BUCKET_TONE[item.match.bucket]}>{BUCKET_LABEL[item.match.bucket].replace(" matches", " match")}</Badge>
+        {/* Only ever set for a requirement that named more than one type —
+            says which of them this property answers. */}
+        {item.match.matched_type && <Badge tone="accent">For {item.match.matched_type}</Badge>}
         {item.match.is_partial_match && <Badge tone="info">Partial data</Badge>}
       </div>
 

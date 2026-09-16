@@ -385,9 +385,19 @@ def update(record_id: str, content_updates: Dict[str, Any]) -> Optional[BuilderP
         # and with the same self-healing rescore — see match_invalidation_
         # service.py. Lazy import: the matching feature is not otherwise a
         # dependency of this store.
+        #
+        # Judged on the values that actually MOVED, not on the keys that
+        # arrived: the Edit dialog posts the whole form every time, so the
+        # keys alone made an added photo look like a price change and cost
+        # the project its place in every shortlist. `existing` is None only
+        # for a project older than the cache window, where nothing can be
+        # compared and the safe old answer ("assume it all moved") stands.
         from Service.ClientPropertyMatchingService import match_invalidation_service
 
-        if match_invalidation_service.edit_affects_matching(updates):
+        moved = match_invalidation_service.changed_fields(
+            existing.fields if existing is not None else None, updates
+        )
+        if match_invalidation_service.edit_affects_matching(moved):
             match_invalidation_service.handle_listing_edited(record_id)
         return entry
 

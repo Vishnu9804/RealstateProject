@@ -129,6 +129,9 @@ export interface InquiryFormPrefill {
    *  picked type, comma-separated): {"Flat": "1200 sqft"}. Absent from an
    *  older backend. */
   property_sizes?: Record<string, string> | null;
+  /** "Fully furnished" | "Semi furnished" | "Unfurnished", or null for no
+   *  preference. Absent from an older backend. */
+  furnishing?: string | null;
 }
 
 export interface InquiryFormSubmission {
@@ -148,6 +151,9 @@ export interface InquiryFormSubmission {
   preferred_areas?: string | null;
   additional_requirements?: string | null;
   property_sizes?: Record<string, string> | null;
+  /** One of the three furnishing levels, or null for "no preference" —
+   *  anything else is dropped server-side. */
+  furnishing?: string | null;
 }
 
 /**

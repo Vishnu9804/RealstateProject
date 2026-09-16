@@ -138,6 +138,15 @@ function ClientDetail({ client }: { client: InquiryClientRecord }) {
           </div>
         )}
 
+        {client.furnishing && (
+          <div className="detail__block">
+            <div className="detail__k">
+              <IconTag size={11} /> Furnishing
+            </div>
+            <div className="detail__v">{client.furnishing}</div>
+          </div>
+        )}
+
         {(client.budget_min_inr !== null || client.budget_max_inr !== null) && (
           <div className="detail__block">
             <div className="detail__k">

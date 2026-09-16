@@ -10,13 +10,21 @@ Database/edited_property_match_repository.py, which performs the removal.
 
 This module is the thin layer above it:
 
-  - `edit_affects_matching` decides whether an edit is even capable of
+  - `changed_fields` reduces an Edit dialog's payload to the values that
+    actually MOVED. Both dialogs post their whole form on every Save, so
+    without this step the question below is asked of "every field the form
+    has" and can only ever answer yes;
+  - `edit_affects_matching` decides whether what moved is even capable of
     changing a score, so adding a photo or an Instagram reel link — by far the
     most common edit, and the Landing Page flow's bread and butter — costs
     nothing at all;
   - `handle_listing_edited` routes to the database implementation, or to the
     in-memory caches when DATABASE_URL is unset, the same fallback split every
     other store in this project keeps.
+
+The two steps belong together and neither is safe alone: the neutral list is
+a claim about which FIELDS cannot move a score, and it means nothing until
+something establishes which fields moved at all.
 
 Callers (property_pipeline_service.update_property, builder_project_store.
 update) invoke this AFTER the edit has been saved and treat any failure here
@@ -26,26 +34,71 @@ edit, and the nightly pass corrects it either way.
 
 from __future__ import annotations
 
+from collections import abc
 from typing import Any, Dict, Mapping, Optional
 
 from Database.client_session import is_client_database_configured
 from Middleware import step_logger
 
-# Editable fields no score is built from: not in
-# embedding_service.EMBEDDING_TEXT_FIELDS (so the vector cannot move) and not
-# read anywhere in scoring.py (so no explicit component can move either).
-# Everything ELSE is treated as match-relevant, deliberately — an edit wrongly
-# believed harmless would leave a stale match standing, while an edit wrongly
-# believed harmful only costs one extra delete that the next scoring pass
-# undoes.
+# Editable fields an edit to which must NOT cost a listing its place in
+# anyone's matches — the photos, the unit/flat number, the contact number,
+# the video flag, the Instagram reel and the map link. These are what staff
+# correct most often, long after a property has been matched and shared, and
+# pulling the property out of every client's and broker's shortlist to
+# re-earn its place overnight is the wrong trade for any of them.
+#
+# Three of them (unit_no, location_url, video_available, image_urls) are not
+# read by scoring.py and are not in embedding_service.EMBEDDING_TEXT_FIELDS
+# either, so no score CAN move. contact_phone is the one exception: it is
+# part of the embedding text, so the semantic half of the score may shift by
+# a hair. That is accepted deliberately and it does not go uncorrected —
+# every edit still bumps the listing's updated_at, so the 6 AM incremental
+# pass re-scores it for every client and requirement (match_candidates.
+# get_changed_since) and writes the exact score back. The property simply
+# does not VANISH in the meantime, which is the whole point.
+#
+# Everything ELSE is treated as match-relevant, deliberately — an edit
+# wrongly believed harmless would leave a stale match standing, while an
+# edit wrongly believed harmful only costs one extra delete that the next
+# scoring pass undoes.
 MATCH_NEUTRAL_FIELDS = frozenset(
     {
         "image_urls",
         "instagram_reel_url",
         "location_url",
         "video_available",
+        "unit_no",
+        "contact_phone",
     }
 )
+
+
+def changed_fields(existing: Any, updates: Optional[Mapping[str, Any]]) -> Optional[Dict[str, Any]]:
+    """The subset of `updates` whose value actually DIFFERS from what the
+    listing already holds. `existing` may be a model (attributes) or a plain
+    mapping (a builder project's `fields`).
+
+    This exists because the Properties and Builder Projects Edit dialogs post
+    the WHOLE form on every save, not just the boxes that were touched (see
+    PropertyFormDialog.tsx's toPayload). Deciding on the KEYS that arrived
+    therefore meant every edit looked like a price change, and the neutral
+    list above — the entire point of which is that adding a photo costs
+    nothing — could never fire once. Deciding on the VALUES that moved is
+    what makes that list mean what it says.
+
+    `existing=None` (a listing held nowhere we can read it from) returns
+    `updates` untouched: unable to tell what moved, we keep the old, strictly
+    safer answer of "assume everything did".
+
+    Note `image_urls` can read as changed even when it is not, because the
+    copies this is given are deliberately photo-less (property_snapshot, and
+    builder_project_repository._READ_COLUMNS). It is match-neutral either
+    way, so that never reaches a decision.
+    """
+    if not updates or existing is None:
+        return dict(updates) if updates else updates
+    getter = existing.get if isinstance(existing, abc.Mapping) else lambda name: getattr(existing, name, None)
+    return {field: value for field, value in updates.items() if getter(field) != value}
 
 
 def edit_affects_matching(
@@ -53,10 +106,13 @@ def edit_affects_matching(
 ) -> bool:
     """Whether this edit could change how the listing scores.
 
-    True when it touches any field that is not purely for display, and also
+    True when it CHANGED any field that is not purely for display, and also
     when it pushes the listing into the review queue — a needs_review listing
     is not matchable at all (matching_service.is_matchable), so its cached
     matches have to go even if not one content field changed with it.
+
+    Callers pass the fields that actually moved (see changed_fields above),
+    never the raw dialog payload.
     """
     if needs_review is True:
         return True

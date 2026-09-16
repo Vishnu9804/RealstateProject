@@ -40,6 +40,11 @@ class RequirementUpdateRequest(BaseModel):
     area_name: Optional[str] = None
     preferred_areas: Optional[List[str]] = None
     society_name: Optional[str] = None
+    # "Fully furnished" | "Semi furnished" | "Unfurnished", or null. Put onto
+    # that vocabulary by the service, so a value typed any other way still
+    # lands somewhere the matcher can compare (see
+    # requirement_pipeline_service).
+    furnishing: Optional[str] = None
     budget_text: Optional[str] = None
     budget_min_inr: Optional[float] = None
     budget_max_inr: Optional[float] = None

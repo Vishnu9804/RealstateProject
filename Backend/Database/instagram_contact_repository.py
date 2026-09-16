@@ -31,6 +31,7 @@ _COLUMNS = (
     "preferred_areas",
     "additional_requirements",
     "property_sizes",
+    "furnishing",
     "requirement_submission_count",
 )
 

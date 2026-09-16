@@ -379,6 +379,16 @@ def update(record_id: str, content_updates: Dict[str, Any]) -> Optional[BuilderP
             entry = BuilderProjectEntry(fields, len(fields.get("image_urls") or []), vector)
         with _lock:
             _fold_in(entry, is_new=False)
+        # A builder project is a match candidate exactly like a property (see
+        # Service/ClientPropertyMatchingService/match_candidates.py), so an
+        # edit to it invalidates the same cached matches, under the same rule
+        # and with the same self-healing rescore — see match_invalidation_
+        # service.py. Lazy import: the matching feature is not otherwise a
+        # dependency of this store.
+        from Service.ClientPropertyMatchingService import match_invalidation_service
+
+        if match_invalidation_service.edit_affects_matching(updates):
+            match_invalidation_service.handle_listing_edited(record_id)
         return entry
 
 

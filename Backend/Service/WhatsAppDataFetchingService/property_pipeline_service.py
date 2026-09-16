@@ -506,6 +506,20 @@ def update_property(
         qualified_at=qualified_at,
         **embedding_kwargs,
     )
+    if updated is not None:
+        # The edit may have changed what this property IS, so every cached
+        # match computed from its old details is now a claim about something
+        # that no longer exists. They are dropped here (except for a client
+        # already assigned to it or who has completed a visit to it) and
+        # re-scored against the new details by the passes that already watch
+        # updated_at — see Service/ClientPropertyMatchingService/
+        # match_invalidation_service.py. Lazy import and non-fatal by
+        # construction, the same way this module's other cross-feature calls
+        # are: a stale cache must never turn a saved edit into an error.
+        from Service.ClientPropertyMatchingService import match_invalidation_service
+
+        if match_invalidation_service.edit_affects_matching(filtered_updates, needs_review):
+            match_invalidation_service.handle_listing_edited(record_id)
     return _to_record(updated) if updated is not None else None
 
 

@@ -9,10 +9,11 @@ import { Button, Segmented } from "./ui/Primitives";
 import { IconX } from "./ui/Icons";
 
 /**
- * The Broker Requirements page's Edit dialog. Edit-only, deliberately: a
- * requirement exists because a broker asked for something in a monitored
- * chat, so there is no "Add a requirement by hand" action in the product
- * (and no POST endpoint behind one either) the way there is for a property.
+ * The Broker Requirements page's Add and Edit dialog — one form for both, the
+ * same way PropertyFormDialog serves both on the Properties page, so the two
+ * can never drift apart. `mode` decides only the wording and where Save goes
+ * (POST vs PATCH); the fields themselves are identical, because a requirement
+ * typed by hand holds exactly what a captured one holds.
  *
  * Every field is optional — there is nothing here that blocks Save. Cancel
  * and the header's X both discard the in-progress edit without calling the
@@ -21,7 +22,9 @@ import { IconX } from "./ui/Icons";
  * The WhatsApp metadata (sender, group, original message, timestamp) is not
  * in this form at all. It is the audit trail for where the requirement came
  * from, and the backend refuses to rewrite it — showing it as an editable
- * field would only promise something that cannot happen.
+ * field would only promise something that cannot happen. On an Add there is
+ * no such metadata to begin with: the backend stamps the placeholders a
+ * manual entry gets (see requirement_pipeline_service.create_requirement).
  */
 
 interface FormState {
@@ -38,22 +41,25 @@ interface FormState {
   description: string;
 }
 
-function toFormState(requirement: BrokerRequirementRecord): FormState {
+/** An Add starts from a blank form — same shape, every field empty, and
+ *  "Buy" preselected because that is the backend's own default for a
+ *  requirement that states nothing either way. */
+function toFormState(requirement?: BrokerRequirementRecord): FormState {
   return {
-    requirement_type: requirement.requirement_type ?? "",
-    bhk: requirement.bhk ?? "",
+    requirement_type: requirement?.requirement_type ?? "",
+    bhk: requirement?.bhk ?? "",
     // Edited as one comma-separated line rather than a list widget: these
     // are short free-text localities copied from the message, and typing
     // "Vesu, Althan" is faster than managing chips for two of them.
-    preferred_areas: requirement.preferred_areas.join(", "),
-    society_name: requirement.society_name ?? "",
-    budget_text: requirement.budget_text ?? "",
-    budget_min_inr: requirement.budget_min_inr?.toString() ?? "",
-    budget_max_inr: requirement.budget_max_inr?.toString() ?? "",
-    listing_type: requirement.listing_type,
-    contact_name: requirement.contact_name ?? "",
-    contact_phone: requirement.contact_phone ?? "",
-    description: requirement.description ?? "",
+    preferred_areas: requirement?.preferred_areas.join(", ") ?? "",
+    society_name: requirement?.society_name ?? "",
+    budget_text: requirement?.budget_text ?? "",
+    budget_min_inr: requirement?.budget_min_inr?.toString() ?? "",
+    budget_max_inr: requirement?.budget_max_inr?.toString() ?? "",
+    listing_type: requirement?.listing_type ?? "Sale",
+    contact_name: requirement?.contact_name ?? "",
+    contact_phone: requirement?.contact_phone ?? "",
+    description: requirement?.description ?? "",
   };
 }
 
@@ -114,13 +120,16 @@ function Field({
 }
 
 export default function RequirementFormDialog({
+  mode,
   requirement,
   onClose,
   onSaved,
 }: {
-  requirement: BrokerRequirementRecord;
+  mode: "add" | "edit";
+  /** The record being edited — absent on an Add. */
+  requirement?: BrokerRequirementRecord;
   onClose: () => void;
-  onSaved: (requirement: BrokerRequirementRecord) => void;
+  onSaved: (requirement: BrokerRequirementRecord, mode: "add" | "edit") => void;
 }) {
   const toast = useToast();
   const [form, setForm] = useState<FormState>(() => toFormState(requirement));
@@ -144,13 +153,17 @@ export default function RequirementFormDialog({
   async function handleSave() {
     setSaving(true);
     try {
-      const saved = await requirementApi.updateRequirement(requirement.record_id, toPayload(form));
+      const payload = toPayload(form);
+      const saved =
+        mode === "add"
+          ? await requirementApi.createRequirement(payload)
+          : await requirementApi.updateRequirement(requirement!.record_id, payload);
       toast.push({
         tone: "ok",
-        title: "Requirement updated",
+        title: mode === "add" ? "Requirement added" : "Requirement updated",
         message: saved.bhk ?? saved.requirement_type ?? saved.area_name ?? "Saved.",
       });
-      onSaved(saved);
+      onSaved(saved, mode);
     } catch (err) {
       toast.push({ tone: "bad", title: "Couldn't save this requirement", message: friendlyError(err) });
     } finally {
@@ -158,14 +171,22 @@ export default function RequirementFormDialog({
     }
   }
 
-  const title = [requirement.bhk, requirement.requirement_type].filter(Boolean).join(" ") || "Requirement";
+  const title =
+    mode === "add"
+      ? "Add a requirement"
+      : [requirement?.bhk, requirement?.requirement_type].filter(Boolean).join(" ") || "Requirement";
 
   return createPortal(
     <div className="modal-scrim" onMouseDown={(event) => event.target === event.currentTarget && !saving && onClose()}>
-      <div className="detail-modal anim-rise" role="dialog" aria-modal="true" aria-label="Edit requirement">
+      <div
+        className="detail-modal anim-rise"
+        role="dialog"
+        aria-modal="true"
+        aria-label={mode === "add" ? "Add requirement" : "Edit requirement"}
+      >
         <div className="detail-modal__head">
           <div style={{ minWidth: 0 }}>
-            <div className="detail-modal__eyebrow">Edit requirement</div>
+            <div className="detail-modal__eyebrow">{mode === "add" ? "New requirement" : "Edit requirement"}</div>
             <h2 className="detail-modal__title cell-truncate">{title}</h2>
             <div className="detail-modal__sub">
               Every field here is optional — fill in only what the broker actually asked for.
@@ -298,7 +319,7 @@ export default function RequirementFormDialog({
           </Button>
           <span style={{ marginLeft: "auto" }}>
             <Button variant="primary" onClick={handleSave} busy={saving}>
-              Save changes
+              {mode === "add" ? "Add requirement" : "Save changes"}
             </Button>
           </span>
         </div>

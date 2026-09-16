@@ -90,6 +90,10 @@ export interface ClientDetailsBody {
   budget_max_inr?: number | null;
   preferred_areas?: string | null;
   additional_requirements?: string | null;
+  /** One optional size per type named in `property_type`, keyed by that
+   *  type: {"Flat": "1200"}. The same shape the public requirements form
+   *  sends; null clears every stored size. */
+  property_sizes?: Record<string, string> | null;
   /** A data URL, already resized in the browser (lib/imageProcessing.ts). */
   photo_url?: string | null;
 }

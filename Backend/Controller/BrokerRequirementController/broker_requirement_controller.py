@@ -3,11 +3,13 @@ structuring stage, and what the Broker Requirements page reads. Thin by
 design; state lives in Service/BrokerRequirementService/
 requirement_pipeline_service.py.
 
-There is deliberately no POST here. A property can be added by hand (a human
-knows about a listing the pipeline never saw), but a requirement only exists
-because a broker asked for something in a monitored chat — there is no
-"invent a requirement" action in the product, so there is no endpoint for
-one. Edit and Delete are the only writes.
+POST adds a requirement by hand, exactly as the Properties page's Add dialog
+does for a property: an operator hears what a broker is looking for on a
+call, or in a chat this app does not monitor, and there is no message for the
+pipeline to structure. It carries the same content fields the Edit dialog
+does and nothing else — the WhatsApp metadata is filled in with placeholders
+by the service (see requirement_pipeline_service.create_requirement), never
+by the caller.
 """
 
 from typing import List, Literal, Optional
@@ -45,6 +47,23 @@ class RequirementUpdateRequest(BaseModel):
     contact_name: Optional[str] = None
     contact_phone: Optional[str] = None
     description: Optional[str] = None
+
+
+class RequirementCreateRequest(RequirementUpdateRequest):
+    """The Add dialog's body. Exactly the same optional content fields the
+    Edit dialog sends (see above) — a requirement typed by hand has no
+    WhatsApp metadata to send either, and the placeholders that stand in for
+    it are the service's business, not the caller's. Its own name purely so
+    each route reads for what it does.
+
+    Unlike DELETE this is not admin-gated: adding a requirement is the same
+    kind of routine data entry as editing one, and an employee doing it
+    destroys nothing."""
+
+
+@router.post("", response_model=BrokerRequirementRecord, status_code=201)
+def create_requirement(body: RequirementCreateRequest) -> BrokerRequirementRecord:
+    return requirement_pipeline_service.create_requirement(body.model_dump())
 
 
 @router.get("", response_model=list[BrokerRequirementRecord])

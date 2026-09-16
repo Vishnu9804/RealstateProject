@@ -43,9 +43,11 @@ message can produce several properties.
 from __future__ import annotations
 
 import threading
+import uuid
+from datetime import datetime, timezone
 from typing import Any, Dict, List, Optional, Set, Tuple
 
-from Agent.BrokerRequirementAgent import requirement_structurer
+from Agent.BrokerRequirementAgent import requirement_normalization, requirement_structurer
 from Database.broker_requirement_repository import EDITABLE_CONTENT_FIELDS
 from Middleware import step_logger
 from Model.BrokerRequirementModel.broker_requirement import (
@@ -308,6 +310,74 @@ def get_requirement_count() -> int:
 
 def get_requirements_version() -> str:
     return requirement_store.get_requirements_version()
+
+
+def create_requirement(content_fields: Dict[str, Any]) -> BrokerRequirementRecord:
+    """Backs the Broker Requirements page's Add dialog — a requirement entered
+    by hand (an operator hears what a broker wants on a call, or in a chat
+    this app does not monitor) rather than structured out of a captured
+    WhatsApp message. The manual counterpart of
+    property_pipeline_service.create_property, and deliberately built the same
+    way: every WhatsApp-metadata field StructuredRequirement otherwise
+    requires (sender, group, message text/timestamp) gets the same kind of
+    placeholder, since none of it exists for a manual entry, and every content
+    field is optional, matching the dialog itself.
+
+    No LLM call and no message batching happen here — there is no message to
+    structure. The only work is the same deterministic tidy-up the structuring
+    stage applies AFTER the model answers, so a hand-typed "flat" and "80L-1cr"
+    are stored exactly as the pipeline would have stored them and therefore
+    filter, sort and match identically.
+
+    Database cost: one transaction to store it (the placeholder message row
+    plus the requirement row, as for any batch) and one to store its matches.
+    Nothing is re-read afterwards — the record returned is built from the
+    object just written."""
+    fields = {
+        key: value
+        for key, value in content_fields.items()
+        # None means "not given" for a NEW requirement, so it is dropped and
+        # the model's own default applies (this is what keeps an omitted
+        # listing_type at "Sale" rather than failing validation on None).
+        if key in EDITABLE_CONTENT_FIELDS and value is not None
+    }
+    # Same rule the Edit dialog follows: the Area column's value is simply the
+    # first preferred area, so the two can never disagree. A lone area_name
+    # with no list behind it becomes that list.
+    areas = [str(area).strip() for area in (fields.pop("preferred_areas", None) or []) if str(area).strip()]
+    area_name = fields.pop("area_name", None)
+    if areas:
+        area_name = areas[0]
+    elif area_name:
+        areas = [area_name]
+
+    description = fields.get("description")
+    requirement = StructuredRequirement(
+        source_message_id=f"manual-{uuid.uuid4().hex}",
+        area_name=area_name,
+        preferred_areas=areas,
+        group_name="Manually added",
+        chat_type="personal",
+        sender_name="Manual entry",
+        sender_saved_name="Manual entry",
+        sender_phone="manual",
+        message_text=description or "Added manually via the Broker Requirements page.",
+        message_timestamp=datetime.now(timezone.utc),
+        **fields,
+    )
+    requirement.bhk = requirement_normalization.canonical_bhk(requirement.bhk)
+    requirement.requirement_type = requirement_normalization.canonical_requirement_type(requirement.requirement_type)
+    # The structurer's own post-model clean-ups, reused rather than repeated:
+    # both are pure functions over the record (no LLM call, no I/O), and this
+    # is what lets someone type just "80L-1cr" into Budget and still get the
+    # numeric ends every filter and the matching gate read.
+    requirement_structurer._fill_missing_budget_amounts(requirement)
+    requirement_structurer._normalize_budget_range(requirement)
+
+    requirement_store.add_requirements([requirement])
+    step_logger.success(f"Requirement {requirement.record_id} added by hand from the Broker Requirements page")
+    _store_matches_for_new_requirements([requirement])
+    return _to_record(requirement)
 
 
 def update_requirement(record_id: str, content_updates: Dict[str, Any]) -> Optional[BrokerRequirementRecord]:

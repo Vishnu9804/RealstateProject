@@ -54,8 +54,14 @@ DETAIL_FIELDS = (
     "budget_max_inr",
     "preferred_areas",
     "additional_requirements",
+    # One optional size per type named in property_type — a dict, not free
+    # text, and only ever kept for a type actually picked (_apply_size_rule).
+    "property_sizes",
 )
 _NUMBER_FIELDS = {"budget_min_inr", "budget_max_inr"}
+# Not free text either, so the blank-to-None rule must leave it alone rather
+# than stringifying the dict.
+_DICT_FIELDS = {"property_sizes"}
 
 # A photo arrives already resized in the browser (a few hundred KB at most);
 # this ceiling only exists so a hand-made request can't park an arbitrarily
@@ -93,7 +99,9 @@ def create_client(raw_phone: str, fields: Dict[str, Any], photo_url: Optional[st
     if client_store.client_exists(phone):
         return ManualClientResult("exists")
 
-    record = ClientRecord(phone=phone, status="registered", pending_action=None, **_clean_details(fields))
+    record = _apply_size_rule(
+        ClientRecord(phone=phone, status="registered", pending_action=None, **_clean_details(fields))
+    )
     # A website enquiry leaves no client record behind until it has
     # requirements, yet its visits can already be out with an agent — so a
     # brand-new record is held to the same freeze as an existing one.
@@ -128,6 +136,11 @@ def update_client(
         return ManualClientResult("invalid_photo")
 
     updated = existing.model_copy(update=_clean_details(fields))
+    # Only when this save actually touched one of the two: un-ticking a type
+    # drops the size that belonged to it, while an edit that left both alone
+    # keeps the stored sizes exactly as they are, like every other field.
+    if "property_type" in fields or "property_sizes" in fields:
+        updated = _apply_size_rule(updated)
     if _requirements_changed(existing, updated):
         if assignment_lock_service.has_active_assignment(phone):
             return ManualClientResult("locked")
@@ -157,8 +170,24 @@ def _clean_details(fields: Dict[str, Any]) -> Dict[str, Any]:
         if name not in fields:
             continue
         value = fields[name]
-        cleaned[name] = value if name in _NUMBER_FIELDS else _blank_to_none(value)
+        cleaned[name] = value if name in _NUMBER_FIELDS or name in _DICT_FIELDS else _blank_to_none(value)
     return cleaned
+
+
+def _apply_size_rule(record: ClientRecord) -> ClientRecord:
+    """A size is kept only for a type actually named in property_type — the
+    public form's own rule (inquiry_form_service.clean_property_sizes),
+    applied here too so a client's sizes read identically whether they
+    filled the form in themselves or a member of staff typed them in.
+
+    Lazily imported, the same cross-module pattern _requirements_changed
+    below uses, and returns the record untouched when nothing changed."""
+    from Service.WhatsAppInquiryHandlingService import inquiry_form_service
+
+    cleaned = inquiry_form_service.clean_property_sizes(record.property_sizes, record.property_type)
+    if cleaned == record.property_sizes:
+        return record
+    return record.model_copy(update={"property_sizes": cleaned})
 
 
 def _requirements_changed(previous: ClientRecord, current: ClientRecord) -> bool:

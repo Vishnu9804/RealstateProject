@@ -23,10 +23,13 @@ export interface RequirementContentFields {
   description?: string | null;
 }
 
-/** There is deliberately no create() here: a requirement only exists because
- *  a broker asked for something in a monitored chat, so the backend exposes
- *  no POST for one either. */
 export const requirementApi = {
+  /** Adds a requirement by hand — the Add dialog's save. The same content
+   *  fields an edit sends: the WhatsApp metadata a captured requirement
+   *  carries is filled in with placeholders server-side, since a hand-typed
+   *  requirement has no message behind it. */
+  createRequirement: (body: RequirementContentFields): Promise<BrokerRequirementRecord> =>
+    apiClient.post(`/requirements`, body),
   getRequirements: (limit = 500): Promise<BrokerRequirementRecord[]> =>
     apiClient.get(`/requirements?limit=${limit}`),
   getRequirement: (recordId: string): Promise<BrokerRequirementRecord> =>

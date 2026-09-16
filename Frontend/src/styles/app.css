@@ -461,6 +461,64 @@
 .client-photo__upload input[type="file"] { position: absolute; inset: 0; opacity: 0; cursor: pointer; }
 .client-photo__error { color: var(--bad); }
 
+/* ---- Add/Edit client: property-type chips + their per-type size boxes ---
+   The same multi-select the public requirements form uses (LandingPage/
+   src/components/RequirementsForm.tsx): a client happy with a flat OR a
+   bungalow says both, and each picked type gets its own optional size in
+   the unit people actually use for it. A single-pick dropdown could say
+   neither thing. */
+.type-chips { display: flex; flex-wrap: wrap; gap: 8px; }
+.type-chip {
+  display: inline-flex;
+  align-items: center;
+  gap: 6px;
+  height: 34px;
+  padding: 0 14px;
+  border-radius: var(--r-pill);
+  border: 1px solid var(--rim);
+  background: var(--plane-1);
+  color: var(--ink-2);
+  font: inherit;
+  font-size: 13.5px;
+  font-weight: 560;
+  white-space: nowrap;
+  cursor: pointer;
+  transition: background-color var(--t-fast) var(--ease-out), border-color var(--t-fast) var(--ease-out),
+    color var(--t-fast) var(--ease-out), transform var(--t-fast) var(--ease-out);
+}
+.type-chip:hover:not(:disabled) { border-color: var(--rim-strong); color: var(--ink); }
+.type-chip:active:not(:disabled) { transform: scale(0.97); }
+.type-chip--on,
+.type-chip--on:hover:not(:disabled) { background: var(--accent-gradient); border-color: transparent; color: #fff; }
+.type-chip:disabled { opacity: 0.55; cursor: not-allowed; }
+
+.size-rows { display: grid; gap: 10px; }
+.size-row { display: grid; grid-template-columns: minmax(96px, 1fr) minmax(0, 2fr); align-items: center; gap: 12px; }
+.size-row__type { min-width: 0; font-size: 13px; font-weight: 560; color: var(--ink-2); }
+/* The unit sits inside the box rather than after it, so "1200" and "sq ft"
+   read as one value however narrow the dialog gets. */
+.size-row__box { position: relative; min-width: 0; }
+.size-row__box .input { padding-right: 58px; }
+.size-row__unit {
+  position: absolute;
+  right: 12px;
+  top: 50%;
+  transform: translateY(-50%);
+  font-size: 12px;
+  font-weight: 600;
+  color: var(--ink-4);
+  pointer-events: none;
+}
+
+/* The cr / L / K key above the budget boxes — same key, same words as the
+   public form's, so a budget is written the same way on both. */
+.budget-units { display: flex; flex-wrap: wrap; gap: 14px; margin-bottom: 6px; font-size: 12px; color: var(--ink-3); }
+.budget-units b { color: var(--ink-2); font-weight: 700; }
+
+@media (max-width: 560px) {
+  .size-row { grid-template-columns: minmax(0, 1fr); gap: 6px; }
+}
+
 .client-avatar {
   display: inline-grid;
   place-items: center;

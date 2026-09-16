@@ -223,6 +223,28 @@ def drop_property_from_memory_cache(record_id: str) -> None:
             _score_cache[phone] = [score for score in scores if score.record_id != record_id]
 
 
+def drop_edited_property_from_memory_cache(record_id: str, is_protected) -> int:
+    """Forgets one EDITED property's cached score for every client except the
+    ones `is_protected(phone)` vouches for (assigned to it, or having
+    completed a visit to it), and returns how many scores were dropped. The
+    in-memory twin of Database/edited_property_match_repository.py's client
+    half — see that module for why an edit drops these at all.
+
+    IN-MEMORY FALLBACK ONLY. With a database configured, the equivalent
+    DELETE runs there instead, in one statement that never sends a client
+    phone number across the wire (which is exactly what the callback here
+    would otherwise cost)."""
+    dropped = 0
+    for phone, scores in _score_cache.items():
+        if not any(score.record_id == record_id for score in scores):
+            continue
+        if is_protected(phone):
+            continue
+        _score_cache[phone] = [score for score in scores if score.record_id != record_id]
+        dropped += 1
+    return dropped
+
+
 def get_scored_property_ids(phone: str) -> set:
     """Every property id currently scored for this client, any bucket —
     the same cheap, cache-only read get_match_counts above does, just the

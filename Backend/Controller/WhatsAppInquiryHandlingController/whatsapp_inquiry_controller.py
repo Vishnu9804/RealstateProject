@@ -94,6 +94,11 @@ class ClientDetailsRequest(BaseModel):
     budget_max_inr: Optional[float] = None
     preferred_areas: Optional[str] = None
     additional_requirements: Optional[str] = None
+    # One optional size per type named in property_type ({"Flat": "1200"}) —
+    # the same shape the public requirements form sends (see
+    # Model/WhatsAppInquiryHandlingModel/form_submission.py), so a client's
+    # sizes read identically however they were recorded.
+    property_sizes: Optional[Dict[str, str]] = None
     # A data URL, already resized in the browser.
     photo_url: Optional[str] = None
 

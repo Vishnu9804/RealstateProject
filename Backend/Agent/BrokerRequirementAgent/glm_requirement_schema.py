@@ -157,6 +157,16 @@ class GLMRequirementExtraction(BaseModel):
         "or to rent) — a demand, not an offer. False for a property being offered/advertised for sale or rent, "
         "and false for anything that is not about wanting a property at all."
     )
+    is_property_listing: bool = Field(
+        default=False,
+        description="True only when the message is an OFFER — someone presenting a specific property (or several) "
+        "for sale or for rent, with its details such as BHK, society, area, size or price (\"2 BHK Flat For RENT, "
+        "Orchid Fantasia, Jahangirabad, Rent 20k\") — rather than asking for one. Mutually exclusive with "
+        "is_requirement: when this is true, is_requirement is false and \"requirements\" stays EMPTY, because the "
+        "message is handed to a separate listing-extraction stage instead. Defaults to False (fail safe) if the "
+        "model omits the field, which leaves the message treated exactly as it was before this field existed — so "
+        "a missing signal can never re-route a real requirement away from the Broker Requirements page.",
+    )
     requirement_lines: List[str] = Field(
         default_factory=list,
         description='REQUIRED whenever is_requirement is true, and written BEFORE "requirements" — the same '

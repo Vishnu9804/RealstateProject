@@ -1452,38 +1452,44 @@ export default function ClientMatchesDialog({
         }}
       >
         <div
-          className="detail-modal detail-modal--wide anim-rise"
+          className="detail-modal detail-modal--wide matches-dialog anim-rise"
           role="dialog"
           aria-modal="true"
           aria-label={`Properties matched for ${displayName}`}
         >
+          {/* Compact header (see .matches-dialog in app.css): the badges sit on
+              the title's own line instead of a row of their own, so the cards
+              below get that height back. Same layout as
+              RequirementMatchesDialog. */}
           <div className="detail-modal__head">
-            <div style={{ minWidth: 0 }}>
+            <div style={{ minWidth: 0, flex: 1 }}>
               <div className="detail-modal__eyebrow">Matched properties</div>
-              <h2 className="detail-modal__title cell-truncate">
-                {client?.name || clientName || "Matches"}
-              </h2>
+              <div className="matches-dialog__title-row">
+                <h2 className="detail-modal__title cell-truncate">
+                  {client?.name || clientName || "Matches"}
+                </h2>
+                <div className="detail-modal__badges">
+                  <Badge tone="accent">
+                    {total} propert{total === 1 ? "y" : "ies"}
+                  </Badge>
+                  {assignedCount > 0 && (
+                    <Badge tone="orange">
+                      {assignedCount} assigned
+                      {assignedCount < total
+                        ? ` · ${total - assignedCount} remaining`
+                        : ""}
+                    </Badge>
+                  )}
+                  {result?.computed_at && (
+                    <span className="fact">
+                      <IconClock size={12} /> Computed{" "}
+                      {relativeTime(new Date(result.computed_at))}
+                    </span>
+                  )}
+                </div>
+              </div>
               <div className="detail-modal__sub cell-truncate">
                 {summariseRequirements(client, phone)}
-              </div>
-              <div className="detail-modal__badges">
-                <Badge tone="accent">
-                  {total} propert{total === 1 ? "y" : "ies"}
-                </Badge>
-                {assignedCount > 0 && (
-                  <Badge tone="orange">
-                    {assignedCount} assigned
-                    {assignedCount < total
-                      ? ` · ${total - assignedCount} remaining`
-                      : ""}
-                  </Badge>
-                )}
-                {result?.computed_at && (
-                  <span className="fact">
-                    <IconClock size={12} /> Computed{" "}
-                    {relativeTime(new Date(result.computed_at))}
-                  </span>
-                )}
               </div>
             </div>
             <div className="row-flex" style={{ gap: 8, flex: "none" }}>
@@ -1506,6 +1512,24 @@ export default function ClientMatchesDialog({
               </button>
             </div>
           </div>
+
+          {/* The client's own description of what they want — pinned above
+              the tabs exactly like the Broker Requirements matches dialog's,
+              so it stays readable against every card on every tab. */}
+          {client?.additional_requirements?.trim() && (
+            <div
+              className="matches-dialog__brief"
+              role="note"
+              aria-label="Requirement description"
+            >
+              <div className="matches-dialog__brief-k">
+                <IconMessage size={12} /> Requirement description
+              </div>
+              <div className="matches-dialog__brief-v">
+                {client.additional_requirements.trim()}
+              </div>
+            </div>
+          )}
 
           <div className="matches-dialog__tabs">
             <Segmented<PropertyCategory>

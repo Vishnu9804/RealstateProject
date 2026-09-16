@@ -180,7 +180,9 @@ def handle_incoming_message(message: InquiryChatMessage) -> None:
             # On a thread, like every other send on a hot path: a WhatsApp
             # round trip must never hold up the next inbound message.
             threading.Thread(
-                target=_send_limit_notice, args=(message.sender_phone,), name="inquiry-limit-notice", daemon=True
+                target=_send_limit_notice,
+                args=(message.sender_phone, message.connection_id),
+                name="inquiry-limit-notice", daemon=True
             ).start()
         return
 
@@ -191,9 +193,9 @@ def handle_incoming_message(message: InquiryChatMessage) -> None:
         _buffer.add_message(message)
 
 
-def _send_limit_notice(phone: str) -> None:
+def _send_limit_notice(phone: str, connection_id: Optional[str]) -> None:
     try:
-        outbound_messenger.send_text(phone, _DAILY_LIMIT_NOTICE)
+        outbound_messenger.send_text(phone, _DAILY_LIMIT_NOTICE, connection_id=connection_id)
     except Exception as exc:  # noqa: BLE001
         # Never re-raised: failing to send the courtesy note must not turn
         # into an error on the message-intake path, which by this point has

@@ -33,6 +33,8 @@ AREA_KNOWLEDGE_BASE: Dict[str, List[str]] = {
     'Adajan': [
         'Adajan',
         'Adajan Pal',
+        'ADAJAN SURAT',
+        'Anand Mahal Road',
         'Galaxy Aventura',
         'Parshuram Garden',
         'Top Floor',
@@ -82,7 +84,13 @@ AREA_KNOWLEDGE_BASE: Dict[str, List[str]] = {
     ],
     'Dumas': [
         'Dumas',
+        'Airport',
         'Avadh Carolina',
+        'Avadh Project',
+    ],
+    'Gauravpath Road': [
+        'Gauravpath Road',
+        'Siddhivinayak Height',
     ],
     'GD Goenka Canal Road': [
         'GD Goenka Canal Road',
@@ -97,15 +105,24 @@ AREA_KNOWLEDGE_BASE: Dict[str, List[str]] = {
     'Ghod Dod Road': [
         'Ghod Dod Road',
         'Jade Blue',
+        'Kakadia Complex Ghod Dod Road',
     ],
     'Godadara': [
         'Godadara',
         'Aranya-3 by Pramukh',
     ],
+    'Jahangirabad': [
+        'Jahangirabad',
+        'Orchid Fantasia',
+    ],
     'Jahangirpura': [
         'Jahangirpura',
         'Anjani Ambrosia',
         'Vaishnodevi Sky',
+    ],
+    'Nanpura': [
+        'Nanpura',
+        'Nanpura Police Station',
     ],
     'Pal': [
         'Pal',
@@ -122,6 +139,10 @@ AREA_KNOWLEDGE_BASE: Dict[str, List[str]] = {
     'Pal - Adajan': [
         'Pal - Adajan',
         'Supath Enclave',
+    ],
+    'Palanpur': [
+        'Palanpur',
+        'Raj world PALANPUR',
     ],
     'Parle Point': [
         'Parle Point',
@@ -141,6 +162,7 @@ AREA_KNOWLEDGE_BASE: Dict[str, List[str]] = {
         'Milan Bungalow',
         'Passport Office',
         'Piplod (Near Ryan International School',
+        'PIPLOD Dumas Road',
         'Piplod Main Road',
         'Piplod–Vesu',
         'RahulRaj Mall',
@@ -154,12 +176,19 @@ AREA_KNOWLEDGE_BASE: Dict[str, List[str]] = {
         'Vacanza Bungalows',
         'Vijay Sales',
     ],
+    'Udhana Darwaja': [
+        'Udhana Darwaja',
+    ],
     'Udhna': [
         'Udhna',
         'Udhna Magdalla',
     ],
     'Udhna Magdalla': [
         'Udhna Magdalla',
+    ],
+    'Ugat Canal Road': [
+        'Ugat Canal Road',
+        'Sagar Sankul',
     ],
     'Vadod': [
         'Vadod',
@@ -172,9 +201,12 @@ AREA_KNOWLEDGE_BASE: Dict[str, List[str]] = {
         'Avadh Carolina - Dumas',
         'Dumas',
         'Happy Residency',
+        'Mangalam Heights',
+        'Mangalam Heights VESU',
         'Nandini Residency',
         'Olive Club',
         'Palm Avenue',
+        'PIPLOD',
         'Punyabhoomi',
         'Rebounce',
         'Sevion circle',
@@ -182,6 +214,7 @@ AREA_KNOWLEDGE_BASE: Dict[str, List[str]] = {
         'Shivkrupa',
         'SHUBH ENCLAVE',
         'Shyam Baba Temple',
+        'Udhana Magdalla Road VESU',
         'University road',
         'Vanilla Sky',
         'VIP Road',

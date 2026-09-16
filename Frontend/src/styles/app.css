@@ -1340,7 +1340,12 @@ mark.hl {
   .cmdk-trigger { padding: 0 11px; }
 }
 
-@container topbar (max-width: 1350px) {
+/* Nav labels collapse to icons only once the bar truly can't hold them.
+   Was 1350px while the bar also carried the brand, the status pill and the
+   search button; with those removed (and Visits added) the labels fit down
+   to here — re-measured in Chrome with a "99+" review badge showing: nav
+   1163px + tools 88px + two 12px gaps = 1275px of content box needed. */
+@container topbar (max-width: 1290px) {
   .brand__text { display: none; }
   .dock__link span { display: none; }
   .dock__link { padding: 0 12px; }
@@ -1429,6 +1434,61 @@ mark.hl {
    nothing against `width: min(760px, 100%)`). */
 .detail-modal--wide { width: min(1180px, 100%); max-height: min(92vh, 940px); }
 
+/* ---- the two matches dialogs: compact chrome, room for the cards ---------
+   ClientMatchesDialog and RequirementMatchesDialog both carry .matches-dialog
+   on their wide modal, and EVERY rule below is scoped to it — the other
+   dialogs sharing .detail-modal / .matches-dialog__tabs / .segmented
+   (property details, Agent visits, forms) are untouched. The header, tabs
+   and footer are tightened and the modal takes nearly the whole window, so
+   the scrolling card area gets most of the height; cards are a little
+   smaller, so more of them fit per row. Main, Outsider, Assigned and
+   Completed all render through the same .match-card/.matches-grid, so they
+   stay identical to one another. */
+.matches-dialog.detail-modal--wide {
+  width: min(1440px, 100%);
+  max-height: calc(100vh - 36px);
+}
+.matches-dialog .detail-modal__head { padding: 12px 20px 10px; gap: 12px; }
+.matches-dialog .detail-modal__eyebrow { font-size: 10.5px; margin-bottom: 2px; }
+.matches-dialog__title-row {
+  display: flex;
+  align-items: center;
+  flex-wrap: wrap;
+  gap: 6px 12px;
+  min-width: 0;
+}
+.matches-dialog__title-row .detail-modal__title { min-width: 0; font-size: 19px; }
+.matches-dialog .detail-modal__badges { margin-top: 0; gap: 6px; }
+.matches-dialog .detail-modal__sub { font-size: 13px; margin-top: 3px; }
+.matches-dialog .matches-dialog__tabs { padding: 8px 20px; gap: 10px; }
+.matches-dialog .matches-dialog__tabs--types { padding-top: 6px; padding-bottom: 6px; }
+.matches-dialog .segmented__opt { height: 30px; padding: 0 13px; font-size: 13px; }
+.matches-dialog .detail-modal__body { padding: 14px 20px 16px; gap: 12px; }
+.matches-dialog .detail-modal__foot { padding: 10px 20px; }
+.matches-dialog .detail-modal__foot .btn:not(.btn--sm) { height: 38px; }
+
+.matches-dialog .matches-grid {
+  grid-template-columns: repeat(auto-fill, minmax(228px, 1fr));
+  gap: 12px;
+}
+.matches-dialog .match-card { gap: 7px; padding: 12px 12px 10px; }
+.matches-dialog .match-card .pcard__title { font-size: 14.5px; }
+.matches-dialog .match-card .pcard__sub { font-size: 12px; margin-top: 1px; }
+.matches-dialog .match-card__head .source-tag { margin-bottom: 4px; }
+.matches-dialog .match-card__score { padding: 3px 8px; font-size: 11.5px; }
+.matches-dialog .match-card__facts { gap: 5px; }
+.matches-dialog .match-card__facts .fact { padding: 3px 7px; font-size: 11px; gap: 5px; }
+.matches-dialog .match-card__badges { gap: 5px; }
+.matches-dialog .match-card__badges .badge { padding: 2px 8px 2px 7px; font-size: 11px; }
+.matches-dialog .match-card__reason { font-size: 11.5px; line-height: 1.45; }
+.matches-dialog .match-card__plan { padding: 5px 6px 5px 8px; font-size: 11.5px; }
+.matches-dialog .match-card__foot { padding-top: 8px; }
+.matches-dialog .match-card__foot .pcard__price { font-size: 15.5px; }
+.matches-dialog .visit-when { padding: 4px 9px; font-size: 12px; }
+.matches-dialog .visit-history { gap: 6px; }
+.matches-dialog .visit-history__when,
+.matches-dialog .visit-history__notes { font-size: 11.5px; }
+
 .matches-dialog__tabs {
   display: flex;
   align-items: center;
@@ -1448,18 +1508,24 @@ mark.hl {
 }
 
 /* The requirement's own description, pinned between the header and the
-   tabs of the Broker Requirements matches dialog so it stays in view while
-   the cards scroll — it carries every detail without a field of its own
-   (furnishing, food, who it is for, ...), which is what the operator reads
-   the shortlist against. Capped in height so a long one never pushes the
-   cards off screen; it scrolls on its own instead. */
+   tabs of both matches dialogs (a broker requirement's description, a
+   client's "anything else") so it stays in view while the cards scroll —
+   it carries every detail without a field of its own (furnishing, food, who
+   it is for, ...), which is what the operator reads the shortlist against.
+   Label and text share one line, and the text is capped at three lines so a
+   long one never eats into the cards; it scrolls on its own instead. */
 .matches-dialog__brief {
-  padding: 12px 26px;
+  display: flex;
+  align-items: baseline;
+  flex-wrap: wrap;
+  gap: 2px 12px;
+  padding: 8px 20px;
   border-bottom: 1px solid var(--rim);
   background: color-mix(in oklab, var(--accent) 10%, var(--plane-1));
   box-shadow: inset 3px 0 0 var(--accent);
 }
 .matches-dialog__brief-k {
+  flex: none;
   display: flex;
   align-items: center;
   gap: 6px;
@@ -1468,10 +1534,11 @@ mark.hl {
   letter-spacing: 0.1em;
   text-transform: uppercase;
   color: var(--accent);
-  margin-bottom: 4px;
 }
 .matches-dialog__brief-v {
-  max-height: 96px;
+  flex: 1 1 280px;
+  min-width: 0;
+  max-height: calc(3 * 1.55em);
   overflow-y: auto;
   white-space: pre-wrap;
   word-break: break-word;
@@ -2120,3 +2187,51 @@ button.agent-mini:hover { border-color: var(--accent); background: var(--plane-2
 }
 .vt-summary--ok { color: var(--ink); border-color: color-mix(in oklab, var(--accent) 40%, transparent); }
 .vt-summary--bad { color: var(--bad); border-color: color-mix(in oklab, var(--bad) 40%, transparent); }
+
+/* ---- Visits page (pages/VisitsPage.tsx) --------------------------------
+   One table of every site visit. A client + property visited more than
+   once is ONE combined row (.row--group) that drops down into its visits
+   (.row--child) — indented, a shade darker and cut with a left rule, so the
+   children read as belonging to the row above rather than as more rows. */
+.visits-table__toggle { width: 36px; padding-right: 0 !important; }
+.visits-chevron {
+  display: inline-grid;
+  place-items: center;
+  width: 24px;
+  height: 24px;
+  border-radius: 50%;
+  border: 1px solid var(--rim);
+  background: var(--plane-1);
+  color: var(--ink-3);
+  transform: rotate(-90deg);
+  transition: transform var(--t-base) var(--ease-spring), color var(--t-fast) var(--ease-out);
+}
+.visits-chevron--open { transform: rotate(0deg); color: var(--accent); border-color: color-mix(in oklab, var(--accent) 45%, transparent); }
+.visits-table .row--group td { font-weight: 560; }
+.visits-table .row--open td { background: color-mix(in oklab, var(--accent) 7%, transparent); }
+.visits-table .row--open td:first-child { box-shadow: inset 3px 0 0 var(--accent); }
+.visits-table .row--child td {
+  background: var(--plane-0);
+  padding-top: 8px;
+  padding-bottom: 8px;
+  font-size: 13px;
+}
+.visits-table .row--child td:first-child { box-shadow: inset 3px 0 0 color-mix(in oklab, var(--accent) 45%, transparent); }
+.visits-table .row--child:hover td { background: var(--plane-2); }
+.visits-table__num {
+  display: inline-grid;
+  place-items: center;
+  width: 20px;
+  height: 20px;
+  margin-left: 2px;
+  border-radius: 50%;
+  background: var(--plane-2);
+  border: 1px solid var(--rim-strong);
+  font-size: 11px;
+  font-weight: 700;
+  color: var(--ink-2);
+  font-variant-numeric: tabular-nums;
+}
+.visits-table__client { font-size: 13.5px; text-align: left; padding: 0; }
+.visits-table__notes { display: inline-block; max-width: 200px; vertical-align: bottom; }
+.visits-table__badges { display: flex; flex-direction: column; align-items: flex-start; gap: 5px; }

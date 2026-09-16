@@ -385,6 +385,9 @@ def _log_message_models(
                 outcome, note = "rerouted", extraction.skip_reason or "Read as a DEMAND, not a listing."
             else:
                 outcome, note = "skipped", extraction.skip_reason or "Judged not to be a property listing."
+            if messages_by_id[message_id].reclassified_as_property:
+                routed = "Re-routed here by the requirement stage, which read it as a listing."
+                note = f"{note} · {routed}" if note else routed
             outcomes[message_id] = {
                 "outcome": outcome,
                 "note": note,
@@ -1382,6 +1385,17 @@ def _build_user_prompt(batch: List[WhatsAppChatMessage], correction: Optional[st
         "matched back to its message.",
         "",
     ]
+    # Only when the batch actually carries one, so every ordinary batch's
+    # prompt is byte-for-byte what it was before re-routing existed.
+    if any(message.reclassified_as_property for message in batch):
+        lines += [
+            "A message whose block carries a \"pre-classified: LISTING\" line is different. It has already been "
+            "read in full by the requirement-extraction stage, which concluded it OFFERS a property (or several) "
+            "rather than asking for one, and re-routed it here on that basis. Treat it as a listing and extract "
+            "it. Only return is_property_listing false for such a message if its text plainly does not offer any "
+            "property at all, which would mean the earlier stage misread it.",
+            "",
+        ]
     for message in batch:
         # The id sits ALONE on the marker line, with the group name moved to
         # its own labelled line below. When both shared that line, GLM was
@@ -1391,6 +1405,8 @@ def _build_user_prompt(batch: List[WhatsAppChatMessage], correction: Optional[st
         # up after that failure mode if it ever recurs.
         lines.append(f"<<<MESSAGE id={message.message_id}>>>")
         lines.append(f"group: {message.chat_name}")
+        if message.reclassified_as_property:
+            lines.append("pre-classified: LISTING (already read and judged by the requirement-extraction stage)")
         lines.append("text:")
         lines.append(message.text.strip())
         lines.append("<<<END MESSAGE>>>")
@@ -1493,8 +1509,11 @@ def _merge_with_message_data(
             # extraction.properties` (already true on this branch) so this can
             # only ever claim a message that produced no property at all: if
             # the model contradicts itself by flagging a demand AND returning
-            # listings, the listings win and nothing is re-routed.
-            if extraction.is_requirement:
+            # listings, the listings win and nothing is re-routed. Never for a
+            # message the requirement stage already sent here as a listing
+            # (reclassified_as_property): sending it back would let it bounce
+            # between the two pipelines forever.
+            if extraction.is_requirement and not message.reclassified_as_property:
                 step_logger.success(
                     f"-> Re-routed to the requirement pipeline (this is a DEMAND, not a listing): "
                     f"{extraction.skip_reason or 'no reason given'} — {message.text[:80]!r}"

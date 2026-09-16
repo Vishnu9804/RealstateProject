@@ -44,7 +44,7 @@ actually messages this number.
 
 from __future__ import annotations
 
-from typing import List
+from typing import List, Optional
 
 from Agent.WhatsAppInquiryHandlingAgent import inquiry_classifier
 from Config.settings import get_settings
@@ -91,7 +91,8 @@ def handle_batch_ready(phone: str, messages: List[InquiryChatMessage]) -> None:
     # not to be property-related at all. Every later outbound message to
     # them then goes out from the same number (see
     # inquiry_connection_store.py).
-    inquiry_connection_store.remember(client_phone, messages[-1].connection_id if messages else None)
+    source_connection_id = messages[-1].connection_id if messages else None
+    inquiry_connection_store.remember(client_phone, source_connection_id)
     existing_client = client_store.get_client_by_phone(client_phone)
     # A "website_lead" record (Service/LandingPageService/
     # landing_page_service.py's _sync_to_inquiries) means this phone
@@ -136,12 +137,16 @@ def handle_batch_ready(phone: str, messages: List[InquiryChatMessage]) -> None:
             "welcome message already sent once, not resending."
         )
     else:
-        _start_new_client(client_phone, reason)
+        _start_new_client(client_phone, reason, source_connection_id)
 
 
-def _start_new_client(phone: str, reason: str) -> None:
+def _start_new_client(phone: str, reason: str, connection_id: Optional[str]) -> None:
     link = _build_form_link(phone)
-    sent = outbound_messenger.send_text(phone, _WELCOME_TEXT_TEMPLATE.format(link=link))
+    # Sent from the number this batch actually arrived on, so the welcome
+    # lands in the same chat the client opened — without it the sender
+    # would be whichever inquiry number sorts first (see
+    # whatsapp_connection_manager._pick_sender).
+    sent = outbound_messenger.send_text(phone, _WELCOME_TEXT_TEMPLATE.format(link=link), connection_id=connection_id)
     if sent:
         # Marked only after a successful send, and BEFORE anything else runs
         # — this is what stops the very next flush for this number (even

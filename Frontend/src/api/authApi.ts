@@ -22,6 +22,8 @@ const withGrant = (grant: string) => ({ "X-Owner-Verification": grant });
 export const authApi = {
   login: (body: { username: string; password: string }): Promise<LoginResult> => apiClient.post("/auth/login", body),
   getMe: (): Promise<UserSummary> => apiClient.get("/auth/me"),
+  /** Swaps the current, still-valid token for a fresh one (AuthProvider calls it while the user is active). */
+  refresh: (): Promise<LoginResult> => apiClient.post("/auth/refresh"),
   changeOwnPassword: (body: ChangeOwnPasswordRequest, grant: string): Promise<LoginResult> =>
     apiClient.patch("/auth/me/password", body, withGrant(grant)),
   endOtherSessions: (): Promise<LoginResult> => apiClient.post("/auth/me/end-other-sessions"),

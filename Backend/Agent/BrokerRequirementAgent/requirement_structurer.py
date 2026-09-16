@@ -16,6 +16,16 @@ vesu") — those arrive carrying `reclassified_as_requirement`, and the
 prompt is told so, because they have already been judged once and should
 not be bounced back out into nowhere.
 
+The routing works in the other direction too. The keyword filter matches on
+wording, so a plain LISTING that happens to contain a trigger word (several
+flats "For RENT" with their prices) can land here even though it offers
+properties rather than asking for one. The LLM, already reading it, says so
+(PART 1's is_property_listing) and structure_batch_with_routing hands the
+message back to the caller, which pushes it into the PROPERTY buffer — exactly
+the way the property stage hands demands over to this one. A message that
+has already crossed over once (either flag set) is never sent back across,
+so nothing can ping-pong between the two pipelines.
+
 Deliberately much smaller than the property stage, because the product
 decision behind this feature is that a requirement needs far less machinery
 than a listing does:
@@ -53,7 +63,7 @@ from __future__ import annotations
 
 import json
 import re
-from typing import Dict, List, Optional
+from typing import Dict, List, Optional, Tuple
 
 from pydantic import ValidationError
 
@@ -108,7 +118,31 @@ def structure_batch(
     """Sends one batch (up to 10 messages) to GLM in a single prompt and
     returns StructuredRequirement records for the messages that turned out
     to be actual requirements. Never raises: a batch that still fails after
-    retries is logged and skipped.
+    retries is logged and skipped. Messages the model read as LISTINGS are
+    simply not returned here — use structure_batch_with_routing to receive
+    them (as requirement_pipeline_service does)."""
+    return structure_batch_with_routing(batch, outcome=outcome)[0]
+
+
+def structure_batch_with_routing(
+    batch: List[WhatsAppChatMessage], outcome: Optional[dict] = None
+) -> Tuple[List[StructuredRequirement], List[WhatsAppChatMessage]]:
+    """structure_batch, plus the second thing this stage decides: which
+    messages in the batch were not demands at all but OFFERS — someone
+    presenting a property rather than asking for one (PART 1's
+    is_property_listing).
+
+    Returns (requirements, messages_to_re_route). The second list is
+    messages, not records: nothing about a listing is extracted here. They
+    are handed back to the caller to push into the PROPERTY pipeline, which
+    has its own prompt, schema and page — the exact mirror of
+    property_structurer.structure_batch_with_routing.
+
+    Strictly additive by construction: a message is only ever re-routed when
+    this stage produced NO requirement for it, and never when it already came
+    here from the property stage (reclassified_as_requirement), so nothing
+    that would have been stored as a requirement before can be taken away,
+    and no message can bounce back and forth.
 
     `outcome`, when given, is how the caller tells the two very different
     meanings of an empty result apart: ["llm_failed"] is set True (with
@@ -121,7 +155,7 @@ def structure_batch(
     instead (see Service/WhatsAppDataFetchingService/pending_batch_store.py).
     Leaving it out changes nothing."""
     if not batch:
-        return []
+        return [], []
 
     request_body = glm_client.build_request_body(_build_system_prompt(), _build_user_prompt(batch))
     # Filled by the successful call — read only by the Message to Model log.
@@ -138,7 +172,7 @@ def structure_batch(
         if outcome is not None:
             outcome["llm_failed"] = True
             outcome["reason"] = failure.get("reason") or "the GLM structuring call did not succeed"
-        return []
+        return [], []
 
     extractions = _parse_extractions(content, len(batch))
     if not extractions:
@@ -150,17 +184,17 @@ def structure_batch(
         if outcome is not None:
             outcome["llm_failed"] = True
             outcome["reason"] = "GLM answered, but its reply could not be parsed into any extraction"
-        return []
+        return [], []
 
     unanswered: List[str] = []
-    requirements = _merge_with_message_data(extractions, batch, unanswered=unanswered)
+    requirements, property_messages = _merge_with_message_data(extractions, batch, unanswered=unanswered)
     if outcome is not None and unanswered:
         # A PARTIAL answer: the rest of the batch is fine and is returned
         # normally, but these particular messages got no verdict at all and
         # would otherwise vanish. The caller re-queues just them.
         outcome["unanswered_message_ids"] = unanswered
-    _log_message_models(batch, calls, extractions, requirements)
-    return requirements
+    _log_message_models(batch, calls, extractions, requirements, property_messages)
+    return requirements, property_messages
 
 
 # The fields the Dashboard's Message to Model tab shows for each requirement
@@ -187,6 +221,7 @@ def _log_message_models(
     calls: List[dict],
     extractions: List[GLMRequirementExtraction],
     requirements: List[StructuredRequirement],
+    property_messages: List[WhatsAppChatMessage],
 ) -> None:
     """Side-channel for the Dashboard's Message to Model tab
     (Service/LLMUsageService/message_model_service.py): what each message in
@@ -198,6 +233,7 @@ def _log_message_models(
         for call in calls:
             call["message_ids"] = message_ids
         messages_by_id = {message.message_id: message for message in batch}
+        rerouted = {message.message_id for message in property_messages}
         models: Dict[str, List[dict]] = {}
         for requirement in requirements:
             models.setdefault(requirement.source_message_id, []).append(
@@ -210,6 +246,8 @@ def _log_message_models(
                 continue
             if models.get(message_id):
                 outcome, note = "converted", None
+            elif message_id in rerouted:
+                outcome, note = "rerouted", extraction.skip_reason or "Read as a LISTING, not a demand."
             else:
                 outcome, note = "skipped", extraction.skip_reason or "Judged not to be a requirement."
             if messages_by_id[message_id].reclassified_as_requirement:
@@ -269,6 +307,26 @@ def _build_system_prompt() -> str:
             "  - questions about paperwork, loans, rates or the market that do not ask for a specific property;",
             '  - someone asking for a BROKER, a partner, a buyer or a tenant rather than a property.',
             "When is_requirement is false, write a short skip_reason and return an EMPTY requirements list.",
+            "",
+            "OFFER vs DEMAND — is_property_listing. These groups carry two different kinds of real-estate message, "
+            "handled by two different systems. A DEMAND asks for a property the sender does NOT have (that is "
+            "is_requirement). An OFFER (a LISTING) presents a property the sender can show you — here is a "
+            "flat/shop/plot, its BHK, society, area, size, price or rent, contact me — whether it is one property or "
+            "a list of several (\"2 BHK Flat For RENT, Orchid Fantasia, Jahangirabad, Rent - 20k\", \"Shop for sale "
+            "VIP Road 400 sqft 55L\"). For an OFFER set is_property_listing TRUE and is_requirement FALSE, keep "
+            "requirement_lines and requirements EMPTY, and write a one-line skip_reason saying what is being offered "
+            "(e.g. \"listing: 2 BHK flats offered for rent in Jahangirabad\"). The message is NOT discarded — it is "
+            "passed to a separate listing-extraction stage, so getting this split right is what puts it where it "
+            "belongs.",
+            "",
+            "CAREFUL — a demand often states a BUDGET, areas and conditions, and that does NOT make it an offer: "
+            "\"3 BHK required Vesu, budget 40k\" is a DEMAND. And an offer asking for the other side of its own deal "
+            "(\"genuine buyer required\", \"tenant wanted\", \"brokerage required\") is still an OFFER. "
+            "is_property_listing is FALSE by default and only ever TRUE for a message that genuinely presents a "
+            "specific property. If you are unsure whether a message is a demand or an offer, treat it as a DEMAND "
+            "and leave is_property_listing FALSE. Never set is_property_listing TRUE at the same time as "
+            "is_requirement, and set BOTH to FALSE for greetings, chit-chat, questions and anything else that is "
+            "neither.",
             "",
             "=====================================================================",
             "PART 2 — COUNT THE REQUIREMENTS BEFORE EXTRACTING ANY OF THEM",
@@ -404,6 +462,7 @@ def _build_system_prompt() -> str:
             "    {",
             '      "source_message_id": "<exactly the id given for this message>",',
             '      "is_requirement": true,',
+            '      "is_property_listing": false,',
             '      "requirement_lines": ["<short snippet per requirement>"],',
             '      "requirements": [',
             "        {",
@@ -419,7 +478,9 @@ def _build_system_prompt() -> str:
             "}",
             "",
             "Include one extraction object for EVERY message in the batch, including the ones you judge not to "
-            "be requirements (those simply have is_requirement false, empty lists, and a skip_reason).",
+            "be requirements (those simply have is_requirement false, empty lists, and a skip_reason). "
+            "\"is_property_listing\" is present on EVERY extraction — false on all of them except the messages "
+            "that are offers rather than demands (PART 1), and never true at the same time as \"is_requirement\".",
         ]
     )
 
@@ -515,8 +576,11 @@ def _merge_with_message_data(
     extractions: List[GLMRequirementExtraction],
     batch: List[WhatsAppChatMessage],
     unanswered: Optional[List[str]] = None,
-) -> List[StructuredRequirement]:
-    """`unanswered`, when given, collects the id of every message in the
+) -> Tuple[List[StructuredRequirement], List[WhatsAppChatMessage]]:
+    """Returns (requirements, messages the model identified as OFFERS rather
+    than demands — see structure_batch_with_routing).
+
+    `unanswered`, when given, collects the id of every message in the
     batch the model returned NOTHING for. Those used to be logged as
     "dropped from this batch" and that was the end of them; the caller now
     hands them back for a retry of their own (see structure_batch's
@@ -524,6 +588,7 @@ def _merge_with_message_data(
     messages_by_id = {message.message_id: message for message in batch}
     seen_ids = set()
     requirements: List[StructuredRequirement] = []
+    property_messages: List[WhatsAppChatMessage] = []
 
     for extraction in extractions:
         resolved_id = _resolve_message_id(extraction.source_message_id, messages_by_id)
@@ -537,6 +602,25 @@ def _merge_with_message_data(
         seen_ids.add(resolved_id)
 
         if not extraction.is_requirement or not extraction.requirements:
+            # An OFFER, not a demand — re-routed to the property pipeline
+            # instead of being dropped here. Only reachable for a message that
+            # produced no requirement at all (if the model contradicts itself
+            # by flagging a listing AND returning requirements, the
+            # requirements win and nothing is re-routed), and never for a
+            # message the property stage already sent here: that one was
+            # judged a demand once, and sending it back would let it bounce
+            # between the two pipelines forever.
+            if extraction.is_property_listing and not message.reclassified_as_requirement:
+                step_logger.success(
+                    f"-> Re-routed to the property pipeline (this is a LISTING, not a demand): "
+                    f"{extraction.skip_reason or 'no reason given'} — {message.text[:80]!r}"
+                )
+                # A copy, so the flag never mutates the message object the
+                # intake layer or the pending-batch record is still holding.
+                # It travels with the message so the property prompt knows
+                # this one was already read and judged by this stage.
+                property_messages.append(message.model_copy(update={"reclassified_as_property": True}))
+                continue
             step_logger.info(
                 f"Skipped (not a requirement): {extraction.skip_reason or 'no reason given'} — {message.text[:80]!r}"
             )
@@ -582,7 +666,7 @@ def _merge_with_message_data(
         if unanswered is not None:
             unanswered.append(message.message_id)
 
-    return requirements
+    return requirements, property_messages
 
 
 def _to_structured_requirement(

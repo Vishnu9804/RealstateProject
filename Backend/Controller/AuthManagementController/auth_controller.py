@@ -94,6 +94,20 @@ def get_me(current_user: UserSummary = Depends(get_current_user)) -> UserSummary
     return user_store.to_summary(user_store.get_by_id(current_user.user_id), with_password_hint=True)
 
 
+@router.post("/refresh", response_model=LoginResult)
+def refresh_session(current_user: UserSummary = Depends(get_current_user)) -> LoginResult:
+    """Swaps a still-valid token for a fresh one, so a user who keeps working
+    is never signed out when their token's lifetime runs out. Only a token
+    that passes get_current_user can be swapped — an expired one, or one
+    invalidated by a password change or "end other sessions", gets the usual
+    401 — and the new token carries the same session fingerprint, so ending
+    sessions still ends this one too."""
+    user = user_store.get_by_id(current_user.user_id)
+    if user is None:
+        raise HTTPException(status_code=401, detail="Your session has expired or is no longer valid. Please sign in again.")
+    return _session(user)
+
+
 @router.patch("/me/password", response_model=LoginResult)
 def change_own_password(
     body: ChangeOwnPasswordRequest, current_user: UserSummary = Depends(require_owner_verification)

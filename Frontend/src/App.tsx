@@ -13,6 +13,7 @@ import LoginPage from "./pages/LoginPage";
 import SelectPropertyPage from "./pages/SelectPropertyPage";
 import SettingsPage from "./pages/SettingsPage";
 import UserManagementPage from "./pages/UserManagementPage";
+import VisitsPage from "./pages/VisitsPage";
 import { AuthProvider } from "./state/AuthProvider";
 import { OwnerVerificationProvider } from "./state/OwnerVerificationProvider";
 import { ThemeProvider } from "./components/ui/Theme";
@@ -67,6 +68,7 @@ export default function App() {
                     />
                     <Route path="select-property" element={<SelectPropertyPage />} />
                     <Route path="agents" element={<AgentsPage />} />
+                    <Route path="visits" element={<VisitsPage />} />
                     <Route path="team" element={<UserManagementPage />} />
                     <Route path="settings" element={<SettingsPage />} />
                   </Route>

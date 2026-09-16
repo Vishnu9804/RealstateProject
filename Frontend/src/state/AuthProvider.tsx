@@ -1,4 +1,4 @@
-import { createContext, useCallback, useContext, useEffect, useMemo, useState } from "react";
+import { createContext, useCallback, useContext, useEffect, useMemo, useRef, useState } from "react";
 import { authApi } from "../api/authApi";
 import { ApiError, AUTH_TOKEN_STORAGE_KEY, clearStoredAuthToken, getStoredAuthToken, setStoredAuthToken } from "../api/client";
 import type { LoginResult, UserSummary } from "../api/types";
@@ -6,11 +6,18 @@ import { useToast } from "../components/ui/Toast";
 
 /**
  * Session + role for the whole app. Hiding admin-only buttons is cosmetic;
- * the backend enforces every rule. Admin sessions end after 30 minutes with
- * no interaction, so an owner's unattended browser can't be used by staff.
+ * the backend enforces every rule.
+ *
+ * How long a sign-in lasts, for every account: until Sign out is pressed,
+ * for as long as the user keeps working, and 12 hours after their last
+ * interaction once they stop. A token itself lives a day (JWT_EXPIRY_HOURS);
+ * while the user is active it is swapped for a fresh one every 30 minutes,
+ * so an active user's token never runs out. Activity is shared by every tab
+ * (localStorage), so working in one tab keeps them all signed in.
  */
 
-const ADMIN_IDLE_LIMIT_MS = 30 * 60 * 1000;
+const IDLE_LIMIT_MS = 12 * 60 * 60 * 1000;
+const REFRESH_AFTER_MS = 30 * 60 * 1000;
 const ACTIVITY_STORAGE_KEY = "authLastActivity";
 const ACTIVITY_EVENTS = ["pointerdown", "keydown", "wheel", "touchstart"] as const;
 
@@ -50,6 +57,16 @@ function writeActivity(at: number): void {
     localStorage.setItem(ACTIVITY_STORAGE_KEY, String(at));
   } catch {
     // Storage unavailable: idle tracking just won't survive a reload.
+  }
+}
+
+/** When the server issued this token (its `iat` claim), or null if it can't be read. */
+function tokenIssuedAt(token: string): number | null {
+  try {
+    const payload = JSON.parse(atob(token.split(".")[1].replace(/-/g, "+").replace(/_/g, "/")));
+    return typeof payload.iat === "number" ? payload.iat * 1000 : null;
+  } catch {
+    return null;
   }
 }
 
@@ -125,21 +142,49 @@ export function AuthProvider({ children }: { children: React.ReactNode }) {
   }, [restore]);
 
   const isAdmin = user?.role === "admin";
+  const signedIn = user !== null;
+  // Last refresh attempt in this tab. Throttles refreshes by the local clock
+  // too, so a device clock that disagrees with the server's can never turn
+  // "token older than 30 minutes" into a refresh on every interaction.
+  const lastRefreshAttemptRef = useRef(0);
 
   useEffect(() => {
-    if (!isAdmin) return;
+    if (!signedIn) return;
     let lastWrite = 0;
+    const maybeRefresh = () => {
+      const token = getStoredAuthToken();
+      const now = Date.now();
+      if (!token || now - lastRefreshAttemptRef.current < REFRESH_AFTER_MS) return;
+      const issuedAt = tokenIssuedAt(token);
+      // A negative age means this device's clock runs behind the server's —
+      // the age can't be trusted, so the local throttle above decides alone.
+      const age = issuedAt === null ? null : now - issuedAt;
+      if (age !== null && age >= 0 && age < REFRESH_AFTER_MS) return;
+      lastRefreshAttemptRef.current = now;
+      authApi
+        .refresh()
+        .then((result) => {
+          // Only if nothing replaced this session meanwhile (sign-out,
+          // sign-in as someone else, a password change).
+          if (getStoredAuthToken() === token) replaceSession(result);
+        })
+        // A 401 already ends the session app-wide (api/client.ts); anything
+        // else (offline, server restarting) just waits for the next try —
+        // the current token is still valid for hours.
+        .catch(() => {});
+    };
     const markActive = () => {
       const now = Date.now();
       if (now - lastWrite > 15_000) {
         lastWrite = now;
         writeActivity(now);
+        maybeRefresh();
       }
     };
     const check = () => {
       const last = readActivity();
-      if (last && Date.now() - last > ADMIN_IDLE_LIMIT_MS) {
-        logout("You were signed out after 30 minutes without activity.");
+      if (last && Date.now() - last > IDLE_LIMIT_MS) {
+        logout("You were signed out after 12 hours without activity.");
       }
     };
     if (readActivity()) check();
@@ -155,7 +200,7 @@ export function AuthProvider({ children }: { children: React.ReactNode }) {
       document.removeEventListener("visibilitychange", onVisible);
       window.clearInterval(id);
     };
-  }, [isAdmin, logout]);
+  }, [signedIn, logout, replaceSession]);
 
   const value = useMemo(
     () => ({

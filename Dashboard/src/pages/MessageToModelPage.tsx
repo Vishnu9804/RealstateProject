@@ -130,7 +130,12 @@ function OutcomeBadge({ entry }: { entry: MessageModelEntry }) {
       );
     }
     case "rerouted":
-      return <Badge tone="warn">Re-routed to requirements</Badge>;
+      // Each LLM stage hands a message it reads as the OTHER kind to the
+      // other stage — a demand from the property LLM, a listing from the
+      // requirement LLM — so the destination is always the other site.
+      return (
+        <Badge tone="warn">{entry.site === "property" ? "Re-routed to requirements" : "Re-routed to properties"}</Badge>
+      );
     case "skipped":
       return <Badge tone="neutral">{entry.site === "property" ? "Not a listing" : "Not a requirement"}</Badge>;
     default:

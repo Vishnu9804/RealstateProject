@@ -80,14 +80,14 @@ def send_locked_notice(phone: str, record: Optional[ClientRecord]) -> bool:
     can't be changed online right now. Sent whether the refusal came from
     the web form or from a WhatsApp reply, so the two routes give the same
     answer."""
-    from Service.WhatsAppInquiryHandlingService import outbound_messenger
+    from Service.WhatsAppInquiryHandlingService import inquiry_connection_store, outbound_messenger
 
     name = (record.name or "").strip() if record is not None else ""
     text = _LOCKED_TEXT_TEMPLATE.format(
         name_part=f" {name}" if name else "",
         summary=summarize_requirements(record),
     )
-    sent = outbound_messenger.send_text(phone, text)
+    sent = outbound_messenger.send_text(phone, text, connection_id=inquiry_connection_store.get(phone))
     if sent:
         step_logger.success(f"[Inquiry] {phone}: update refused (site visit assigned) — explanation sent on WhatsApp.")
     else:

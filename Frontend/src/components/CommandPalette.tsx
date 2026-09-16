@@ -4,6 +4,7 @@ import { useTheme } from "./ui/Theme";
 import {
   IconArrowRight,
   IconBuilding,
+  IconCalendar,
   IconGrid,
   IconInbox,
   IconLink,
@@ -102,6 +103,14 @@ export default function CommandPalette({
         group: "Navigate",
         icon: <IconBuilding size={16} />,
         run: () => navigate("/builder-projects"),
+      },
+      {
+        id: "nav-visits",
+        label: "Go to Visits",
+        hint: "Every assigned and completed site visit",
+        group: "Navigate",
+        icon: <IconCalendar size={16} />,
+        run: () => navigate("/visits"),
       },
       {
         id: "nav-settings",

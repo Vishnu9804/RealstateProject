@@ -341,30 +341,35 @@ export default function RequirementMatchesDialog({
         }}
       >
         <div
-          className="detail-modal detail-modal--wide anim-rise"
+          className="detail-modal detail-modal--wide matches-dialog anim-rise"
           role="dialog"
           aria-modal="true"
           aria-label="Properties matched for this requirement"
         >
+          {/* Compact header (see .matches-dialog in app.css): the badges sit on
+              the title's own line instead of a row of their own, so the cards
+              below get that height back. Same layout as ClientMatchesDialog. */}
           <div className="detail-modal__head">
-            <div style={{ minWidth: 0 }}>
+            <div style={{ minWidth: 0, flex: 1 }}>
               <div className="detail-modal__eyebrow">Matched properties</div>
-              <h2 className="detail-modal__title cell-truncate">
-                {requirement.contact_name || requirement.sender_saved_name || requirement.sender_name}
-              </h2>
+              <div className="matches-dialog__title-row">
+                <h2 className="detail-modal__title cell-truncate">
+                  {requirement.contact_name || requirement.sender_saved_name || requirement.sender_name}
+                </h2>
+                <div className="detail-modal__badges">
+                  <Badge tone="accent">
+                    {total} propert{total === 1 ? "y" : "ies"}
+                  </Badge>
+                  {result?.computed_at && (
+                    <span className="fact">
+                      <IconClock size={12} /> Scored {relativeTime(new Date(result.computed_at))}
+                    </span>
+                  )}
+                </div>
+              </div>
               <div className="detail-modal__sub cell-truncate">
                 {requirement.sender_phone}
                 {result?.requirement_summary ? ` · ${result.requirement_summary}` : ""}
-              </div>
-              <div className="detail-modal__badges">
-                <Badge tone="accent">
-                  {total} propert{total === 1 ? "y" : "ies"}
-                </Badge>
-                {result?.computed_at && (
-                  <span className="fact">
-                    <IconClock size={12} /> Scored {relativeTime(new Date(result.computed_at))}
-                  </span>
-                )}
               </div>
             </div>
             <div className="row-flex" style={{ gap: 8, flex: "none" }}>

@@ -133,7 +133,13 @@ class Settings(BaseSettings):
     # server restarts, and a secret that's auto-generated once and silently
     # persisted somewhere is worse than just asking for one explicitly.
     jwt_secret_key: str = ""
-    jwt_expiry_hours: int = Field(default=12, gt=0)
+    # Lifetime of ONE token, not of a session: the Frontend swaps its token
+    # for a fresh one (POST /api/auth/refresh) while the user is active, so an
+    # active user is never signed out, and signs an idle user out itself after
+    # 12 hours without activity (Frontend/src/state/AuthProvider.tsx). A day
+    # gives that idle limit comfortable headroom, and bounds how long a token
+    # nobody is refreshing any more can still be used.
+    jwt_expiry_hours: int = Field(default=24, gt=0)
     # First admin account, created once at startup if the `users` table (or
     # its in-memory fallback) has no admin row yet — see
     # Service/AuthManagementService/user_store.py's ensure_admin_seeded. Left

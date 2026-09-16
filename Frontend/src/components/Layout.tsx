@@ -7,7 +7,7 @@ import { ThemeToggle } from "./ui/Theme";
 import { Tip } from "./ui/Primitives";
 import {
   IconBuilding,
-  IconCommand,
+  IconCalendar,
   IconGrid,
   IconInbox,
   IconLink,
@@ -18,8 +18,7 @@ import {
   IconZap,
 } from "./ui/Icons";
 import { useAppStatus } from "../state/StatusProvider";
-import { describeWhatsAppStatus, statusTone } from "../lib/whatsappStatus";
-import { useOnline, useScrolled } from "../hooks/useUi";
+import { useScrolled } from "../hooks/useUi";
 
 const NAV = [
   { to: "/", end: true, label: "Connection", icon: IconLink },
@@ -35,15 +34,21 @@ const NAV = [
   { to: "/landing-page", end: false, label: "Landing Page", icon: IconWindow },
   { to: "/inquiries", end: false, label: "Inquiries", icon: IconUsers },
   { to: "/agents", end: false, label: "Agents", icon: IconUserCheck },
+  // Every site visit across every agent in one table — right after Agents,
+  // since it is the same field work read visit-by-visit instead of
+  // agent-by-agent (see VisitsPage.tsx).
+  { to: "/visits", end: false, label: "Visits", icon: IconCalendar },
   { to: "/settings", end: false, label: "Settings", icon: IconSliders },
 ];
 
 export default function Layout() {
   const location = useLocation();
   const scrolled = useScrolled(6);
-  const online = useOnline();
+  // The palette itself stays on Ctrl/Cmd+K — only its header button was
+  // removed, along with the brand and the connection-status pill, to give
+  // the nav the whole bar.
   const { open, setOpen } = useCommandPalette();
-  const { status, error, failures } = useAppStatus();
+  const { status } = useAppStatus();
 
   const navRef = useRef<HTMLElement>(null);
   const [thumb, setThumb] = useState<{ left: number; width: number } | null>(null);
@@ -65,19 +70,7 @@ export default function Layout() {
     return () => observer.disconnect();
   }, [location.pathname]);
 
-  const display = status ? describeWhatsAppStatus(status.status) : null;
-  // One dropped poll is normal; several in a row is a real outage worth
-  // shouting about. Anything less would cry wolf on every hiccup.
-  const backendDown = failures >= 2 && error !== null;
-
   const needsReview = status?.needs_review_property_count ?? 0;
-
-  const pillTone = !online ? "bad" : backendDown ? "bad" : display ? statusTone(display.tone) : "neutral";
-  const pillText = !online
-    ? "You are offline"
-    : backendDown
-      ? "Backend unreachable"
-      : (display?.label ?? "Connecting…");
 
   const paletteExtras = useMemo(
     () =>
@@ -103,16 +96,6 @@ export default function Layout() {
       <div className="shell">
         <header className={`topbar${scrolled ? " topbar--stuck" : ""}`}>
           <div className="topbar__inner">
-            <NavLink to="/" className="brand" aria-label="Home">
-              <span className="brand__mark">
-                <IconZap size={19} />
-              </span>
-              <span className="brand__text">
-                <span className="brand__name">Estate Signal</span>
-                <span className="brand__sub">WhatsApp intake</span>
-              </span>
-            </NavLink>
-
             <nav className="dock" ref={navRef} aria-label="Primary">
               {thumb && (
                 <span
@@ -140,17 +123,6 @@ export default function Layout() {
             <span className="topbar__spacer" />
 
             <div className="topbar__tools">
-              <span className={`pulse pulse--${pillTone}`} title={pillText} role="status">
-                <span className="pulse__orb" />
-                <span className="pulse__text">{pillText}</span>
-              </span>
-
-              <button type="button" className="cmdk-trigger" onClick={() => setOpen(true)} aria-label="Open command palette">
-                <IconCommand size={14} />
-                <span>Search</span>
-                <kbd>⌘K</kbd>
-              </button>
-
               <Tip label="Toggle theme">
                 <ThemeToggle />
               </Tip>

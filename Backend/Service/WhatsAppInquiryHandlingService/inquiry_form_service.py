@@ -29,7 +29,13 @@ from Model.WhatsAppInquiryHandlingModel.form_submission import (
     FormSubmissionResult,
 )
 from Service.InstagramInquiryHandlingService import instagram_contact_store, instagram_message_templates, instagram_messenger
-from Service.WhatsAppInquiryHandlingService import assignment_lock_service, client_store, otp_service, outbound_messenger
+from Service.WhatsAppInquiryHandlingService import (
+    assignment_lock_service,
+    client_store,
+    inquiry_connection_store,
+    otp_service,
+    outbound_messenger,
+)
 from Service.WhatsAppInquiryHandlingService.phone_utils import normalize_phone
 
 _CONFIRMATION_TEXT = "We have received your requirements. Our agent will contact you soon."
@@ -400,7 +406,9 @@ def _submit_whatsapp(phone: str, submission: FormSubmissionRequest) -> FormSubmi
     is_final = submission_number >= MAX_REQUIREMENT_SUBMISSIONS
     text = _FINAL_UPDATE_TEXT if is_final else _CONFIRMATION_TEXT
     _send_in_background(
-        lambda: _log_confirmation(phone, outbound_messenger.send_text(phone, text)),
+        lambda: _log_confirmation(
+            phone, outbound_messenger.send_text(phone, text, connection_id=inquiry_connection_store.get(phone))
+        ),
         f"confirmation message to {phone}",
     )
     step_logger.success(
@@ -490,7 +498,12 @@ def _submit_instagram(ig_user_id: str, submission: FormSubmissionRequest) -> For
 
         text = _FINAL_UPDATE_TEXT if is_final else _CONFIRMATION_TEXT
         _send_in_background(
-            lambda: _log_confirmation(normalized_phone, outbound_messenger.send_text(normalized_phone, text)),
+            lambda: _log_confirmation(
+                normalized_phone,
+                outbound_messenger.send_text(
+                    normalized_phone, text, connection_id=inquiry_connection_store.get(normalized_phone)
+                ),
+            ),
             f"confirmation message to {normalized_phone}",
         )
         step_logger.success(

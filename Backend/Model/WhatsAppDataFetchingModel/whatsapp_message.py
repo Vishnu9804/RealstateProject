@@ -43,3 +43,13 @@ class WhatsAppChatMessage(BaseModel):
     # Defaults False, so every message that arrives the normal way (via the
     # keyword filter in whatsapp_service.py) is completely unaffected.
     reclassified_as_requirement: bool = False
+
+    # The mirror image of the flag above: set only on a message the
+    # REQUIREMENT structuring stage read and concluded was an OFFER (a
+    # listing) rather than a demand (see requirement_structurer's PART 1
+    # is_property_listing), on its way over to the property pipeline. It
+    # tells the property prompt the message was already judged a listing,
+    # and it is what stops the property stage from bouncing it straight back
+    # as a demand — each message crosses between the two pipelines at most
+    # once, in either direction, so it can never ping-pong forever.
+    reclassified_as_property: bool = False

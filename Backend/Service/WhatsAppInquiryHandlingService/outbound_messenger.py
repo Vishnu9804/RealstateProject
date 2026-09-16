@@ -21,8 +21,9 @@ def send_text(phone: str, text: str, connection_id: Optional[str] = None) -> boo
     linked number — the one an inbound message arrived on, so the reply
     lands in the same chat thread instead of arriving from a different
     number. Optional and defaulting to None, which is the long-standing
-    behaviour (any listening connection, inquiry role preferred) and what
-    every automatic welcome/confirmation message still uses. A
+    behaviour (any listening connection, inquiry role preferred) — used
+    when there is no inbound to reply from (a website/Instagram-only lead,
+    or a number that isn't a client at all). A
     connection_id that is no longer linked or is currently offline falls
     back to that same behaviour rather than failing the send."""
     client = whatsapp_connection_manager.get_sender_client(

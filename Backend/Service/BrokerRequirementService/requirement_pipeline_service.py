@@ -30,6 +30,11 @@ The stages it deliberately does NOT have:
   - NO review queue. A requirement is stored, shown, editable and
     deletable. That is its entire lifecycle.
 
+A message the LLM reads as a LISTING rather than a demand (the keyword filter
+matched it on wording alone) is not dropped: it is handed to the property
+buffer (see _forward_to_property_pipeline), exactly as the property pipeline
+hands demands over to this one.
+
 What it DOES share with the property pipeline, exactly: the batching
 contract. A batch arrives here when 10 qualifying messages have accumulated
 OR the batch window has elapsed since the first message of the batch,
@@ -114,7 +119,9 @@ def handle_batch_ready(batch: List[WhatsAppChatMessage]) -> None:
         # requirements. The first must be retried; the second is a finished,
         # correct batch.
         outcome: Dict[str, Any] = {}
-        requirements = requirement_structurer.structure_batch(batch, outcome=outcome)
+        requirements, property_messages = requirement_structurer.structure_batch_with_routing(
+            batch, outcome=outcome
+        )
 
         if outcome.get("llm_failed"):
             step_logger.error(
@@ -129,6 +136,14 @@ def handle_batch_ready(batch: List[WhatsAppChatMessage]) -> None:
 
         requirement_store.add_requirements(requirements)
         stored = len(requirements)
+
+        # After the requirements are safely stored, not before: if storing
+        # raised, this whole batch is retried (LLM call included), and
+        # forwarding first would hand the same listing to the property
+        # pipeline twice. These messages produced no requirement at all (see
+        # requirement_structurer.structure_batch_with_routing), so nothing
+        # here depends on them.
+        _forward_to_property_pipeline(property_messages)
 
         step_logger.success(
             f"Requirement batch processed: {stored} requirement{'' if stored == 1 else 's'} stored "
@@ -184,6 +199,43 @@ def _hold_unanswered_messages(batch: List[WhatsAppChatMessage], outcome: Dict[st
         messages,
         f"GLM returned no verdict at all for {len(messages)} of the {len(batch)} message(s) in this batch",
     )
+
+
+def _forward_to_property_pipeline(messages: List[WhatsAppChatMessage]) -> None:
+    """Hands the messages the LLM identified as LISTINGS (PART 1's
+    is_property_listing) over to the property pipeline — the mirror image of
+    property_pipeline_service._forward_to_requirement_pipeline.
+
+    They go into the property BUFFER rather than straight into a property
+    LLM call, so they ride along with whatever that buffer is already
+    collecting and share a batch with it — one re-routed message must not
+    buy its own API call.
+
+    The import is local because whatsapp_service imports THIS module at
+    module level. Swallowed broadly: this is the tail end of a batch whose
+    requirements are already stored, and a re-route failure must never turn
+    that into a failed batch."""
+    if not messages:
+        return
+    try:
+        from Service.WhatsAppDataFetchingService import whatsapp_service
+
+        whatsapp_service.enqueue_property_messages(messages)
+    except Exception as exc:  # noqa: BLE001
+        step_logger.error(
+            f"Could not re-route {len(messages)} listing message(s) to the property pipeline "
+            f"(the requirements in this batch are unaffected): {exc!r}"
+        )
+        # These are real listings this stage has already decided are NOT
+        # requirements, so nothing else will ever look at them again —
+        # logging and moving on would end them here. Held for the property
+        # pipeline to pick up instead, like any other batch it could not
+        # process.
+        pending_batch_store.enqueue(
+            pending_batch_store.PROPERTY_PIPELINE,
+            messages,
+            f"could not be re-routed from the requirement stage: {exc!r}",
+        )
 
 
 def _store_matches_for_new_requirements(requirements: List[StructuredRequirement]) -> None:

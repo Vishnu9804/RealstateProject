@@ -38,7 +38,7 @@ from typing import Dict, List, NamedTuple, Optional
 
 from Middleware import step_logger
 from Service.WhatsAppDataFetchingService import whatsapp_connection_manager
-from Service.WhatsAppInquiryHandlingService import known_client_cache, outbound_messenger
+from Service.WhatsAppInquiryHandlingService import inquiry_connection_store, known_client_cache, outbound_messenger
 from Service.WhatsAppInquiryHandlingService.phone_utils import normalize_phone
 
 _OTP_TTL_SECONDS = 5 * 60
@@ -357,7 +357,9 @@ def _generate_code() -> str:
 
 
 def _send_code(phone: str, code: str) -> None:
-    if outbound_messenger.send_text(phone, _OTP_TEXT_TEMPLATE.format(code=code)):
+    if outbound_messenger.send_text(
+        phone, _OTP_TEXT_TEMPLATE.format(code=code), connection_id=inquiry_connection_store.get(phone)
+    ):
         step_logger.success(f"[OTP] {phone}: verification code sent.")
     else:
         # Not fatal: the stored code is still valid, and the dialog's own

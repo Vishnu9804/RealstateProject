@@ -43,6 +43,13 @@ still holds exactly — a message is a requirement or a listing, never both —
 it is just decided by meaning rather than by wording when the wording alone
 was not enough.
 
+The same second chance exists in the other direction: a LISTING that trips
+rule 1's wording is recognised by the requirement structuring stage
+(requirement_structurer's PART 1 is_property_listing) and handed back via
+`enqueue_property_messages` into the property buffer rule 2 feeds. A message
+crosses between the pipelines at most once — the flag it carries across
+stops the receiving stage from sending it back.
+
 The two buffers are separate instances of the same MessageBufferService with
 the same settings, so each pipeline gets its own independent counter and its
 own independent window timer: 10 messages OR `batch_window_minutes`,
@@ -234,6 +241,29 @@ def enqueue_requirement_messages(messages: List[WhatsAppChatMessage]) -> None:
         return
     for message in messages:
         _requirement_buffer.add_message(message)
+
+
+def enqueue_property_messages(messages: List[WhatsAppChatMessage]) -> None:
+    """The mirror image of enqueue_requirement_messages: a second, later
+    entrance to the PROPERTY buffer, for messages the REQUIREMENT structuring
+    stage read and found to be LISTINGS rather than demands (see
+    requirement_pipeline_service._forward_to_property_pipeline).
+
+    Rule 1 in the module docstring matches a demand by its wording, so a
+    listing that happens to carry one of its trigger words lands in the
+    requirement pipeline. This is where the LLM's own reading of that message
+    sends it back to the right place — same buffer, batch size and window as
+    rule 2, so it costs no extra API call of its own.
+
+    The direct call when no buffer exists is for the same script/test case
+    as enqueue_requirement_messages."""
+    if not messages:
+        return
+    if _message_buffer is None:
+        property_pipeline_service.handle_batch_ready(list(messages))
+        return
+    for message in messages:
+        _message_buffer.add_message(message)
 
 
 def _handle_requirement_candidate(message: WhatsAppChatMessage, requirement_signal: str) -> None:

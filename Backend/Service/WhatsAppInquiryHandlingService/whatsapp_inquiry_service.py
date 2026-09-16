@@ -22,6 +22,7 @@ from Config.settings import get_settings
 from Database.client_session import is_client_database_configured
 from Middleware import daily_quota, step_logger
 from Model.WhatsAppInquiryHandlingModel.inquiry_message import InquiryChatMessage
+from Service.BackendUsageService import cpu_usage_service
 from Service.LandingPageService import lead_store
 from Service.WhatsAppDataFetchingService import whatsapp_connection_manager
 from Service.WhatsAppInquiryHandlingService import (
@@ -137,6 +138,7 @@ def _quota_limits() -> daily_quota.Limits:
     )
 
 
+@cpu_usage_service.tracked("WhatsApp inquiry message — quota check & buffer", "WhatsApp inquiries")
 def handle_incoming_message(message: InquiryChatMessage) -> None:
     """Called by whatsapp_connection_manager for every message an
     inquiry-role connection claims (see its dispatch rule). Deliberately no

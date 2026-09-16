@@ -178,3 +178,38 @@ export function IconUsers(props: IconProps) {
     </svg>
   );
 }
+
+export function IconChevronDown(props: IconProps) {
+  return (
+    <svg {...base(props)}>
+      <polyline points="6 9 12 15 18 9" />
+    </svg>
+  );
+}
+
+export function IconActivity(props: IconProps) {
+  return (
+    <svg {...base(props)}>
+      <polyline points="22 12 18 12 15 21 9 3 6 12 2 12" />
+    </svg>
+  );
+}
+
+export function IconMemory(props: IconProps) {
+  return (
+    <svg {...base(props)}>
+      <rect x="2.5" y="6" width="19" height="11" rx="2" />
+      <path d="M6.5 10h2.5v3H6.5zM10.75 10h2.5v3h-2.5zM15 10h2.5v3H15z" />
+      <path d="M6 17v3M10 17v3M14 17v3M18 17v3" />
+    </svg>
+  );
+}
+
+export function IconMessage(props: IconProps) {
+  return (
+    <svg {...base(props)}>
+      <path d="M21 15a2 2 0 0 1-2 2H7l-4 4V5a2 2 0 0 1 2-2h14a2 2 0 0 1 2 2z" />
+      <path d="M8 8.5h8M8 12h5" />
+    </svg>
+  );
+}

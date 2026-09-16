@@ -53,6 +53,7 @@ from Model.BrokerRequirementModel.broker_requirement import (
     StructuredRequirement,
 )
 from Model.WhatsAppDataFetchingModel.whatsapp_message import WhatsAppChatMessage
+from Service.BackendUsageService import cpu_usage_service
 from Service.BrokerRequirementService import requirement_store
 from Service.WhatsAppDataFetchingService import (
     display_settings_service,
@@ -70,6 +71,7 @@ _in_flight_lock = threading.Lock()
 _in_flight_fingerprints: Set[str] = set()
 
 
+@cpu_usage_service.tracked("Requirement batch — LLM structuring, save & matching", "WhatsApp → Requirements")
 def handle_batch_ready(batch: List[WhatsAppChatMessage]) -> None:
     """Called by the requirement buffering stage whenever a batch is flushed
     (10 messages gathered, or the batch window elapsed). Already runs on its

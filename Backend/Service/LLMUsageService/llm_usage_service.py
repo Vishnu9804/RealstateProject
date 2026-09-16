@@ -28,6 +28,13 @@ guarantees the dashboard's top-of-tab totals can never drift out of sync
 with the per-model rows shown underneath: there is only one number being
 computed, not two kept in step by hand.
 
+HOUR BY HOUR: every call is also filed into an IST-hour bucket (per site and
+model), kept for 48 hours in a second small file, llm_usage_hourly.json. The
+dashboard pulls those buckets as a cursor-based delta (see
+Service/BackendUsageService/usage_feed.py) and shows one card per hour. The
+all-time counters above are untouched by this and keep counting exactly as
+before.
+
 WHAT COUNTS AS "ONE CALL": one successful completion — a request that
 actually returned usable content. A request that failed and was retried
 (see each call site's own retry policy) is not counted at all, since there
@@ -51,10 +58,12 @@ from __future__ import annotations
 import json
 import os
 import threading
+import time
 from pathlib import Path
-from typing import Any, Dict
+from typing import Any, Dict, Optional
 
 from Middleware import step_logger
+from Service.BackendUsageService import usage_feed
 
 # Backend/Service/LLMUsageService/this_file.py
 #   parents[0] = .../Service/LLMUsageService
@@ -65,6 +74,7 @@ _BACKEND_DIR = Path(__file__).resolve().parents[2]
 _PROJECT_ROOT = _BACKEND_DIR.parent
 _USAGE_DIR = _PROJECT_ROOT / "LLMUsage"
 _USAGE_PATH = _USAGE_DIR / "llm_usage_stats.json"
+_HOURLY_PATH = _USAGE_DIR / "llm_usage_hourly.json"
 
 # The only three tabs the dashboard shows. A call site passing anything
 # else is a bug on that call site's part (see observe_call), not something
@@ -76,6 +86,13 @@ _lock = threading.RLock()
 # site -> model -> {"calls": int, "input_tokens": int, "output_tokens": int}
 _usage: Dict[str, Dict[str, Dict[str, int]]] = {site: {} for site in SITES}
 _loaded = False
+
+# "<ist hour>|<site>|<model>" -> {"hour", "site", "model", "calls",
+# "input_tokens", "output_tokens", "v"} — the last 48 hours only.
+_hourly: Dict[str, Dict[str, Any]] = {}
+_hourly_epoch = usage_feed.new_epoch()
+_hourly_version = 0
+_hourly_loaded = False
 
 
 def _atomic_write(path: Path, text: str) -> None:
@@ -97,6 +114,63 @@ def _persist() -> None:
         # In-memory counters are still correct and still measured; only the
         # save failed. Never worth costing the pipeline call that triggered it.
         step_logger.error(f"Could not write the LLM usage stats file ({_USAGE_PATH}): {exc!r}")
+
+
+def _persist_hourly() -> None:
+    try:
+        rows = [{key: value for key, value in row.items() if key != "v"} for row in _hourly.values()]
+        _atomic_write(
+            _HOURLY_PATH,
+            json.dumps({"epoch": _hourly_epoch, "rows": rows}, ensure_ascii=False, separators=(",", ":")),
+        )
+    except Exception as exc:  # noqa: BLE001
+        step_logger.error(f"Could not write the hourly LLM usage file ({_HOURLY_PATH}): {exc!r}")
+
+
+def _hourly_bucket_locked(hour: int, site: str, model: str) -> Dict[str, Any]:
+    key = f"{hour}|{site}|{model}"
+    bucket = _hourly.get(key)
+    if bucket is None:
+        bucket = {"hour": hour, "site": site, "model": model, "calls": 0, "input_tokens": 0, "output_tokens": 0, "v": 0}
+        _hourly[key] = bucket
+    return bucket
+
+
+def _load_hourly_locked() -> None:
+    """Once per process: the last run's hourly buckets, same epoch, so the
+    dashboard keeps adding to the same hours after a restart."""
+    global _hourly_epoch, _hourly_version, _hourly_loaded
+    if _hourly_loaded:
+        return
+    _hourly_loaded = True
+    if not _HOURLY_PATH.exists():
+        return
+    try:
+        raw = json.loads(_HOURLY_PATH.read_text(encoding="utf-8"))
+    except Exception as exc:  # noqa: BLE001
+        step_logger.error(f"The hourly LLM usage file ({_HOURLY_PATH}) could not be read: {exc!r}. Starting empty.")
+        return
+    if not isinstance(raw, dict):
+        return
+    epoch = raw.get("epoch")
+    if isinstance(epoch, str) and epoch:
+        _hourly_epoch = epoch
+    floor = usage_feed.retention_floor(time.time())
+    _hourly_version += 1
+    for row in raw.get("rows") or []:
+        try:
+            hour = int(row["hour"])
+            site = str(row["site"])
+            model = str(row["model"])
+        except (KeyError, TypeError, ValueError):
+            continue
+        if hour < floor:
+            continue
+        bucket = _hourly_bucket_locked(hour, site, model)
+        bucket["calls"] += max(0, int(row.get("calls") or 0))
+        bucket["input_tokens"] += max(0, int(row.get("input_tokens") or 0))
+        bucket["output_tokens"] += max(0, int(row.get("output_tokens") or 0))
+        bucket["v"] = _hourly_version
 
 
 def load_from_disk() -> None:
@@ -132,9 +206,28 @@ def load_from_disk() -> None:
                             "input_tokens": max(0, int(counters.get("input_tokens", 0) or 0)),
                             "output_tokens": max(0, int(counters.get("output_tokens", 0) or 0)),
                         }
+        try:
+            _load_hourly_locked()
+        except Exception as exc:  # noqa: BLE001
+            step_logger.error(f"Could not load the hourly LLM usage (the all-time counters are unaffected): {exc!r}")
         _loaded = True
         total_calls = sum(counters["calls"] for models in _usage.values() for counters in models.values())
         step_logger.info(f"LLM usage stats loaded: {total_calls} call(s) recorded so far ({_USAGE_PATH}).")
+
+
+def _observe_hourly_locked(site: str, model: str, input_tokens: int, output_tokens: int) -> None:
+    global _hourly_version
+    now = time.time()
+    floor = usage_feed.retention_floor(now)
+    for key in [key for key, row in _hourly.items() if row["hour"] < floor]:
+        del _hourly[key]
+    bucket = _hourly_bucket_locked(usage_feed.ist_hour_start(now), site, model)
+    bucket["calls"] += 1
+    bucket["input_tokens"] += input_tokens
+    bucket["output_tokens"] += output_tokens
+    _hourly_version += 1
+    bucket["v"] = _hourly_version
+    _persist_hourly()
 
 
 def observe_call(site: str, model: str, input_tokens: int, output_tokens: int) -> None:
@@ -163,6 +256,12 @@ def observe_call(site: str, model: str, input_tokens: int, output_tokens: int) -
             counters["output_tokens"] += output_tokens
             call_number = counters["calls"]
             _persist()
+            # After the all-time counters are safely updated and saved: the
+            # hourly view is additive and must never cost them anything.
+            try:
+                _observe_hourly_locked(site, model, input_tokens, output_tokens)
+            except Exception as exc:  # noqa: BLE001
+                step_logger.error(f"Could not record hourly LLM usage ({site}/{model}): {exc!r}")
 
         step_logger.info(
             f"LLM usage: {site}/{model} call #{call_number} (+{input_tokens} in / +{output_tokens} out tokens)."
@@ -210,3 +309,28 @@ def get_overview() -> Dict[str, Any]:
                 "models": model_rows,
             }
         return {"sites": sites}
+
+
+def get_hourly_changes(cursor: Optional[str]) -> Dict[str, Any]:
+    """The hourly buckets changed after `cursor` (all of them for a new or
+    other-process cursor), last 48 hours. Memory only."""
+    since = usage_feed.parse_cursor(cursor)
+    with _lock:
+        if not _loaded:
+            load_from_disk()
+        floor = usage_feed.retention_floor(time.time())
+        items = [
+            {
+                "k": f"{_hourly_epoch}|{row['hour']}|{row['site']}|{row['model']}",
+                "hour": row["hour"],
+                "site": row["site"],
+                "model": row["model"],
+                "calls": row["calls"],
+                "input_tokens": row["input_tokens"],
+                "output_tokens": row["output_tokens"],
+            }
+            for row in _hourly.values()
+            if row["v"] > since and row["hour"] >= floor
+        ]
+        position = _hourly_version
+    return {"cursor": usage_feed.make_cursor(position), "items": items}

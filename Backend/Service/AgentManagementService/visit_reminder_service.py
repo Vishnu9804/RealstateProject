@@ -47,6 +47,7 @@ from typing import Dict, List, Optional, Sequence
 from Middleware import step_logger
 from Model.AgentManagementModel.assignment_record import ActiveAssignment
 from Model.AgentManagementModel.visit_record import VisitRecord
+from Service.BackendUsageService import cpu_usage_service
 from Service.AgentManagementService import agent_store
 from Service.WhatsAppInquiryHandlingService import client_store, inquiry_connection_store, outbound_messenger
 
@@ -113,6 +114,7 @@ def _sleep_seconds(next_due: Optional[datetime]) -> float:
     return max(_MIN_SLEEP_SECONDS, min(remaining, _MAX_SLEEP_SECONDS))
 
 
+@cpu_usage_service.tracked("Site-visit reminders pass", "Agents")
 def _run_once(now: datetime) -> Optional[datetime]:
     """Sends whatever is due and returns when the next thing will be."""
     upcoming = _send_due_reminders(now) + _send_due_followups(now)

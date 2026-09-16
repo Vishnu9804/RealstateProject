@@ -64,6 +64,7 @@ from pathlib import Path
 from typing import Any, Deque, Dict, List, Optional, Tuple
 
 from Middleware import step_logger
+from Service.BackendUsageService import usage_feed
 
 # Backend/Service/NeonUsageService/this_file.py -> parents[2] = Backend/
 _BACKEND_DIR = Path(__file__).resolve().parents[2]
@@ -82,9 +83,12 @@ AUTOSUSPEND_SECONDS = 300.0
 # autosuspend delay, by definition.
 _WINDOW_GAP_SECONDS = AUTOSUSPEND_SECONDS
 
-# How much history is kept. One window is one wake-up, so this is hundreds
-# of wake-ups — far more than the tab shows, and still a small file.
-_WINDOW_LIMIT = 300
+# How much history is kept: the last 48 hours — the Dashboard's window, see
+# usage_feed.RETENTION_SECONDS — with a count cap as a backstop. A new
+# window only starts after a gap longer than the autosuspend delay, so 48
+# hours can hold at most 576 of them: 600 never cuts into the 48 hours.
+_WINDOW_LIMIT = 600
+_RETENTION_SECONDS = usage_feed.RETENTION_SECONDS
 _OPS_PER_WINDOW_LIMIT = 60
 
 # Bounded work per query when measuring a result's real byte size: a huge
@@ -108,6 +112,11 @@ _dirty = False
 _loaded = False
 _attached = False
 _warned_once = False
+# Bumped on every change to any window, and stamped on that window as "v" —
+# what lets get_changes() hand the dashboard only the windows that moved.
+# Starts at 1: a window without a stamp counts as 1, so it goes out in a full
+# sync but never again to a cursor this process has already issued.
+_version = 1
 
 
 # ------------------------------------------------------------------ utilities
@@ -265,7 +274,7 @@ def _result_size(cursor: Any) -> Tuple[int, int]:
 
 def record_query(label: str, area: str, trigger: str, trigger_kind: str, ms: float, size: int, rows: int) -> None:
     """Files one executed statement into its activity window. Never raises."""
-    global _dirty, _last_persist_at
+    global _dirty, _last_persist_at, _version
     try:
         now = time.time()
         with _lock:
@@ -273,6 +282,10 @@ def record_query(label: str, area: str, trigger: str, trigger_kind: str, ms: flo
                 load_from_disk()
             window = _windows[-1] if _windows else None
             if window is None or now - window["last_at"] > _WINDOW_GAP_SECONDS:
+                # A new wake-up is the moment to let go of any older than the
+                # 48 hours the Dashboard shows.
+                while _windows and now - _windows[0]["last_at"] > _RETENTION_SECONDS:
+                    _windows.popleft()
                 window = {
                     "started_at": now,
                     "last_at": now,
@@ -285,6 +298,8 @@ def record_query(label: str, area: str, trigger: str, trigger_kind: str, ms: flo
                 _windows.append(window)
             window["last_at"] = now
             _add(window, 1, ms, size, rows)
+            _version += 1
+            window["v"] = _version
 
             ops = window["ops"]
             counters = ops.get(label)
@@ -351,17 +366,24 @@ def flush() -> None:
 def load_from_disk() -> None:
     """Called once at startup (Backend/main.py). Never raises — an unreadable
     file starts this process empty and is left untouched on disk."""
-    global _loaded
+    global _loaded, _version
     with _lock:
         if _USAGE_PATH.exists():
             try:
                 raw = json.loads(_USAGE_PATH.read_text(encoding="utf-8"))
+                floor = time.time() - _RETENTION_SECONDS
                 for window in (raw or {}).get("windows", []):
                     if not isinstance(window, dict) or "started_at" not in window:
                         continue
+                    window.setdefault("last_at", window["started_at"])
+                    if float(window["last_at"]) < floor:
+                        continue  # older than the 48 hours the Dashboard shows
                     window.setdefault("other_ops", _blank_counters())
                     window.setdefault("ops", {})
+                    # New to every cursor this process hands out (get_changes).
+                    window["v"] = 1
                     _windows.append(window)
+                _version = max(_version, 1)
             except Exception as exc:  # noqa: BLE001
                 step_logger.error(
                     f"The Neon usage file ({_USAGE_PATH}) could not be read: {exc!r}. Starting empty; "
@@ -472,110 +494,14 @@ def get_overview() -> Dict[str, Any]:
     transfer_rows: List[Dict[str, Any]] = []
 
     for window in reversed(windows):
-        active = max(0.0, window["last_at"] - window["started_at"])
-        billed = active + AUTOSUSPEND_SECONDS
-        cu_hours = billed * COMPUTE_UNITS / 3600.0
-        queries = int(window.get("queries", 0))
-        window_bytes = int(window.get("bytes", 0))
-        still_open = (now - window["last_at"]) <= AUTOSUSPEND_SECONDS
-        ops = window.get("ops", {})
-        overflow = window.get("other_ops", _blank_counters())
-
         if len(compute_rows) < _MAX_ROWS:
-            kept, folded, folded_labels = _fold(ops, "ms", window.get("ms", 0.0), overflow, _KEEP_MIN_MILLISECONDS)
-            operations = [
-                {
-                    "label": label,
-                    "area": counters.get("area", "Database"),
-                    "queries": counters["queries"],
-                    "seconds": round(counters["ms"] / 1000.0, 3),
-                    "bytes": counters["bytes"],
-                    "summary": (
-                        f"{label} — {counters['queries']} {_plural(counters['queries'], 'query', 'queries')}, "
-                        f"{_fmt_seconds(counters['ms'] / 1000.0)} of database time"
-                    ),
-                }
-                for label, counters in kept
-            ]
-            if folded["queries"]:
-                operations.append(
-                    {
-                        "label": f"{folded_labels} smaller {_plural(folded_labels, 'operation', 'operations')}",
-                        "area": "Everything else",
-                        "queries": folded["queries"],
-                        "seconds": round(folded["ms"] / 1000.0, 3),
-                        "bytes": folded["bytes"],
-                        "summary": (
-                            f"{folded_labels} smaller {_plural(folded_labels, 'operation', 'operations')} — "
-                            f"{folded['queries']} {_plural(folded['queries'], 'query', 'queries')}, "
-                            f"{_fmt_seconds(folded['ms'] / 1000.0)} of database time combined"
-                        ),
-                    }
-                )
-            compute_rows.append(
-                {
-                    "at": _iso(window["started_at"]),
-                    "ended_at": _iso(window["last_at"]),
-                    "still_awake": still_open,
-                    "trigger": window.get("trigger", "Startup / maintenance"),
-                    "trigger_kind": window.get("trigger_kind", "Startup"),
-                    "queries": queries,
-                    "active_seconds": round(active, 3),
-                    "idle_tail_seconds": AUTOSUSPEND_SECONDS,
-                    "billed_seconds": round(billed, 3),
-                    "cu_hours": round(cu_hours, 5),
-                    "share_percent": _share(cu_hours, total_cu),
-                    "summary": (
-                        f"Woke the database — {queries} {_plural(queries, 'query', 'queries')} over "
-                        f"{_fmt_seconds(active)}, then it must stay awake {_fmt_seconds(AUTOSUSPEND_SECONDS)} "
-                        f"more before it can sleep. That is {_fmt_seconds(billed)} of compute billed "
-                        f"= {cu_hours:.4f} CU-hours."
-                    ),
-                    "operations": operations,
-                }
-            )
-
-        if window_bytes > 0 and len(transfer_rows) < _MAX_ROWS:
-            kept, folded, folded_labels = _fold(ops, "bytes", window_bytes, overflow, _KEEP_MIN_BYTES)
-            for label, counters in kept:
-                transfer_rows.append(
-                    {
-                        "at": _iso(window["last_at"]),
-                        "trigger": window.get("trigger", "Startup / maintenance"),
-                        "trigger_kind": window.get("trigger_kind", "Startup"),
-                        "label": label,
-                        "area": counters.get("area", "Database"),
-                        "queries": counters["queries"],
-                        "bytes": counters["bytes"],
-                        "rows": counters["rows"],
-                        "share_percent": _share(counters["bytes"], total_bytes),
-                        "summary": (
-                            f"{label} — {_fmt_bytes(counters['bytes'])} downloaded over "
-                            f"{counters['queries']} {_plural(counters['queries'], 'query', 'queries')} "
-                            f"({counters['rows']} {_plural(counters['rows'], 'row', 'rows')})"
-                        ),
-                    }
-                )
-            if folded["bytes"] > 0:
-                transfer_rows.append(
-                    {
-                        "at": _iso(window["last_at"]),
-                        "trigger": window.get("trigger", "Startup / maintenance"),
-                        "trigger_kind": window.get("trigger_kind", "Startup"),
-                        "label": f"{folded_labels} smaller {_plural(folded_labels, 'operation', 'operations')}",
-                        "area": "Everything else",
-                        "queries": folded["queries"],
-                        "bytes": folded["bytes"],
-                        "rows": folded["rows"],
-                        "share_percent": _share(folded["bytes"], total_bytes),
-                        "summary": (
-                            f"{folded_labels} smaller {_plural(folded_labels, 'operation', 'operations')} — "
-                            f"{_fmt_bytes(folded['bytes'])} combined over {folded['queries']} "
-                            f"{_plural(folded['queries'], 'query', 'queries')}. Individually tiny, which is "
-                            "exactly how transfer creeps up unnoticed."
-                        ),
-                    }
-                )
+            row = _compute_row(window, now)
+            row["share_percent"] = _share(_window_cu_hours(window), total_cu)
+            compute_rows.append(row)
+        if int(window.get("bytes", 0)) > 0 and len(transfer_rows) < _MAX_ROWS:
+            for row in _transfer_rows(window):
+                row["share_percent"] = _share(row["bytes"], total_bytes)
+                transfer_rows.append(row)
 
     return {
         "assumptions": {
@@ -594,3 +520,150 @@ def get_overview() -> Dict[str, Any]:
         "compute": compute_rows,
         "transfer": transfer_rows,
     }
+
+
+def get_changes(cursor: Optional[str]) -> Dict[str, Any]:
+    """The Dashboard's hourly Neon view: every wake-up of the last 48 hours
+    that changed after `cursor` (all of them for a new or other-process
+    cursor), each rendered into its CU-hours row and Network Transfer rows
+    WITHOUT share percentages — the page works those out against the 48
+    hours it shows. Memory only, like get_overview."""
+    since = usage_feed.parse_cursor(cursor)
+    now = time.time()
+    with _lock:
+        position = _version
+        changed = [
+            {
+                **window,
+                "ops": {label: dict(counters) for label, counters in window.get("ops", {}).items()},
+                "other_ops": dict(window.get("other_ops") or _blank_counters()),
+            }
+            for window in _windows
+            if window.get("v", 1) > since and now - window["last_at"] <= _RETENTION_SECONDS
+        ]
+    return {
+        "cursor": usage_feed.make_cursor(position),
+        "items": [
+            {
+                "k": f"{window['started_at']:.6f}",
+                "compute": _compute_row(window, now),
+                "transfer": _transfer_rows(window) if int(window.get("bytes", 0)) > 0 else [],
+            }
+            for window in changed
+        ],
+        "assumptions": {
+            "compute_units": COMPUTE_UNITS,
+            "autosuspend_seconds": AUTOSUSPEND_SECONDS,
+            "tracking_since": None,
+        },
+    }
+
+
+def _window_cu_hours(window: Dict[str, Any]) -> float:
+    active = max(0.0, window["last_at"] - window["started_at"])
+    return (active + AUTOSUSPEND_SECONDS) * COMPUTE_UNITS / 3600.0
+
+
+def _compute_row(window: Dict[str, Any], now: float) -> Dict[str, Any]:
+    """One wake-up's CU-hours row, without share_percent."""
+    active = max(0.0, window["last_at"] - window["started_at"])
+    billed = active + AUTOSUSPEND_SECONDS
+    cu_hours = billed * COMPUTE_UNITS / 3600.0
+    queries = int(window.get("queries", 0))
+    still_open = (now - window["last_at"]) <= AUTOSUSPEND_SECONDS
+    ops = window.get("ops", {})
+    overflow = window.get("other_ops", _blank_counters())
+    kept, folded, folded_labels = _fold(ops, "ms", window.get("ms", 0.0), overflow, _KEEP_MIN_MILLISECONDS)
+    operations = [
+        {
+            "label": label,
+            "area": counters.get("area", "Database"),
+            "queries": counters["queries"],
+            "seconds": round(counters["ms"] / 1000.0, 3),
+            "bytes": counters["bytes"],
+            "summary": (
+                f"{label} — {counters['queries']} {_plural(counters['queries'], 'query', 'queries')}, "
+                f"{_fmt_seconds(counters['ms'] / 1000.0)} of database time"
+            ),
+        }
+        for label, counters in kept
+    ]
+    if folded["queries"]:
+        operations.append(
+            {
+                "label": f"{folded_labels} smaller {_plural(folded_labels, 'operation', 'operations')}",
+                "area": "Everything else",
+                "queries": folded["queries"],
+                "seconds": round(folded["ms"] / 1000.0, 3),
+                "bytes": folded["bytes"],
+                "summary": (
+                    f"{folded_labels} smaller {_plural(folded_labels, 'operation', 'operations')} — "
+                    f"{folded['queries']} {_plural(folded['queries'], 'query', 'queries')}, "
+                    f"{_fmt_seconds(folded['ms'] / 1000.0)} of database time combined"
+                ),
+            }
+        )
+    return {
+        "at": _iso(window["started_at"]),
+        "ended_at": _iso(window["last_at"]),
+        "still_awake": still_open,
+        "trigger": window.get("trigger", "Startup / maintenance"),
+        "trigger_kind": window.get("trigger_kind", "Startup"),
+        "queries": queries,
+        "active_seconds": round(active, 3),
+        "idle_tail_seconds": AUTOSUSPEND_SECONDS,
+        "billed_seconds": round(billed, 3),
+        "cu_hours": round(cu_hours, 5),
+        "summary": (
+            f"Woke the database — {queries} {_plural(queries, 'query', 'queries')} over "
+            f"{_fmt_seconds(active)}, then it must stay awake {_fmt_seconds(AUTOSUSPEND_SECONDS)} "
+            f"more before it can sleep. That is {_fmt_seconds(billed)} of compute billed "
+            f"= {cu_hours:.4f} CU-hours."
+        ),
+        "operations": operations,
+    }
+
+
+def _transfer_rows(window: Dict[str, Any]) -> List[Dict[str, Any]]:
+    """One wake-up's Network Transfer rows, without share_percent."""
+    ops = window.get("ops", {})
+    overflow = window.get("other_ops", _blank_counters())
+    kept, folded, folded_labels = _fold(ops, "bytes", int(window.get("bytes", 0)), overflow, _KEEP_MIN_BYTES)
+    rows: List[Dict[str, Any]] = [
+        {
+            "at": _iso(window["last_at"]),
+            "trigger": window.get("trigger", "Startup / maintenance"),
+            "trigger_kind": window.get("trigger_kind", "Startup"),
+            "label": label,
+            "area": counters.get("area", "Database"),
+            "queries": counters["queries"],
+            "bytes": counters["bytes"],
+            "rows": counters["rows"],
+            "summary": (
+                f"{label} — {_fmt_bytes(counters['bytes'])} downloaded over "
+                f"{counters['queries']} {_plural(counters['queries'], 'query', 'queries')} "
+                f"({counters['rows']} {_plural(counters['rows'], 'row', 'rows')})"
+            ),
+        }
+        for label, counters in kept
+    ]
+    if folded["bytes"] > 0:
+        rows.append(
+            {
+                "at": _iso(window["last_at"]),
+                "trigger": window.get("trigger", "Startup / maintenance"),
+                "trigger_kind": window.get("trigger_kind", "Startup"),
+                "label": f"{folded_labels} smaller {_plural(folded_labels, 'operation', 'operations')}",
+                "area": "Everything else",
+                "queries": folded["queries"],
+                "bytes": folded["bytes"],
+                "rows": folded["rows"],
+                "summary": (
+                    f"{folded_labels} smaller {_plural(folded_labels, 'operation', 'operations')} — "
+                    f"{_fmt_bytes(folded['bytes'])} combined over {folded['queries']} "
+                    f"{_plural(folded['queries'], 'query', 'queries')}. Individually tiny, which is "
+                    "exactly how transfer creeps up unnoticed."
+                ),
+            }
+        )
+    return rows

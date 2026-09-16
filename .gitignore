@@ -33,4 +33,5 @@ Thumbs.db
 # Runtime-generated usage stats (rewritten on every backend run)
 NeonUsage/
 LLMUsage/
+BackendUsage/
 KnowledgeBase/area_knowledge_stats.json

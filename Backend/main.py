@@ -95,10 +95,13 @@ from Controller.WhatsAppInquiryHandlingController.whatsapp_inquiry_controller im
 from Controller.InstagramInquiryHandlingController.instagram_controller import router as instagram_router
 from Controller.LLMUsageController.llm_usage_controller import router as llm_usage_router
 from Controller.NeonUsageController.neon_usage_controller import router as neon_usage_router
+from Controller.BackendUsageController.backend_usage_controller import router as backend_usage_router
 from Controller.LandingPageController.landing_page_controller import router as landing_page_router
 from Controller.PropertySharingController.property_share_controller import router as property_share_router
 from Config.settings import get_settings
 from Database.session import init_db, is_database_configured
+from Middleware.cpu_meter import CpuMeterMiddleware, install_threadpool_meter
+from Middleware.dashboard_access import require_dashboard_key
 from Middleware.logging_config import configure_logging
 from Middleware.public_rate_limit import PublicRateLimitMiddleware
 from Middleware import step_logger
@@ -110,7 +113,8 @@ from Service.ClientPropertyMatchingService import scheduled_recompute_service
 from Service.WhatsAppDataFetchingService import area_filter_service, area_knowledge_service, display_settings_service, whatsapp_service
 from Service.WhatsAppInquiryHandlingService import inquiry_connection_store, whatsapp_inquiry_service
 from Service.InstagramInquiryHandlingService import instagram_connection_service, instagram_polling_service
-from Service.LLMUsageService import llm_usage_service
+from Service.BackendUsageService import cpu_usage_service
+from Service.LLMUsageService import llm_usage_service, message_model_service
 from Service.NeonUsageService import neon_usage_service
 
 configure_logging()
@@ -179,6 +183,18 @@ async def lifespan(_app: FastAPI):
     except Exception as exc:  # noqa: BLE001
         step_logger.error(f"Could not load the Neon usage history (the app is unaffected): {exc!r}")
 
+    # The Backend tab's vCPU history and the Message to Model log — plain
+    # files at the project root like the Neon history above, loaded before
+    # anything can record into them, and never fatal.
+    try:
+        await asyncio.to_thread(cpu_usage_service.load_from_disk)
+    except Exception as exc:  # noqa: BLE001
+        step_logger.error(f"Could not load the vCPU usage history (the app is unaffected): {exc!r}")
+    try:
+        await asyncio.to_thread(message_model_service.load_from_disk)
+    except Exception as exc:  # noqa: BLE001
+        step_logger.error(f"Could not load the message-to-model log (the app is unaffected): {exc!r}")
+
     heartbeat = asyncio.create_task(_startup_heartbeat())
     try:
         await _init_database()
@@ -213,6 +229,10 @@ async def lifespan(_app: FastAPI):
     except Exception as exc:  # noqa: BLE001
         step_logger.error(f"Could not load the LLM usage stats (the pipeline is unaffected): {exc!r}")
 
+    # Everything this process has used so far is start-up — recorded once for
+    # the Backend tab, before any request or background job can run.
+    cpu_usage_service.record_startup()
+
     step_logger.step("FastAPI server is up. Launching WhatsApp connections in the background...")
     # whatsapp_service owns wiring the property-message handler AND starting
     # whatsapp_connection_manager, which owns every linked WhatsApp number
@@ -243,6 +263,13 @@ async def lifespan(_app: FastAPI):
     # poll the database — see visit_reminder_service's own docstring.
     visit_reminder_service.start_in_background()
     yield
+    # Save what the throttled usage writers are still holding, so a clean
+    # restart loses none of the Backend / Neon DB tabs' last few minutes.
+    for flush_usage in (cpu_usage_service.flush, neon_usage_service.flush):
+        try:
+            flush_usage()
+        except Exception as exc:  # noqa: BLE001
+            step_logger.error(f"Could not save usage stats on shutdown: {exc!r}")
     # The WhatsApp/Instagram clients above run on daemon threads blocked
     # inside native (cgo) calls into the whatsmeow/neonize Go library —
     # normally daemon threads die the instant the process exits, but a
@@ -333,6 +360,14 @@ app.add_middleware(
 # pure upside for every route, not just the landing page's.
 app.add_middleware(GZipMiddleware, minimum_size=1024)
 
+# Measures the CPU each request uses, for the Dashboard's Backend tab (see
+# Middleware/cpu_meter.py). Added LAST, which in Starlette makes it the
+# OUTERMOST middleware, so the time GZip, CORS and the rate limit spend on a
+# request is counted as that request's too. It only reads clocks — it never
+# changes a request or a response.
+app.add_middleware(CpuMeterMiddleware)
+install_threadpool_meter()
+
 # AuthManagement's own routers are the two exceptions to the blanket login
 # requirement just below: /api/auth (login must be reachable while logged
 # out; /api/auth/me and /api/auth/me/password check the token themselves,
@@ -369,8 +404,12 @@ app.include_router(phone_verification_router, prefix="/api")
 app.include_router(matching_router, prefix="/api", dependencies=[Depends(get_current_user)])
 app.include_router(requirement_matching_router, prefix="/api", dependencies=[Depends(get_current_user)])
 app.include_router(instagram_router, prefix="/api", dependencies=[Depends(get_current_user)])
-app.include_router(llm_usage_router, prefix="/api")
-app.include_router(neon_usage_router, prefix="/api")
+# The Dashboard's usage endpoints: open by default, gated by DASHBOARD_KEY
+# once one is set (see Middleware/dashboard_access.py) — the Message to Model
+# feed carries raw WhatsApp text, so set it before hosting.
+app.include_router(llm_usage_router, prefix="/api", dependencies=[Depends(require_dashboard_key)])
+app.include_router(neon_usage_router, prefix="/api", dependencies=[Depends(require_dashboard_key)])
+app.include_router(backend_usage_router, prefix="/api", dependencies=[Depends(require_dashboard_key)])
 app.include_router(landing_page_router, prefix="/api")
 app.include_router(agent_router, prefix="/api", dependencies=[Depends(get_current_user)])
 

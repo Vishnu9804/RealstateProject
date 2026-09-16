@@ -1,8 +1,9 @@
-import { useCallback, useState } from "react";
+import { useCallback, useEffect, useMemo, useState } from "react";
 import { llmUsageApi } from "../api/llmUsageApi";
-import type { LLMUsageMetrics, LLMUsageOverview, LLMUsageSite } from "../api/types";
-import { friendlyError } from "../lib/apiError";
-import { usePolling } from "../hooks/usePolling";
+import type { FeedResponse, LLMHourlyItem, LLMUsageMetrics, LLMUsageOverview } from "../api/types";
+import { useFeed } from "../hooks/useFeed";
+import { formatInt } from "../lib/formatters";
+import { groupByHour, HourlyCards } from "../components/HourlyCards";
 import { Badge, Button, EmptyState, Panel, SkeletonRows } from "../components/Primitives";
 import { IconCpu, IconGrid, IconInbox, IconInfo, IconRefresh, IconUsers } from "../components/Icons";
 
@@ -16,8 +17,8 @@ interface SiteTab {
 /** Fixed to the three call sites that exist today (see
  *  Backend/Service/LLMUsageService/llm_usage_service.py's own docstring).
  *  Purely a label/icon/blurb lookup — every NUMBER on this page still comes
- *  straight from the API's `sites` map, so a site that starts pointing at a
- *  different model tomorrow needs no change here at all. */
+ *  straight from the API, so a site that starts pointing at a different model
+ *  tomorrow needs no change here at all. */
 const SITE_TABS: SiteTab[] = [
   {
     id: "property",
@@ -50,7 +51,6 @@ const METRIC_LABELS: { key: keyof LLMUsageMetrics; label: string; group: "totals
 ];
 
 function formatMetric(key: keyof LLMUsageMetrics, value: number): string {
-  if (key === "calls") return value.toLocaleString("en-IN");
   if (key.startsWith("avg_")) return value.toLocaleString("en-IN", { maximumFractionDigits: 1 });
   return value.toLocaleString("en-IN");
 }
@@ -68,27 +68,91 @@ function MetricsGrid({ metrics }: { metrics: LLMUsageMetrics }) {
   );
 }
 
+/** Totals over a set of hourly rows — the same arithmetic as the backend's
+ *  own per-site totals, so an hour, a model and the 48-hour panel always add
+ *  up exactly. */
+function metricsOf(rows: LLMHourlyItem[]): LLMUsageMetrics {
+  let calls = 0;
+  let input = 0;
+  let output = 0;
+  for (const row of rows) {
+    calls += row.calls;
+    input += row.input_tokens;
+    output += row.output_tokens;
+  }
+  const total = input + output;
+  const average = (value: number) => (calls ? Math.round((value / calls) * 10) / 10 : 0);
+  return {
+    calls,
+    input_tokens: input,
+    output_tokens: output,
+    total_tokens: total,
+    avg_input_tokens_per_call: average(input),
+    avg_output_tokens_per_call: average(output),
+    avg_total_tokens_per_call: average(total),
+  };
+}
+
+function modelsOf(rows: LLMHourlyItem[]): { model: string; metrics: LLMUsageMetrics }[] {
+  const byModel = new Map<string, LLMHourlyItem[]>();
+  for (const row of rows) {
+    const list = byModel.get(row.model);
+    if (list) list.push(row);
+    else byModel.set(row.model, [row]);
+  }
+  return Array.from(byModel, ([model, list]) => ({ model, metrics: metricsOf(list) })).sort(
+    (a, b) => b.metrics.calls - a.metrics.calls || a.model.localeCompare(b.model),
+  );
+}
+
 export default function LLMCostPage() {
-  const [data, setData] = useState<LLMUsageOverview | null>(null);
-  const [error, setError] = useState<string | null>(null);
   const [activeSite, setActiveSite] = useState(SITE_TABS[0].id);
 
-  const load = useCallback(async () => {
+  const feed = useFeed<LLMHourlyItem, FeedResponse<LLMHourlyItem>>({
+    storageKey: "llm-hourly-v1",
+    fetchPage: llmUsageApi.getHourly,
+    keyOf: (item) => item.k,
+    timeOf: (item) => item.hour,
+    // LLM calls happen at batch/debounce cadence, and a poll with nothing new
+    // is a few dozen bytes — slow and cheap is plenty.
+    intervalMs: 20_000,
+  });
+
+  const allHours = useMemo(() => groupByHour(feed.items, (item) => item.hour), [feed.items]);
+  const callsBySite = useMemo(() => {
+    const counts: Record<string, number> = {};
+    for (const group of allHours) {
+      for (const item of group.items) counts[item.site] = (counts[item.site] ?? 0) + item.calls;
+    }
+    return counts;
+  }, [allHours]);
+  const siteGroups = useMemo(
+    () =>
+      allHours
+        .map((group) => ({ start: group.start, items: group.items.filter((item) => item.site === activeSite) }))
+        .filter((group) => group.items.length > 0),
+    [allHours, activeSite],
+  );
+  const siteTotals = useMemo(() => metricsOf(siteGroups.flatMap((group) => group.items)), [siteGroups]);
+
+  // The all-time counters (one small response) are re-read only when the
+  // 48-hour call count actually moves — i.e. when a new call happened.
+  const [overview, setOverview] = useState<LLMUsageOverview | null>(null);
+  const loadOverview = useCallback(async () => {
     try {
-      setData(await llmUsageApi.getOverview());
-      setError(null);
-    } catch (err) {
-      setError(friendlyError(err));
+      setOverview(await llmUsageApi.getOverview());
+    } catch {
+      // The hourly view does not depend on it.
     }
   }, []);
-
-  // LLM calls happen at message-batch/debounce cadence (minutes for
-  // property/requirement, seconds for intent bursts) — a slow poll is
-  // plenty and keeps a tab left open all day off the backend's back.
-  usePolling(load, 15_000);
+  const callsIn48h = Object.values(callsBySite).reduce((sum, value) => sum + value, 0);
+  useEffect(() => {
+    void loadOverview();
+  }, [loadOverview, callsIn48h]);
 
   const currentTab = SITE_TABS.find((tab) => tab.id === activeSite) ?? SITE_TABS[0];
-  const site: LLMUsageSite | undefined = data?.sites[activeSite];
+  const allTime = overview?.sites[activeSite]?.totals;
+  const showData = feed.ready || feed.items.length > 0;
 
   return (
     <div className="stack stack-6">
@@ -97,37 +161,43 @@ export default function LLMCostPage() {
           <div className="section-head__eyebrow">Cost &amp; usage</div>
           <h1 className="page-title">LLM Cost</h1>
           <p className="section-head__sub">
-            Every LLM call this app makes, broken down by which pipeline stage made it and which model actually
-            answered — so switching models later shows up here automatically instead of needing a code change.
+            Every LLM call this app makes, by pipeline stage and by the model that actually answered — hour by hour
+            (IST) for the last 48 hours. Click an hour to see exactly which models it used and what they cost.
           </p>
         </div>
-        {data && (
+        {showData && (
           <div className="row-flex">
-            <Badge tone="info" live title="Updated automatically every 15 seconds">
+            <Badge tone="info" live title="Updated automatically every 20 seconds">
               Live
             </Badge>
-            <Button size="sm" icon={<IconRefresh size={15} />} onClick={() => void load()}>
+            <Button
+              size="sm"
+              icon={<IconRefresh size={15} />}
+              onClick={() => {
+                feed.refresh();
+                void loadOverview();
+              }}
+            >
               Refresh
             </Button>
           </div>
         )}
       </header>
 
-      {error && (
+      {feed.error && (
         <Panel>
-          <p style={{ color: "var(--bad)", margin: 0 }}>{error}</p>
+          <p style={{ color: "var(--bad)", margin: 0 }}>{feed.error}</p>
         </Panel>
       )}
 
-      {!data && !error && <SkeletonRows rows={4} />}
+      {!showData && !feed.error && <SkeletonRows rows={4} />}
 
-      {data && (
+      {showData && (
         <>
           <nav className="capsule-tabs" aria-label="LLM call site">
             {SITE_TABS.map((tab) => {
               const Icon = tab.icon;
               const active = tab.id === activeSite;
-              const calls = data.sites[tab.id]?.totals.calls ?? 0;
               return (
                 <button
                   key={tab.id}
@@ -135,10 +205,11 @@ export default function LLMCostPage() {
                   className={`capsule-tab${active ? " capsule-tab--active" : ""}`}
                   aria-current={active ? "page" : undefined}
                   onClick={() => setActiveSite(tab.id)}
+                  title="Calls in the last 48 hours"
                 >
                   <Icon size={15} />
                   <span>{tab.label}</span>
-                  <span className="capsule-tab__count">{calls.toLocaleString("en-IN")}</span>
+                  <span className="capsule-tab__count">{formatInt(callsBySite[tab.id] ?? 0)}</span>
                 </button>
               );
             })}
@@ -147,60 +218,69 @@ export default function LLMCostPage() {
           <Panel className="stack stack-4">
             <div>
               <div className="section-head__eyebrow" style={{ marginBottom: 6 }}>
-                <IconCpu size={12} /> {currentTab.label} — overall
+                <IconCpu size={12} /> {currentTab.label} — last 48 hours
               </div>
               <h2>Every model combined</h2>
               <p className="section-head__sub" style={{ marginTop: 6 }}>
                 {currentTab.blurb}
               </p>
             </div>
-            <MetricsGrid metrics={site?.totals ?? EMPTY_METRICS} />
+            <MetricsGrid metrics={siteTotals} />
+            {allTime && (
+              <p className="muted" style={{ fontSize: 12, margin: 0 }}>
+                All time, since tracking began: <strong>{formatInt(allTime.calls)}</strong> call(s) ·{" "}
+                <strong>{formatInt(allTime.input_tokens)}</strong> input · <strong>{formatInt(allTime.output_tokens)}</strong>{" "}
+                output · <strong>{formatInt(allTime.total_tokens)}</strong> total tokens.
+              </p>
+            )}
           </Panel>
 
           <Panel className="stack stack-4">
             <div>
               <div className="section-head__eyebrow" style={{ marginBottom: 6 }}>
-                <IconInfo size={12} /> Breakdown by model
+                <IconInfo size={12} /> Hour by hour (IST)
               </div>
-              <h2>One row per model that has actually answered a {currentTab.label.replace(" LLM", "").toLowerCase()} call</h2>
+              <h2>One card per hour — click it for the models that answered</h2>
               <p className="section-head__sub" style={{ marginTop: 6 }}>
                 Whichever model <code>{activeSite === "intent" ? "GEMINI_MODEL" : "ZAI_MODEL"}</code> pointed at when
-                each call was made — every card below adds up to the overall numbers above, exactly.
+                each call was made. The model cards inside an hour add up to that hour's totals, and the hours add up to
+                the 48-hour totals above — exactly.
               </p>
             </div>
 
-            {!site || site.models.length === 0 ? (
-              <EmptyState
-                icon={<IconCpu size={34} />}
-                title="No calls recorded yet"
-                body="This fills in the moment this pipeline stage makes its first LLM call — nothing to configure here."
-              />
-            ) : (
-              <div className="stack stack-4">
-                {site.models.map((model) => (
-                  <div key={model.model} className="model-card">
+            <HourlyCards
+              groups={siteGroups}
+              stats={(group) => {
+                const metrics = metricsOf(group.items);
+                return [
+                  { label: "Calls", value: formatInt(metrics.calls) },
+                  { label: "Input tokens", value: formatInt(metrics.input_tokens) },
+                  { label: "Output tokens", value: formatInt(metrics.output_tokens) },
+                  { label: "Total tokens", value: formatInt(metrics.total_tokens), accent: true },
+                ];
+              }}
+              renderBody={(group) =>
+                modelsOf(group.items).map(({ model, metrics }) => (
+                  <div key={model} className="model-card">
                     <div className="model-card__header">
-                      <span className="model-card__badge">{model.model}</span>
-                      <span className="muted">{model.calls.toLocaleString("en-IN")} call(s)</span>
+                      <span className="model-card__badge">{model}</span>
+                      <span className="muted">{formatInt(metrics.calls)} call(s)</span>
                     </div>
-                    <MetricsGrid metrics={model} />
+                    <MetricsGrid metrics={metrics} />
                   </div>
-                ))}
-              </div>
-            )}
+                ))
+              }
+              emptyState={
+                <EmptyState
+                  icon={<IconCpu size={34} />}
+                  title="No calls in the last 48 hours"
+                  body="An hour card appears the moment this pipeline stage makes an LLM call — nothing to configure here."
+                />
+              }
+            />
           </Panel>
         </>
       )}
     </div>
   );
 }
-
-const EMPTY_METRICS: LLMUsageMetrics = {
-  calls: 0,
-  input_tokens: 0,
-  output_tokens: 0,
-  total_tokens: 0,
-  avg_input_tokens_per_call: 0,
-  avg_output_tokens_per_call: 0,
-  avg_total_tokens_per_call: 0,
-};

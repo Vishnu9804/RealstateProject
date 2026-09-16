@@ -19,5 +19,21 @@ export function formatWhen(iso: string | null): string {
 export function formatBytes(bytes: number): string {
   if (bytes < 1024) return `${bytes} B`;
   if (bytes < 1024 * 1024) return `${(bytes / 1024).toFixed(1)} KB`;
-  return `${(bytes / (1024 * 1024)).toFixed(1)} MB`;
+  if (bytes < 1024 * 1024 * 1024) return `${(bytes / (1024 * 1024)).toFixed(1)} MB`;
+  return `${(bytes / (1024 * 1024 * 1024)).toFixed(2)} GB`;
+}
+
+/** CPU time the way a person reads it: 850 µs, 3.40 ms, 250 ms, 3.40 s, 2 min 5 s. */
+export function formatCpu(seconds: number): string {
+  if (!(seconds > 0)) return "0 ms";
+  if (seconds < 0.001) return `${Math.round(seconds * 1_000_000)} µs`;
+  if (seconds < 1) return `${(seconds * 1000).toFixed(seconds < 0.01 ? 2 : 0)} ms`;
+  if (seconds < 60) return `${seconds.toFixed(2)} s`;
+  const minutes = Math.floor(seconds / 60);
+  const rest = Math.round(seconds % 60);
+  return rest ? `${minutes} min ${rest} s` : `${minutes} min`;
+}
+
+export function formatInt(value: number): string {
+  return Math.round(value).toLocaleString("en-IN");
 }

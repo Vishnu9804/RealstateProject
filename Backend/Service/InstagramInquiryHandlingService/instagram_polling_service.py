@@ -52,6 +52,7 @@ from Config.settings import get_settings
 from Middleware import daily_quota, step_logger
 from Model.InstagramInquiryHandlingModel.instagram_contact_record import InstagramContactRecord
 from Model.WhatsAppDataFetchingModel.embedded_property import EmbeddedProperty
+from Service.BackendUsageService import cpu_usage_service
 from Service.InstagramInquiryHandlingService import (
     instagram_connection_service,
     instagram_contact_store,
@@ -253,6 +254,7 @@ def _poll_loop() -> None:
             time.sleep(max(0.0, _POLL_INTERVAL_SECONDS - elapsed))
 
 
+@cpu_usage_service.tracked("Instagram polling cycle", "Instagram")
 def _poll_once(pool: ThreadPoolExecutor) -> None:
     global _was_connected_last_cycle
     connected = instagram_connection_service.get_status().get("stage") == "connected"
@@ -314,6 +316,7 @@ def _poll_once(pool: ThreadPoolExecutor) -> None:
         job.result()
 
 
+@cpu_usage_service.tracked("Instagram polling — worker tasks (fetch & handle)", "Instagram")
 def _fetch_comments(client, prop: EmbeddedProperty, media_pk: str) -> list:
     try:
         return client.media_comments(media_pk, amount=_COMMENTS_PER_POLL)
@@ -326,6 +329,7 @@ def _fetch_comments(client, prop: EmbeddedProperty, media_pk: str) -> list:
         return []
 
 
+@cpu_usage_service.tracked("Instagram polling — worker tasks (fetch & handle)", "Instagram")
 def _fetch_threads(client) -> list:
     """Three separate inboxes, all fetched every cycle — not just "pending"
     + the default (Primary) box. A share from someone the account doesn't
@@ -349,6 +353,7 @@ def _fetch_threads(client) -> list:
     return threads
 
 
+@cpu_usage_service.tracked("Instagram polling — worker tasks (fetch & handle)", "Instagram")
 def _guarded(func, description: str, *args) -> None:
     """Per-event error isolation.
 

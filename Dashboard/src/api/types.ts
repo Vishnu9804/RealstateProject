@@ -191,3 +191,148 @@ export interface NeonUsageOverview {
   compute: NeonComputeWindow[];
   transfer: NeonTransferEntry[];
 }
+
+/* -------------------------------------------------------- hourly feeds */
+
+/** Every hourly feed answers with only what changed after the cursor it was
+ *  sent (see Backend/Service/BackendUsageService/usage_feed.py). */
+export interface FeedResponse<T> {
+  cursor: string;
+  items: T[];
+}
+
+/** One IST hour × call site × model — Backend llm_usage_service. */
+export interface LLMHourlyItem {
+  k: string;
+  hour: number;
+  site: string;
+  model: string;
+  calls: number;
+  input_tokens: number;
+  output_tokens: number;
+}
+
+/** A wake-up's rows without their share of the total — the page computes
+ *  shares against the 48 hours it shows. */
+export type NeonComputeRow = Omit<NeonComputeWindow, "share_percent">;
+export type NeonTransferRow = Omit<NeonTransferEntry, "share_percent">;
+
+export interface NeonWindowItem {
+  k: string;
+  compute: NeonComputeRow;
+  transfer: NeonTransferRow[];
+}
+
+export interface NeonWindowsResponse extends FeedResponse<NeonWindowItem> {
+  assumptions: NeonAssumptions;
+}
+
+/** One IST hour × one endpoint / background job — Backend cpu_usage_service. */
+export interface CpuEntryItem {
+  k: string;
+  hour: number;
+  label: string;
+  kind: string;
+  area: string;
+  count: number;
+  /** CPU seconds. */
+  cpu: number;
+  /** Wall-clock seconds (includes waiting on the network / database). */
+  wall: number;
+  max_cpu: number;
+}
+
+/** The whole process's exact CPU and average memory for one IST hour. */
+export interface CpuProcessItem {
+  k: string;
+  hour: number;
+  label: "__process__";
+  cpu: number;
+  rss_byte_seconds: number;
+  seconds: number;
+  rss_peak: number;
+}
+
+export type CpuItem = CpuEntryItem | CpuProcessItem;
+
+export function isProcessItem(item: CpuItem): item is CpuProcessItem {
+  return item.label === "__process__";
+}
+
+export interface CpuResponse extends FeedResponse<CpuItem> {
+  python_threads: number;
+  uptime_seconds: number;
+}
+
+export interface MemoryBreakdown {
+  label: string;
+  bytes: number;
+}
+
+export interface MemoryItem {
+  id: string;
+  label: string;
+  detail: string;
+  unit: string;
+  count: number;
+  bytes: number;
+  /** False when a sample was measured and scaled up. */
+  exact: boolean;
+  loaded: boolean;
+  fallback_only: boolean;
+  breakdown: MemoryBreakdown[];
+}
+
+export interface MemoryGroup {
+  id: string;
+  label: string;
+  items: MemoryItem[];
+}
+
+export interface MemorySnapshot {
+  measured_at: string;
+  took_ms: number;
+  database_mode: boolean | null;
+  process: {
+    rss_bytes: number | null;
+    peak_rss_bytes: number | null;
+    container_bytes: number | null;
+    container_limit_bytes: number | null;
+    python_threads: number;
+    uptime_seconds: number | null;
+    platform: string;
+  };
+  billable_bytes: number | null;
+  billable_source: "container" | "process" | null;
+  measured_bytes: number;
+  unaccounted_bytes: number | null;
+  groups: MemoryGroup[];
+}
+
+export type MessageOutcome = "converted" | "skipped" | "rerouted" | "missing";
+
+/** One WhatsApp message the property or requirement LLM read, and every model
+ *  it turned that message into — Backend message_model_service. */
+export interface MessageModelEntry {
+  id: string;
+  /** Unix seconds when the LLM answered. */
+  at: number;
+  site: "property" | "requirement";
+  model: string;
+  message_id: string;
+  received_at: string | null;
+  group: string;
+  chat_type: string;
+  sender: string;
+  sender_saved: string;
+  sender_phone: string;
+  text: string;
+  text_truncated: boolean;
+  outcome: MessageOutcome;
+  note: string | null;
+  models: Record<string, unknown>[];
+  /** This message's share of its batch call(s). */
+  tokens: { input: number; output: number; total: number };
+  /** The whole batch the message was sent in. */
+  batch: { messages: number; calls: number; input: number; output: number; retry: boolean };
+}

@@ -31,6 +31,7 @@ from datetime import datetime, timedelta, timezone
 from Database import settings_repository
 from Database.session import is_database_configured
 from Middleware import step_logger
+from Service.BackendUsageService import cpu_usage_service
 from Service.BrokerRequirementService import requirement_matching_service
 from Service.ClientPropertyMatchingService import match_candidates, matching_service
 from Service.WhatsAppInquiryHandlingService import client_store
@@ -94,6 +95,7 @@ def start_builder_project_introduction_in_background() -> None:
     threading.Thread(target=_introduce_builder_projects_once, name="builder-project-matching-intro", daemon=True).start()
 
 
+@cpu_usage_service.tracked("One-time builder-project matching pass", "Matching")
 def _introduce_builder_projects_once() -> None:
     try:
         if settings_repository.get_value(_BUILDER_PROJECT_INTRODUCTION_KEY):
@@ -175,6 +177,7 @@ def _daily_loop() -> None:
                 )
 
 
+@cpu_usage_service.tracked("Daily 6 AM broker-requirement rescore", "Matching")
 def _rescore_all_broker_requirements() -> None:
     """The same catch-up for Broker Requirement Matching — each requirement
     compared only against properties added or edited since it was last
@@ -194,6 +197,7 @@ def _seconds_until_next_run() -> float:
     return (next_run - now).total_seconds()
 
 
+@cpu_usage_service.tracked("Daily 6 AM client match rescore", "Matching")
 def _recompute_all_clients() -> None:
     """One pass over the property list, shared by every client, and each
     client scored only against what is actually new to THEM.

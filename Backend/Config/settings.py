@@ -178,6 +178,13 @@ class Settings(BaseSettings):
     # not only hidden in the UI. Read once at startup — restart after changing.
     allow_area_change: bool = False
 
+    # Shared access key for the Dashboard's usage endpoints (LLM Cost, Neon
+    # DB, Backend, Message to Model) — see Middleware/dashboard_access.py.
+    # Blank (the default) leaves them open, exactly as before. Set it before
+    # hosting: the Message to Model feed carries raw WhatsApp message text.
+    # The Dashboard must be built with the same value as VITE_DASHBOARD_KEY.
+    dashboard_key: str = ""
+
     @model_validator(mode="after")
     def _fill_lan_defaults(self) -> "Settings":
         """Auto-detects this machine's LAN IP once, at startup, and uses it

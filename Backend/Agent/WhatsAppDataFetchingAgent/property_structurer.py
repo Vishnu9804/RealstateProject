@@ -32,7 +32,7 @@ import json
 import math
 import re
 import time
-from typing import List, Optional, Tuple
+from typing import Dict, List, Optional, Tuple
 
 import httpx
 from pydantic import ValidationError
@@ -53,7 +53,7 @@ from Config.settings import get_settings
 from Middleware import step_logger
 from Model.WhatsAppDataFetchingModel.structured_property import StructuredProperty
 from Model.WhatsAppDataFetchingModel.whatsapp_message import WhatsAppChatMessage
-from Service.LLMUsageService import llm_usage_service
+from Service.LLMUsageService import llm_usage_service, message_model_service
 from Service.WhatsAppDataFetchingService import area_filter_service
 
 _client: Optional[httpx.Client] = None
@@ -264,17 +264,106 @@ def structure_batch_with_routing(
     if not batch:
         return [], []
 
-    content = _post_with_retries(batch)
+    # One entry per successful LLM call below (the corrective re-ask is a
+    # second one) — read only by the Message to Model log at the end.
+    calls: List[dict] = []
+    content = _post_with_retries(batch, usage_sink=calls)
     if content is None:
         return [], []
 
     extractions = _parse_extractions(content, len(batch))
-    extractions = _recover_missed_properties(extractions, batch)
-    return _merge_with_message_data(extractions, batch)
+    extractions = _recover_missed_properties(extractions, batch, usage_sink=calls)
+    properties, requirement_messages = _merge_with_message_data(extractions, batch)
+    _log_message_models(batch, calls, extractions, properties, requirement_messages)
+    return properties, requirement_messages
+
+
+# The fields the Dashboard's Message to Model tab shows for each property:
+# what the LLM extracted, after the deterministic fixes this module applies
+# to it. The WhatsApp metadata is shown once per message there, so it is
+# left out here.
+_MESSAGE_MODEL_FIELDS = {
+    "record_id",
+    "property_type",
+    "bhk",
+    "unit_no",
+    "society_name",
+    "area_name",
+    "address",
+    "area_sqft",
+    "area_vaar",
+    "furnishing",
+    "price_text",
+    "price_amount_inr",
+    "listing_type",
+    "contact_name",
+    "contact_phone",
+    "description",
+    "review_status",
+    "review_notes",
+    "needs_review",
+}
+
+
+def _log_message_models(
+    batch: List[WhatsAppChatMessage],
+    calls: List[dict],
+    extractions: List[GLMPropertyExtraction],
+    properties: List[StructuredProperty],
+    requirement_messages: List[WhatsAppChatMessage],
+) -> None:
+    """Side-channel for the Dashboard's Message to Model tab
+    (Service/LLMUsageService/message_model_service.py): what each message in
+    this batch was turned into, and its share of the batch's tokens.
+
+    Observational only, like _record_usage: it runs once the batch's result
+    is final, changes nothing in it, and is swallowed on any failure — it can
+    never cost a real property."""
+    try:
+        messages_by_id = {message.message_id: message for message in batch}
+        rerouted = {message.message_id for message in requirement_messages}
+        models: Dict[str, List[dict]] = {}
+        for prop in properties:
+            models.setdefault(prop.source_message_id, []).append(
+                prop.model_dump(mode="json", include=_MESSAGE_MODEL_FIELDS, exclude_none=True)
+            )
+        outcomes: Dict[str, dict] = {}
+        for extraction in extractions:
+            message_id = _quiet_message_id(extraction.source_message_id, messages_by_id)
+            if message_id is None or message_id in outcomes:
+                continue
+            if models.get(message_id):
+                outcome, note = "converted", None
+            elif message_id in rerouted:
+                outcome, note = "rerouted", extraction.skip_reason or "Read as a DEMAND, not a listing."
+            else:
+                outcome, note = "skipped", extraction.skip_reason or "Judged not to be a property listing."
+            outcomes[message_id] = {
+                "outcome": outcome,
+                "note": note,
+                "output_chars": len(extraction.model_dump_json()),
+            }
+        message_model_service.observe_batch("property", get_settings().zai_model, batch, calls, outcomes, models)
+    except Exception as exc:  # noqa: BLE001
+        step_logger.warn(f"Could not log this batch for the Message to Model tab (the batch is unaffected): {exc!r}")
+
+
+def _quiet_message_id(returned_id: Optional[str], messages_by_id: dict) -> Optional[str]:
+    """_resolve_message_id's matching rule without its log line — the batch
+    already logged any mismatch once; the Message to Model log only needs
+    the answer."""
+    if not returned_id:
+        return None
+    if returned_id in messages_by_id:
+        return returned_id
+    contained = [message_id for message_id in messages_by_id if message_id and message_id in returned_id]
+    return contained[0] if len(contained) == 1 else None
 
 
 def _recover_missed_properties(
-    extractions: List[GLMPropertyExtraction], batch: List[WhatsAppChatMessage]
+    extractions: List[GLMPropertyExtraction],
+    batch: List[WhatsAppChatMessage],
+    usage_sink: Optional[List[dict]] = None,
 ) -> List[GLMPropertyExtraction]:
     """Deterministic guard over PART 2's bulk-listing extraction, in the same
     spirit as _sanitize_listing_type and _verify_total_price_against_text:
@@ -334,7 +423,7 @@ def _recover_missed_properties(
         "in_service_area handle area relevance."
     )
 
-    retry_content = _post_with_retries(retry_batch, correction="\n".join(correction_lines))
+    retry_content = _post_with_retries(retry_batch, correction="\n".join(correction_lines), usage_sink=usage_sink)
     if retry_content is None:
         step_logger.warn(
             f"Corrective re-ask failed for {len(retry_batch)} message(s) — keeping the original, "
@@ -457,23 +546,28 @@ def _stream_completion(client: httpx.Client, request_body: dict) -> Tuple[str, O
     return content, usage
 
 
-def _record_usage(usage: Optional[dict]) -> None:
+def _record_usage(usage: Optional[dict]) -> Tuple[int, int]:
     """Best-effort: feeds this call's token counts to the Dashboard's LLM
     Cost tab (Service/LLMUsageService/llm_usage_service.py). Never raises —
     a tracking failure must never cost a real property. `usage` is None
     when the API didn't send one (the call still counts, just with 0 tokens
-    attributed — see that service's own docstring on why)."""
+    attributed — see that service's own docstring on why). Returns the
+    (input, output) tokens it recorded."""
     try:
         usage = usage or {}
         input_tokens = int(usage.get("prompt_tokens") or usage.get("input_tokens") or 0)
         output_tokens = int(usage.get("completion_tokens") or usage.get("output_tokens") or 0)
         llm_usage_service.observe_call("property", get_settings().zai_model, input_tokens, output_tokens)
+        return input_tokens, output_tokens
     except Exception as exc:  # noqa: BLE001
         step_logger.warn(f"Could not record LLM usage for a property structuring call: {exc!r}")
+        return 0, 0
 
 
 def _post_with_retries(
-    batch: List[WhatsAppChatMessage], correction: Optional[str] = None
+    batch: List[WhatsAppChatMessage],
+    correction: Optional[str] = None,
+    usage_sink: Optional[List[dict]] = None,
 ) -> Optional[str]:
     """Sends the structuring request and returns the model's raw reply text,
     retrying up to _MAX_ATTEMPTS times on transient failures only: a
@@ -545,7 +639,20 @@ def _post_with_retries(
     for attempt in range(1, _MAX_ATTEMPTS + 1):
         try:
             content, usage = _stream_completion(client, request_body)
-            _record_usage(usage)
+            input_tokens, output_tokens = _record_usage(usage)
+            if usage_sink is not None:
+                # For the Dashboard's Message to Model tab: which messages this
+                # call carried and how big its prompt was, so its tokens can be
+                # split per message (see message_model_service). Read only once
+                # the batch is finished.
+                usage_sink.append(
+                    {
+                        "message_ids": [message.message_id for message in batch],
+                        "input": input_tokens,
+                        "output": output_tokens,
+                        "prompt_chars": sum(len(str(part.get("content") or "")) for part in request_body["messages"]),
+                    }
+                )
             return content
         except httpx.HTTPStatusError as exc:
             status = exc.response.status_code

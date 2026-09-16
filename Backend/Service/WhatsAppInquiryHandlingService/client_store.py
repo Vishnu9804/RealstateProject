@@ -22,6 +22,7 @@ from typing import Dict, List, Optional, Set, Tuple
 from Database import client_repository
 from Database.client_session import is_client_database_configured
 from Model.WhatsAppInquiryHandlingModel.client_record import ClientRecord
+from Service.BackendUsageService import cpu_usage_service
 
 # In-memory fallback only — untouched whenever the client database is configured.
 _clients: Dict[str, ClientRecord] = {}
@@ -179,6 +180,7 @@ def _schedule_recompute(phone: str) -> None:
     ).start()
 
 
+@cpu_usage_service.tracked("Client match recompute (after a form save)", "Matching")
 def _recompute_worker(phone: str) -> None:
     from Middleware import step_logger
 

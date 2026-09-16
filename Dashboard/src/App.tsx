@@ -1,9 +1,11 @@
 import { useState } from "react";
 import { ToastProvider } from "./components/Toast";
-import { IconCpu, IconDatabase, IconServer, IconZap } from "./components/Icons";
+import { IconActivity, IconCpu, IconDatabase, IconMessage, IconServer, IconZap } from "./components/Icons";
 import SuratAreaKnowledgeBasePage from "./pages/SuratAreaKnowledgeBasePage";
 import LLMCostPage from "./pages/LLMCostPage";
 import NeonDbPage from "./pages/NeonDbPage";
+import BackendPage from "./pages/BackendPage";
+import MessageToModelPage from "./pages/MessageToModelPage";
 
 interface Tab {
   id: string;
@@ -30,6 +32,18 @@ const TABS: Tab[] = [
     label: "Neon DB",
     icon: IconServer,
     render: () => <NeonDbPage />,
+  },
+  {
+    id: "backend",
+    label: "Backend",
+    icon: IconActivity,
+    render: () => <BackendPage />,
+  },
+  {
+    id: "message-to-model",
+    label: "Message to Model",
+    icon: IconMessage,
+    render: () => <MessageToModelPage />,
   },
 ];
 

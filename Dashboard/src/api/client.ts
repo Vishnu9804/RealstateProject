@@ -11,6 +11,16 @@ const DEFAULT_API_BASE_URL = `${window.location.protocol}//${window.location.hos
 
 export const API_BASE_URL: string = import.meta.env.VITE_API_BASE_URL || DEFAULT_API_BASE_URL;
 
+/** Must equal the backend's DASHBOARD_KEY when that is set (see
+ *  Backend/Middleware/dashboard_access.py). Sent only when configured, so a
+ *  local setup without a key keeps its GETs free of a CORS preflight. */
+const DASHBOARD_KEY: string = import.meta.env.VITE_DASHBOARD_KEY || "";
+
+/** `path?cursor=...` for the hourly feeds; the first request has no cursor. */
+export function withCursor(path: string, cursor: string | null): string {
+  return cursor ? `${path}?cursor=${encodeURIComponent(cursor)}` : path;
+}
+
 export class ApiError extends Error {
   status: number;
 
@@ -27,6 +37,7 @@ async function request<T>(path: string, options?: RequestInit): Promise<T> {
     ...options,
     headers: {
       ...(hasBody ? { "Content-Type": "application/json" } : {}),
+      ...(DASHBOARD_KEY ? { "X-Dashboard-Key": DASHBOARD_KEY } : {}),
       ...options?.headers,
     },
   });

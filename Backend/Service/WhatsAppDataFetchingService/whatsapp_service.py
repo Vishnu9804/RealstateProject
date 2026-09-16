@@ -66,6 +66,7 @@ from Config.settings import get_settings
 from Database.session import is_database_configured
 from Middleware import step_logger
 from Model.WhatsAppDataFetchingModel.whatsapp_message import WhatsAppChatMessage
+from Service.BackendUsageService import cpu_usage_service
 from Service.BrokerRequirementService import requirement_filter_service, requirement_pipeline_service
 from Service.BuilderProjectService import builder_project_service
 from Service.WhatsAppDataFetchingService import (
@@ -162,6 +163,7 @@ def get_qualified_messages(limit: int = 100) -> List[WhatsAppChatMessage]:
     return list(_qualified_messages[-limit:])
 
 
+@cpu_usage_service.tracked("WhatsApp group/chat message — capture & filter", "WhatsApp intake")
 def handle_intake_message(message: WhatsAppChatMessage) -> None:
     """Called by whatsapp_connection_manager for every message the
     property/requirement selection claims. See the module docstring for the

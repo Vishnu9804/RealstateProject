@@ -53,7 +53,7 @@ from __future__ import annotations
 
 import json
 import re
-from typing import List, Optional
+from typing import Dict, List, Optional
 
 from pydantic import ValidationError
 
@@ -68,9 +68,11 @@ from Agent.WhatsAppDataFetchingAgent.price_scales import (
     SCALE_MULTIPLIERS as _SCALE_MULTIPLIERS,
     SCALE_WORD_PATTERN as _SCALE_WORD_PATTERN,
 )
+from Config.settings import get_settings
 from Middleware import step_logger
 from Model.BrokerRequirementModel.broker_requirement import StructuredRequirement
 from Model.WhatsAppDataFetchingModel.whatsapp_message import WhatsAppChatMessage
+from Service.LLMUsageService import message_model_service
 
 _CODE_FENCE_RE = re.compile(r"^```(?:json)?\s*|\s*```$", re.IGNORECASE)
 
@@ -109,12 +111,94 @@ def structure_batch(batch: List[WhatsAppChatMessage]) -> List[StructuredRequirem
         return []
 
     request_body = glm_client.build_request_body(_build_system_prompt(), _build_user_prompt(batch))
-    content = glm_client.post_with_retries(request_body, f"a requirement batch of {len(batch)}", site="requirement")
+    # Filled by the successful call — read only by the Message to Model log.
+    calls: List[dict] = []
+    content = glm_client.post_with_retries(
+        request_body, f"a requirement batch of {len(batch)}", site="requirement", usage_sink=calls
+    )
     if content is None:
         return []
 
     extractions = _parse_extractions(content, len(batch))
-    return _merge_with_message_data(extractions, batch)
+    requirements = _merge_with_message_data(extractions, batch)
+    _log_message_models(batch, calls, extractions, requirements)
+    return requirements
+
+
+# The fields the Dashboard's Message to Model tab shows for each requirement
+# (the WhatsApp metadata is shown once per message there, so it is left out).
+_MESSAGE_MODEL_FIELDS = {
+    "record_id",
+    "requirement_type",
+    "bhk",
+    "area_name",
+    "preferred_areas",
+    "society_name",
+    "budget_text",
+    "budget_min_inr",
+    "budget_max_inr",
+    "listing_type",
+    "contact_name",
+    "contact_phone",
+    "description",
+}
+
+
+def _log_message_models(
+    batch: List[WhatsAppChatMessage],
+    calls: List[dict],
+    extractions: List[GLMRequirementExtraction],
+    requirements: List[StructuredRequirement],
+) -> None:
+    """Side-channel for the Dashboard's Message to Model tab
+    (Service/LLMUsageService/message_model_service.py): what each message in
+    this batch became, and its share of the call's tokens. Runs once the
+    result is final, changes nothing in it, and is swallowed on any failure —
+    it can never cost a real requirement."""
+    try:
+        message_ids = [message.message_id for message in batch]
+        for call in calls:
+            call["message_ids"] = message_ids
+        messages_by_id = {message.message_id: message for message in batch}
+        models: Dict[str, List[dict]] = {}
+        for requirement in requirements:
+            models.setdefault(requirement.source_message_id, []).append(
+                requirement.model_dump(mode="json", include=_MESSAGE_MODEL_FIELDS, exclude_none=True)
+            )
+        outcomes: Dict[str, dict] = {}
+        for extraction in extractions:
+            message_id = _quiet_message_id(extraction.source_message_id, messages_by_id)
+            if message_id is None or message_id in outcomes:
+                continue
+            if models.get(message_id):
+                outcome, note = "converted", None
+            else:
+                outcome, note = "skipped", extraction.skip_reason or "Judged not to be a requirement."
+            if messages_by_id[message_id].reclassified_as_requirement:
+                routed = "Re-routed here by the property stage, which read it as a demand."
+                note = f"{note} · {routed}" if note else routed
+            outcomes[message_id] = {
+                "outcome": outcome,
+                "note": note,
+                "output_chars": len(extraction.model_dump_json()),
+            }
+        message_model_service.observe_batch("requirement", get_settings().zai_model, batch, calls, outcomes, models)
+    except Exception as exc:  # noqa: BLE001
+        step_logger.warn(
+            f"Could not log this requirement batch for the Message to Model tab (the batch is unaffected): {exc!r}"
+        )
+
+
+def _quiet_message_id(returned_id: Optional[str], messages_by_id: dict) -> Optional[str]:
+    """_resolve_message_id's matching rule without its log line — the batch
+    already logged any mismatch once; the Message to Model log only needs
+    the answer."""
+    if not returned_id:
+        return None
+    if returned_id in messages_by_id:
+        return returned_id
+    contained = [message_id for message_id in messages_by_id if message_id and message_id in returned_id]
+    return contained[0] if len(contained) == 1 else None
 
 
 def _build_system_prompt() -> str:

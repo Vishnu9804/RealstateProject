@@ -50,6 +50,7 @@ from Agent.WhatsAppInquiryHandlingAgent import inquiry_classifier
 from Config.settings import get_settings
 from Middleware import step_logger
 from Model.WhatsAppInquiryHandlingModel.inquiry_message import InquiryChatMessage
+from Service.BackendUsageService import cpu_usage_service
 from Service.WhatsAppInquiryHandlingService import (
     client_store,
     form_token_service,
@@ -69,6 +70,7 @@ _WELCOME_TEXT_TEMPLATE = (
 )
 
 
+@cpu_usage_service.tracked("Client inquiry batch — intent LLM & reply", "WhatsApp inquiries")
 def handle_batch_ready(phone: str, messages: List[InquiryChatMessage]) -> None:
     """Called by InquiryBufferService whenever one phone number's batch is
     flushed. Already runs on its own thread (see inquiry_buffer_service.py),

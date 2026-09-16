@@ -65,6 +65,7 @@ from Model.WhatsAppDataFetchingModel.embedded_property import EmbeddedProperty
 from Model.WhatsAppDataFetchingModel.property_record import PropertyRecord
 from Model.WhatsAppDataFetchingModel.structured_property import StructuredProperty
 from Model.WhatsAppDataFetchingModel.whatsapp_message import WhatsAppChatMessage
+from Service.BackendUsageService import cpu_usage_service
 from Service.WhatsAppDataFetchingService import (
     area_knowledge_service,
     display_settings_service,
@@ -81,6 +82,7 @@ _outsider_count = 0
 _NON_API_FIELDS = {"embedding", "embedding_model"}
 
 
+@cpu_usage_service.tracked("Property batch — LLM structuring, embedding & save", "WhatsApp → Properties")
 def handle_batch_ready(batch: List[WhatsAppChatMessage]) -> None:
     """Called by the buffering stage whenever a batch is flushed (10
     messages gathered, or 1 hour elapsed). Already runs on its own thread

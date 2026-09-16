@@ -202,36 +202,56 @@ def _stream_completion(client: httpx.Client, request_body: dict) -> Tuple[str, O
     return content, usage
 
 
-def _record_usage(site: str, model: str, usage: Optional[dict]) -> None:
+def _record_usage(site: str, model: str, usage: Optional[dict]) -> Tuple[int, int]:
     """Best-effort: feeds this call's token counts to the Dashboard's LLM
     Cost tab. Never raises — a tracking failure must never cost a real
     requirement. `usage` is None when the API didn't send one (the call
     still counts, just with 0 tokens attributed — see the service's own
-    docstring on why)."""
+    docstring on why). Returns the (input, output) tokens it recorded."""
     try:
         usage = usage or {}
         input_tokens = int(usage.get("prompt_tokens") or usage.get("input_tokens") or 0)
         output_tokens = int(usage.get("completion_tokens") or usage.get("output_tokens") or 0)
         llm_usage_service.observe_call(site, model, input_tokens, output_tokens)
+        return input_tokens, output_tokens
     except Exception as exc:  # noqa: BLE001
         step_logger.warn(f"Could not record LLM usage for a {site} GLM call: {exc!r}")
+        return 0, 0
 
 
-def post_with_retries(request_body: dict, description: str, site: str) -> Optional[str]:
+def post_with_retries(
+    request_body: dict, description: str, site: str, usage_sink: Optional[List[dict]] = None
+) -> Optional[str]:
     """Sends `request_body` and returns the model's raw reply text, retrying
     up to _MAX_ATTEMPTS times on transient failures only. Returns None once
     every attempt has failed. `description` is used purely in log lines
     (e.g. "a requirement batch of 4"). `site` identifies the calling pipeline
     stage for the LLM Cost dashboard (e.g. "requirement") — recorded once,
     only on a successful completion; a failed/retried attempt records
-    nothing, since no usage is known for it."""
+    nothing, since no usage is known for it.
+
+    `usage_sink`, when given, receives one {"input", "output",
+    "prompt_chars"} entry for the successful call. The caller knows which
+    messages the call carried and uses it to split the tokens per message
+    for the Dashboard's Message to Model tab; leaving it out changes
+    nothing."""
     client = _get_client()
     model = request_body.get("model") or get_settings().zai_model
 
     for attempt in range(1, _MAX_ATTEMPTS + 1):
         try:
             content, usage = _stream_completion(client, request_body)
-            _record_usage(site, model, usage)
+            input_tokens, output_tokens = _record_usage(site, model, usage)
+            if usage_sink is not None:
+                usage_sink.append(
+                    {
+                        "input": input_tokens,
+                        "output": output_tokens,
+                        "prompt_chars": sum(
+                            len(str(message.get("content") or "")) for message in request_body.get("messages") or []
+                        ),
+                    }
+                )
             return content
         except httpx.HTTPStatusError as exc:
             status = exc.response.status_code

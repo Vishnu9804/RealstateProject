@@ -14,6 +14,7 @@ from sqlalchemy import delete, func, select
 
 from Database.client_models import ClientRow
 from Database.client_session import get_client_session
+from Model.record_source import SOURCE_UNKNOWN
 from Model.WhatsAppInquiryHandlingModel.client_record import ClientRecord
 
 _COLUMNS = (
@@ -47,12 +48,42 @@ _COLUMNS = (
 # ran, and nobody would notice until someone looked for a note that was no
 # longer there. Enforcing it HERE, in the one write path, means a future call
 # site cannot reopen the hole by forgetting to carry a field forward.
-STAFF_DETAIL_FIELDS = ("current_address", "about_loan")
-# Written by exactly one function, set_last_follow_up, which touches this
-# column and nothing else — so an Edit dialog save can never overwrite a
-# stamp that landed while the dialog was open. See ClientRow's own comment.
+STAFF_DETAIL_FIELDS = ("current_address", "about_loan", "additional_phones", "notes")
+# Written by exactly one function, set_last_follow_up, which touches these
+# columns and nothing else — so an Edit dialog save can never overwrite a
+# stamp (or a report) that landed while the dialog was open. See ClientRow's
+# own comment.
 FOLLOW_UP_FIELD = "last_follow_up_dates"
-PRESERVED_FIELDS = (*STAFF_DETAIL_FIELDS, FOLLOW_UP_FIELD)
+FOLLOW_UP_REPORT_FIELD = "follow_up_report"
+FOLLOW_UP_FIELDS = (FOLLOW_UP_FIELD, FOLLOW_UP_REPORT_FIELD)
+PRESERVED_FIELDS = (*STAFF_DETAIL_FIELDS, *FOLLOW_UP_FIELDS)
+# WHERE this client first reached us (see ClientRow.source). Kept out of
+# _COLUMNS because that loop overwrites its columns from the incoming record
+# on every write, and this one is WRITE-ONCE — but it must still be READ on
+# every load, so it is added explicitly in _to_pydantic below.
+SOURCE_FIELD = "source"
+
+
+def resolve_source(stored: Optional[str], incoming: Optional[str]) -> str:
+    """The value a write should leave in `source`, given what is already
+    stored and what the caller's record carries.
+
+    First real answer wins: once a client is known to have arrived from,
+    say, the landing site, a later requirements-form submission from the
+    same person does not rewrite that — it is the same person, coming back
+    through a second door, and "where did this client come from" has only
+    one honest answer. 'unknown' (the column's default, and what every row
+    written before this field existed reads as) is not a real answer, so it
+    is the one value a later write is allowed to replace.
+
+    Shared rather than inlined because the in-memory fallback store applies
+    exactly the same rule (see Service/WhatsAppInquiryHandlingService/
+    client_store.py) — two backends deciding this independently is precisely
+    how they would drift apart.
+    """
+    if stored and stored != SOURCE_UNKNOWN:
+        return stored
+    return incoming or SOURCE_UNKNOWN
 
 
 def get_client_by_phone(phone: str) -> Optional[ClientRecord]:
@@ -104,6 +135,11 @@ def upsert_client(
                 setattr(row, name, max(getattr(row, name) or 0, getattr(record, name) or 0))
                 continue
             setattr(row, name, getattr(record, name))
+        # Write-once, and therefore outside the loop above — see
+        # resolve_source. A brand-new row has the column's 'unknown' default
+        # at this point (it was just constructed), so an insert always takes
+        # the caller's value and an update always keeps the stored one.
+        row.source = resolve_source(row.source, getattr(record, SOURCE_FIELD, None))
         if update_staff_fields:
             for name in STAFF_DETAIL_FIELDS:
                 setattr(row, name, getattr(record, name))
@@ -147,6 +183,21 @@ def get_all_clients(limit: int) -> List[ClientRecord]:
     with get_client_session() as session:
         rows = list(session.execute(stmt).scalars().all())
     return [_to_pydantic(row) for row in rows]
+
+
+def get_all_client_phones(limit: int) -> List[str]:
+    """Just the phone numbers, in the same order get_all_clients returns
+    whole records.
+
+    The bulk match-counts build (Service/ClientPropertyMatchingService/
+    match_counts_service.py) needs the list of clients to count FOR, and
+    nothing else about them. Selecting the primary key alone is answered
+    from its own index without touching the heap, and puts a few kilobytes
+    on the wire instead of every client's name, email, requirements and
+    staff notes — none of which that build so much as looks at."""
+    stmt = select(ClientRow.phone).order_by(ClientRow.created_at.desc()).limit(limit)
+    with get_client_session() as session:
+        return list(session.execute(stmt).scalars().all())
 
 
 def client_exists(phone: str) -> bool:
@@ -237,10 +288,20 @@ def set_matches_computed_at(watermarks: Dict[str, datetime]) -> None:
                 row.matches_computed_at = when
 
 
-def set_last_follow_up(phone: str, when: Optional[datetime]) -> Optional[ClientRecord]:
-    """Records when this client was last followed up with — `None` clears it.
+def set_last_follow_up(
+    phone: str,
+    when: Optional[datetime],
+    report: Optional[str] = None,
+    update_report: bool = False,
+) -> Optional[ClientRecord]:
+    """Records when this client was last followed up with — `None` clears it
+    — and, when `update_report` is passed, what was said on it (`None` then
+    clears the report). The report is written only when asked for, the same
+    way upsert_client treats the photo and the staff-only details: the
+    automatic post-visit stamp records a time and knows nothing about any
+    note a member of staff left, so it must never blank one.
 
-    The ONLY writer of that column, and it touches nothing else: the
+    The ONLY writer of those columns, and it touches nothing else: the
     automatic post-visit stamp (Service/AgentManagementService/
     visit_reminder_service.py) and the Inquiries page's own date/time picker
     both come through here. Writing one column rather than re-saving the
@@ -255,13 +316,15 @@ def set_last_follow_up(phone: str, when: Optional[datetime]) -> Optional[ClientR
         if row is None:
             return None
         setattr(row, FOLLOW_UP_FIELD, when)
+        if update_report:
+            setattr(row, FOLLOW_UP_REPORT_FIELD, report)
         session.flush()
         session.refresh(row)
         return _to_pydantic(row)
 
 
 def _to_pydantic(row: ClientRow) -> ClientRecord:
-    data = {name: getattr(row, name) for name in (*_COLUMNS, *PRESERVED_FIELDS)}
+    data = {name: getattr(row, name) for name in (*_COLUMNS, *PRESERVED_FIELDS, SOURCE_FIELD)}
     # has_photo is a SQL expression loaded with the row (ClientRow.has_photo),
     # so reading it here costs no query and never touches the photo itself.
     return ClientRecord(**data, has_photo=bool(row.has_photo), created_at=row.created_at, updated_at=row.updated_at)

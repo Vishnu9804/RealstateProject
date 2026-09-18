@@ -52,6 +52,7 @@ from Agent.WhatsAppDataFetchingAgent.price_scales import (
 )
 from Config.settings import get_settings
 from Middleware import step_logger
+from Model.record_source import SOURCE_WHATSAPP
 from Model.WhatsAppDataFetchingModel.structured_property import StructuredProperty
 from Model.WhatsAppDataFetchingModel.whatsapp_message import WhatsAppChatMessage
 from Service.LLMUsageService import llm_usage_service, message_model_service
@@ -1605,6 +1606,10 @@ def _to_structured_property(
     function's docstring for why a multi-property message can't use the
     same keyword-search shortcut."""
     structured = StructuredProperty(
+        # Passed rather than left to StructuredProperty.source's default:
+        # this stage is what turns a WhatsApp message into a property, so
+        # saying so here is what keeps the default from being load-bearing.
+        source=SOURCE_WHATSAPP,
         source_message_id=message.message_id,
         property_type=listing.property_type,
         bhk=listing.bhk,

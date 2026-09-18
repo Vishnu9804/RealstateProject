@@ -62,6 +62,7 @@ from Agent.WhatsAppDataFetchingAgent import property_structurer
 from Database.property_repository import EDITABLE_CONTENT_FIELDS
 from Middleware import step_logger
 from Model.WhatsAppDataFetchingModel.embedded_property import EmbeddedProperty
+from Model.record_source import SOURCE_MANUAL
 from Model.WhatsAppDataFetchingModel.property_record import PropertyRecord
 from Model.WhatsAppDataFetchingModel.structured_property import StructuredProperty
 from Model.WhatsAppDataFetchingModel.whatsapp_message import WhatsAppChatMessage
@@ -419,6 +420,11 @@ def create_property(content_fields: Dict[str, Any]) -> PropertyRecord:
     now = datetime.now(timezone.utc)
     structured = StructuredProperty(
         source_message_id=f"manual-{uuid.uuid4().hex}",
+        # Typed in by a member of staff — the one thing this path knows for
+        # certain about where the property came from, and the reason
+        # StructuredProperty.source cannot simply default its way to a
+        # correct answer everywhere.
+        source=SOURCE_MANUAL,
         group_name="Manually added",
         chat_type="personal",
         sender_name="Manual entry",

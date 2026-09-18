@@ -87,6 +87,13 @@ class ClientDetailsRequest(BaseModel):
     # STAFF_DETAIL_FIELDS. This dialog is the only thing that can write them.
     current_address: Optional[str] = None
     about_loan: Optional[str] = None
+    # Free-form staff notes — a catch-all, same staff-only treatment as the
+    # two fields above.
+    notes: Optional[str] = None
+    # Extra numbers for this client, beside the WhatsApp number `phone` is
+    # fixed to — never verified, never normalized, just stored and shown
+    # (manual_client_service._clean_additional_phones).
+    additional_phones: Optional[List[str]] = None
     purpose: Optional[str] = None
     property_type: Optional[str] = None
     bhk: Optional[str] = None
@@ -175,25 +182,41 @@ def get_client(phone: str) -> ClientRecord:
 
 
 class ClientFollowUp(BaseModel):
-    """When this client was last followed up with. `null` clears it.
+    """When this client was last followed up with, and what was said on it.
+    `null` clears either.
 
     A full instant (the browser sends UTC, converted from the IST the picker
     showed), not a date — the automatic stamp records a real moment, and a
-    hand-set one has to be comparable with it."""
+    hand-set one has to be comparable with it.
+
+    `follow_up_report` is written only when the request actually carries it
+    (see the route): a caller that sends just a date must leave a note
+    someone else wrote exactly where it is."""
 
     last_follow_up_dates: Optional[datetime] = None
+    follow_up_report: Optional[str] = None
 
 
 @router.patch("/clients/{phone}/follow-up", response_model=ClientRecord)
 def set_follow_up(phone: str, body: ClientFollowUp) -> ClientRecord:
-    """The Inquiries page's editable "Last follow-up" cell.
+    """The Inquiries page's editable "Last follow-up" cell — the date/time
+    and the report written beside it, saved together.
 
     Its own endpoint rather than part of the Edit dialog's PATCH, because it
-    writes ONE column: the automatic post-visit stamp
+    writes only those two columns: the automatic post-visit stamp
     (Service/AgentManagementService/visit_reminder_service.py) writes the
-    same column the same way, and neither can overwrite the other's work
+    same stamp the same way, and neither can overwrite the other's work
     with a stale copy of the rest of the record."""
-    updated = client_store.set_last_follow_up(phone, _as_utc(body.last_follow_up_dates))
+    report = body.follow_up_report
+    updated = client_store.set_last_follow_up(
+        phone,
+        _as_utc(body.last_follow_up_dates),
+        report=report.strip() or None if isinstance(report, str) else None,
+        # Sent or not, rather than null or not — so this route can clear a
+        # report on purpose while the automatic stamp, which never carries
+        # the field at all, leaves it alone.
+        update_report="follow_up_report" in body.model_fields_set,
+    )
     if updated is None:
         raise HTTPException(status_code=404, detail="No client found for that phone number.")
     return updated

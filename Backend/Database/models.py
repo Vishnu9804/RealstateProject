@@ -85,6 +85,16 @@ class PropertyRow(Base):
     # second query per row.
     message: Mapped["WhatsAppMessageRow"] = relationship(lazy="joined")
 
+    # WHERE this property came from — see Model/record_source.py and
+    # StructuredProperty.source. NOT NULL with a server default of
+    # 'unknown' so a row written before this column existed can never read
+    # back as NULL (StructuredProperty.source is a required str); those
+    # rows are then backfilled to their REAL origin by Database/session.py's
+    # init_db, which can tell a manual entry from a WhatsApp-captured one by
+    # its source_message_id. Kept out of property_repository's
+    # EDITABLE_CONTENT_FIELDS, so no edit can rewrite it.
+    source: Mapped[str] = mapped_column(String, nullable=False, default="unknown", server_default="unknown")
+
     # --- extracted by the LLM from the message text ---
     property_type: Mapped[Optional[str]] = mapped_column(String, nullable=True)
     bhk: Mapped[Optional[str]] = mapped_column(String, nullable=True)

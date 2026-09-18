@@ -14,12 +14,14 @@ THE THREE SITES (fixed — pipeline STAGES, not models):
   - "intent"      Agent/WhatsAppInquiryHandlingAgent/inquiry_classifier.py
 
 Each site tracks its OWN breakdown by MODEL NAME — whatever
-Config/settings.py's zai_model/gemini_model actually was at call time — not
-a hardcoded list. Property and Requirement currently share one model
-(ZAI_MODEL) and Intent uses a separate one (GEMINI_MODEL), but nothing here
+Config/settings.py's zai_model/zai_inquiry_model actually was at call time —
+not a hardcoded list. Property and Requirement currently share one model
+(ZAI_MODEL) and Intent uses its own (ZAI_INQUIRY_MODEL), but nothing here
 assumes either fact: pointing a site at a different model tomorrow simply
 starts a new row under that site the next time it's called, with no code
-change here.
+change here. All three sites now call the same Z.ai account (previously
+Intent called Gemini, on a separate account), so all three also share
+Agent/WhatsAppDataFetchingAgent/glm_gate.py's process-wide concurrency gate.
 
 A site's own totals (calls / input / output / total tokens, and the three
 per-call averages) are NEVER stored as a separate counter — get_overview()

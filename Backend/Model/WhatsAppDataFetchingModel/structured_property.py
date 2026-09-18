@@ -4,6 +4,8 @@ from typing import List, Literal, Optional
 
 from pydantic import BaseModel, Field
 
+from Model.record_source import SOURCE_WHATSAPP
+
 
 class StructuredProperty(BaseModel):
     """A single property listing, structured from a raw WhatsApp message by
@@ -25,6 +27,25 @@ class StructuredProperty(BaseModel):
     record_id: str = Field(default_factory=lambda: uuid.uuid4().hex)
 
     source_message_id: str
+
+    # WHERE this property came from — one of Model/record_source.py's
+    # PROPERTY_SOURCES, as a plain string (never an enum, see that module).
+    #
+    # Defaulted to "whatsapp" because the LLM structuring stage is the one
+    # place a StructuredProperty is built without an explicit answer being
+    # interesting: that stage exists only to turn WhatsApp messages into
+    # properties. It is nonetheless passed explicitly there too
+    # (property_structurer._build_property), so nothing about a stored
+    # property's origin is implicit. Every other writer — the Properties
+    # page's Add dialog, any future spreadsheet import — MUST pass its own
+    # value; forgetting is the one failure mode this default cannot catch,
+    # which is why the constants live in one module rather than being typed
+    # at each call site.
+    #
+    # Provenance, not content: deliberately absent from
+    # Database/property_repository.py's EDITABLE_CONTENT_FIELDS, so no Edit
+    # dialog save can ever rewrite where a property came from.
+    source: str = SOURCE_WHATSAPP
 
     # --- extracted by the LLM from the message text ---
     property_type: Optional[str] = None

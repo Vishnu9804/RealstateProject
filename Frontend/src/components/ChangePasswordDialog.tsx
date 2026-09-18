@@ -3,18 +3,16 @@ import { createPortal } from "react-dom";
 import { authApi } from "../api/authApi";
 import { plainError } from "../lib/apiError";
 import { useAuth } from "../state/AuthProvider";
-import { useOwnerVerification, VerificationCancelledError } from "../state/OwnerVerificationProvider";
 import { useToast } from "./ui/Toast";
 import { Button, Note } from "./ui/Primitives";
 import { IconLock, IconX } from "./ui/Icons";
 
 const labelStyle = { fontWeight: 560, color: "var(--ink-2)" };
 
-/** Owner-only: needs the current password AND owner verification; ends every other session. */
+/** Owner-only: needs the current password; ends every other session. */
 export default function ChangePasswordDialog({ onClose }: { onClose: () => void }) {
   const auth = useAuth();
   const toast = useToast();
-  const verify = useOwnerVerification();
   const [currentPassword, setCurrentPassword] = useState("");
   const [newPassword, setNewPassword] = useState("");
   const [confirmPassword, setConfirmPassword] = useState("");
@@ -29,14 +27,12 @@ export default function ChangePasswordDialog({ onClose }: { onClose: () => void 
     setSaving(true);
     setError(null);
     try {
-      const result = await verify("Change the owner password.", (grant) =>
-        authApi.changeOwnPassword({ current_password: currentPassword, new_password: newPassword }, grant),
-      );
+      const result = await authApi.changeOwnPassword({ current_password: currentPassword, new_password: newPassword });
       auth.replaceSession(result);
       toast.push({ tone: "ok", title: "Password changed", message: "Every other device was signed out." });
       onClose();
     } catch (err) {
-      if (!(err instanceof VerificationCancelledError)) setError(plainError(err));
+      setError(plainError(err));
       setSaving(false);
     }
   }

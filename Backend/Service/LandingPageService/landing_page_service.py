@@ -25,6 +25,7 @@ from Model.LandingPageModel.landing_lead import LandingLeadRecord, LandingLeadRe
 from Middleware import step_logger
 from Model.LandingPageModel.landing_property import LandingPropertyDetail, LandingPropertySummary
 from Model.WhatsAppDataFetchingModel.embedded_property import EmbeddedProperty
+from Model.record_source import SOURCE_WEBSITE_ENQUIRY
 from Model.WhatsAppInquiryHandlingModel.client_record import ClientRecord
 from Service.ClientPropertyMatchingService import matching_service
 from Service.LandingPageService import lead_store
@@ -247,6 +248,13 @@ def get_property_ids_for_phone(phone: str) -> List[str]:
     return lead_store.get_property_ids_for_phone(phone)
 
 
+def get_property_ids_for_phones(phones) -> dict:
+    """The bulk form of get_property_ids_for_phone above — phone -> the
+    property ids that number enquired about on the public site, for a whole
+    table of clients in one read. See lead_store.get_property_ids_for_phones."""
+    return lead_store.get_property_ids_for_phones(phones)
+
+
 def _sync_to_inquiries(lead: LandingLeadRecord, prop: Optional[EmbeddedProperty]) -> None:
     """Folds one website enquiry into whatsappInquiryHandling's own
     ClientRecord table, rather than leaving it a second, separate kind of
@@ -295,6 +303,12 @@ def _sync_to_inquiries(lead: LandingLeadRecord, prop: Optional[EmbeddedProperty]
 
     record = ClientRecord(
         phone=phone,
+        # A property enquiry from the public landing site. Only ever lands
+        # on a client who has no source yet: someone who first reached us on
+        # WhatsApp, Instagram or by hand keeps the source they already have
+        # (see client_repository.resolve_source), because this enquiry is
+        # them coming back, not them arriving.
+        source=SOURCE_WEBSITE_ENQUIRY,
         # "website_lead", NEVER "registered" or "pending_registration" --
         # inquiry_pipeline_service.handle_batch_ready reads "does a
         # ClientRecord exist" as "has this phone been through the REAL

@@ -45,6 +45,10 @@ EDITABLE_CONTENT_FIELDS = (
 _COLUMNS = (
     "source_message_id",
     "source_connection_id",
+    # See BrokerRequirementRow.source. Same story as property_repository's:
+    # written on insert, read on every load, and never reachable from
+    # update_requirement, which only writes EDITABLE_CONTENT_FIELDS.
+    "source",
     "requirement_type",
     "bhk",
     "area_name",

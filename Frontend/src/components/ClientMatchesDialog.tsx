@@ -1,4 +1,5 @@
 import { useCallback, useEffect, useMemo, useState } from "react";
+import { PROPERTY_FETCH_LIMIT } from "../lib/fetchLimits";
 import { createPortal } from "react-dom";
 import { useNavigate } from "react-router-dom";
 import { agentApi } from "../api/agentApi";
@@ -541,7 +542,7 @@ export default function ClientMatchesDialog({
     // a matched card still renders from the match's own display fields
     // without it.
     propertyApi
-      .getProperties(500)
+      .getProperties(PROPERTY_FETCH_LIMIT)
       .then((data) => {
         setProperties(data);
         setCachedPropertyList(data, null);

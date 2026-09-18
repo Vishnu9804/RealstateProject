@@ -10,7 +10,7 @@ exactly. Callers never know which backend is active underneath:
 from __future__ import annotations
 
 from datetime import datetime, timezone
-from typing import List, Optional
+from typing import Collection, Dict, List, Optional
 
 from Database import landing_lead_repository
 from Database.session import is_database_configured
@@ -123,6 +123,40 @@ def get_property_ids_for_phone(phone: str) -> List[str]:
             seen.add(lead.property_record_id)
             ids.append(lead.property_record_id)
     return ids
+
+
+def get_property_ids_for_phones(phones: Collection[str]) -> Dict[str, List[str]]:
+    """The bulk form of get_property_ids_for_phone above: one read for a
+    whole table of clients instead of one per row.
+
+    Keyed by the SAME normalized form the single-phone version compares on
+    (_normalized), and returned under the caller's own original string, so a
+    caller can look its client up by the phone it already holds without
+    normalizing a second time. A number with no website enquiry is absent
+    from the result, which the caller reads as an empty list."""
+    targets = {phone: _normalized(phone) for phone in phones}
+    wanted = {value for value in targets.values() if value}
+    if not wanted:
+        return {}
+    if is_database_configured():
+        by_normalized = landing_lead_repository.get_property_ids_by_phones(wanted, _PHONE_LOOKUP_LIMIT)
+    else:
+        by_normalized = {}
+        seen: Dict[str, set] = {}
+        for lead in reversed(_leads[-_PHONE_LOOKUP_LIMIT:]):
+            target = lead.phone_e164 or lead.whatsapp_number
+            if target not in wanted or not lead.property_record_id:
+                continue
+            already = seen.setdefault(target, set())
+            if lead.property_record_id in already:
+                continue
+            already.add(lead.property_record_id)
+            by_normalized.setdefault(target, []).append(lead.property_record_id)
+    return {
+        phone: by_normalized[target]
+        for phone, target in targets.items()
+        if target and by_normalized.get(target)
+    }
 
 
 def get_lead_name(phone: str) -> Optional[str]:

@@ -31,6 +31,7 @@ from __future__ import annotations
 from dataclasses import dataclass
 from typing import Any, Dict, Literal, Optional
 
+from Model.record_source import SOURCE_MANUAL
 from Model.WhatsAppInquiryHandlingModel.client_record import ClientRecord
 from Service.WhatsAppInquiryHandlingService import assignment_lock_service, client_store
 from Service.WhatsAppInquiryHandlingService.phone_utils import normalize_phone
@@ -47,6 +48,11 @@ DETAIL_FIELDS = (
     # matching and stay editable while a site visit is out.
     "current_address",
     "about_loan",
+    # A free-form catch-all, same staff-only treatment as the two above.
+    "notes",
+    # Extra numbers, beside the WhatsApp number this client is keyed on —
+    # a list, not free text, and never verified (_clean_additional_phones).
+    "additional_phones",
     "purpose",
     "property_type",
     "bhk",
@@ -65,6 +71,17 @@ _NUMBER_FIELDS = {"budget_min_inr", "budget_max_inr"}
 # Not free text either, so the blank-to-None rule must leave it alone rather
 # than stringifying the dict.
 _DICT_FIELDS = {"property_sizes"}
+# A list, not free text either — cleaned by _clean_additional_phones rather
+# than the blank-to-none rule below.
+_LIST_FIELDS = {"additional_phones"}
+
+# Bounds on additional_phones — this field is never verified (the user's own
+# requirement: "no need to verify those, they just get stored"), so these
+# exist only so a hand-crafted request can't park an unbounded blob on a
+# client row. Generous on purpose: a real client has a small handful of
+# other numbers at most.
+_MAX_ADDITIONAL_PHONES = 10
+_MAX_ADDITIONAL_PHONE_LENGTH = 32
 
 # A photo arrives already resized in the browser (a few hundred KB at most);
 # this ceiling only exists so a hand-made request can't park an arbitrarily
@@ -103,7 +120,18 @@ def create_client(raw_phone: str, fields: Dict[str, Any], photo_url: Optional[st
         return ManualClientResult("exists")
 
     record = _apply_size_rule(
-        ClientRecord(phone=phone, status="registered", pending_action=None, **_clean_details(fields))
+        ClientRecord(
+            phone=phone,
+            status="registered",
+            pending_action=None,
+            # Typed in by a member of staff on the Inquiries page. Only the
+            # ADD path says this: update_client below copies the stored
+            # record, so an edit carries whatever source the client already
+            # had — and could not change it even if it tried (see
+            # client_repository.resolve_source).
+            source=SOURCE_MANUAL,
+            **_clean_details(fields),
+        )
     )
     # A website enquiry leaves no client record behind until it has
     # requirements, yet its visits can already be out with an agent — so a
@@ -173,7 +201,12 @@ def _clean_details(fields: Dict[str, Any]) -> Dict[str, Any]:
         if name not in fields:
             continue
         value = fields[name]
-        cleaned[name] = value if name in _NUMBER_FIELDS or name in _DICT_FIELDS else _blank_to_none(value)
+        if name in _NUMBER_FIELDS or name in _DICT_FIELDS:
+            cleaned[name] = value
+        elif name in _LIST_FIELDS:
+            cleaned[name] = _clean_additional_phones(value)
+        else:
+            cleaned[name] = _blank_to_none(value)
     if "furnishing" in cleaned:
         # The public form's own rule, reused rather than reimplemented, so a
         # client's furnishing reads identically whether they picked it
@@ -182,6 +215,30 @@ def _clean_details(fields: Dict[str, Any]) -> Dict[str, Any]:
 
         cleaned["furnishing"] = inquiry_form_service.clean_furnishing(cleaned["furnishing"])
     return cleaned
+
+
+def _clean_additional_phones(value: Any) -> Optional[list]:
+    """Trims each entry, drops blanks and exact duplicates (order kept), and
+    caps both the count and each entry's length. Deliberately NOT run
+    through phone_utils.normalize_phone or rejected for looking unlike a
+    phone number: these are never verified and never used to reach anyone
+    programmatically, only stored and shown exactly as staff typed them —
+    a landline, a name-and-number note, whatever is useful to have on file.
+    None (not []) when nothing is left, the same "empty means cleared" rule
+    every other field here follows."""
+    if not isinstance(value, list):
+        return None
+    cleaned: list = []
+    seen = set()
+    for entry in value:
+        text = str(entry).strip()[:_MAX_ADDITIONAL_PHONE_LENGTH]
+        if not text or text in seen:
+            continue
+        seen.add(text)
+        cleaned.append(text)
+        if len(cleaned) >= _MAX_ADDITIONAL_PHONES:
+            break
+    return cleaned or None
 
 
 def _apply_size_rule(record: ClientRecord) -> ClientRecord:

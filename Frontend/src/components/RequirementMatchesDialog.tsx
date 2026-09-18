@@ -1,4 +1,5 @@
 import { useCallback, useEffect, useMemo, useRef, useState } from "react";
+import { PROPERTY_FETCH_LIMIT } from "../lib/fetchLimits";
 import { createPortal } from "react-dom";
 import { matchingApi } from "../api/matchingApi";
 import { propertyApi } from "../api/propertyApi";
@@ -196,7 +197,7 @@ export default function RequirementMatchesDialog({
 
       // Allowed to fail quietly — see the `properties` state comment.
       propertyApi
-        .getProperties(500)
+        .getProperties(PROPERTY_FETCH_LIMIT)
         .then((data) => {
           setProperties(data);
           setCachedPropertyList(data, null);

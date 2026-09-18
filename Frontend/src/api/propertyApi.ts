@@ -1,4 +1,5 @@
 import { apiClient } from "./client";
+import { PROPERTY_FETCH_LIMIT } from "../lib/fetchLimits";
 import type { PropertyRecord } from "./types";
 
 /** Mirrors Backend/Controller/WhatsAppDataFetchingController/property_controller.py's
@@ -42,7 +43,8 @@ export const propertyApi = {
    *  image_count carries the real count) so polling this on the Properties/
    *  Landing Page/Inquiries pages stays fast regardless of how many photos
    *  are stored. Use getProperty below to get one property's actual photos. */
-  getProperties: (limit = 500): Promise<PropertyRecord[]> => apiClient.get(`/properties?limit=${limit}`),
+  getProperties: (limit: number = PROPERTY_FETCH_LIMIT): Promise<PropertyRecord[]> =>
+    apiClient.get(`/properties?limit=${limit}`),
   /** One property's full content — served from the backend's in-memory
    *  snapshot, so it costs no database query. Like the list above it
    *  carries image_urls: [] with the real number in image_count; photos

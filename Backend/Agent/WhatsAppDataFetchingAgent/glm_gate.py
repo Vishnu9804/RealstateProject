@@ -37,14 +37,17 @@ So requests are serialised here instead. Two mechanisms, both global:
 
 What this deliberately does NOT do
 ----------------------------------
-It does not slow down anything a human waits on. The only callers are the
-two background structuring stages; WhatsApp capture, the inquiry pipeline
-(which is Gemini, not GLM) and every HTTP endpoint run on other threads and
-never touch this module. Serialising is free here in throughput terms too:
-a batch is at most 10 messages and arrives at most once a minute, while one
-GLM call takes ~45s — so the queue this creates is almost always empty, and
-when it isn't, waiting 45s for a slot is strictly faster than being rejected
-and then waiting out a retry backoff.
+It does not slow down anything a human waits on more than it has to. The
+callers are the two background structuring stages plus the inquiry
+classification stage (Agent/WhatsAppInquiryHandlingAgent/inquiry_classifier.py
+— GLM-4.7-FlashX, same Z.ai account, since moving off Gemini); WhatsApp
+capture and every HTTP endpoint run on other threads and never touch this
+module. Serialising is free here in throughput terms too: a property/
+requirement batch is at most 10 messages and arrives at most once a minute,
+an inquiry classification call is small and fast, and one GLM call takes on
+the order of seconds to ~45s — so the queue this creates is almost always
+empty, and when it isn't, waiting for a slot is strictly faster than being
+rejected and then waiting out a retry backoff.
 
 Sizing: a single in-flight request is the setting that cannot be wrong,
 whatever plan the account is on. Raise _MAX_CONCURRENT_REQUESTS only after

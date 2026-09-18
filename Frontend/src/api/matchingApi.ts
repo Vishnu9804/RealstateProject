@@ -16,6 +16,24 @@ export const matchingApi = {
   getMatchCounts: (phone: string): Promise<MatchCounts> =>
     apiClient.get(`/matching/clients/${encodeURIComponent(phone)}/counts`),
 
+  /** Every client's counts in ONE request — what the Inquiries table's
+   *  Matches / Completed / Status columns read.
+   *
+   *  The per-client call above is what this replaced there: a table of
+   *  hundreds of rows opened one request per row, the browser's own
+   *  six-connections-per-origin limit turned that into dozens of round
+   *  trips deep, and each of those requests loaded that client's entire
+   *  cached match set on the server to end up with three numbers. The
+   *  spinners in those three columns were exactly that queue draining.
+   *
+   *  The response is conditional (ETag/304) against a validator that is a
+   *  hash of the counts themselves, so a poll that finds nothing changed
+   *  transfers no body and costs no database work. `fresh` forces the
+   *  backend to rebuild rather than answer from memory — sent right after
+   *  an action that just changed a count, never on an ordinary poll. */
+  getAllMatchCounts: (fresh = false): Promise<Record<string, MatchCounts>> =>
+    apiClient.get(`/matching/clients/counts${fresh ? "?fresh=true" : ""}`),
+
   /** Manual "Refresh matches" action — runs the full embed+score pipeline
    *  for this one client and re-caches the result. */
   recompute: (phone: string): Promise<ClientMatchResult> =>

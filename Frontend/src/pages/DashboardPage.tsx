@@ -1,4 +1,5 @@
 import { useCallback, useEffect, useMemo, useRef, useState } from "react";
+import { PROPERTY_FETCH_LIMIT, SOLDOUT_FETCH_LIMIT } from "../lib/fetchLimits";
 import { createPortal } from "react-dom";
 import { propertyApi } from "../api/propertyApi";
 import { soldoutPropertyApi } from "../api/soldoutPropertyApi";
@@ -94,7 +95,14 @@ import {
  *  read-only: there is nothing left to edit, move or assign. */
 export type ViewTab = "main" | "outsider" | "needsReview" | "soldout";
 
-const FETCH_LIMIT = 500;
+/** The property list and the Sold out tab's list are fetched whole:
+ *  every number on this page (Stored, Showing, the Main/Outsider/Needs
+ *  review brackets, Localities) and every column filter's option list is
+ *  derived from what was fetched, so a window smaller than the table
+ *  would not merely hide rows — it would make all of those wrong. Both
+ *  lists are served from the backend's own memory, so this costs the
+ *  database nothing. See lib/fetchLimits.ts. */
+const FETCH_LIMIT = PROPERTY_FETCH_LIMIT;
 
 /**
  * Rows shown at once.
@@ -315,7 +323,7 @@ export default function DashboardPage() {
 
   const loadSoldout = useCallback(async () => {
     try {
-      const data = await soldoutPropertyApi.getSoldOutProperties(FETCH_LIMIT);
+      const data = await soldoutPropertyApi.getSoldOutProperties(SOLDOUT_FETCH_LIMIT);
       setSoldout(data);
       setSoldoutError(null);
     } catch (err) {

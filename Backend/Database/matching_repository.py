@@ -8,9 +8,9 @@ uses (see Service/WhatsAppDataFetchingService/property_vector_store.py).
 from __future__ import annotations
 
 from datetime import datetime
-from typing import List, Optional, Set, Tuple
+from typing import Collection, Dict, List, Optional, Set, Tuple
 
-from sqlalchemy import delete, select, update
+from sqlalchemy import delete, func, select, tuple_, update
 
 from Database.client_property_match_models import ClientPropertyMatchRow
 from Database.client_session import get_client_session
@@ -147,3 +147,68 @@ def get_matches_for_client(phone: str) -> Tuple[List[MatchScore], Optional[datet
     ]
     computed_at = rows[0].computed_at if rows else None
     return scores, computed_at
+
+
+def get_bucket_counts_by_client() -> Dict[str, Dict[str, int]]:
+    """client_phone -> {"high": n, "medium": n, "low": n} for EVERY client
+    that has at least one cached match, in ONE aggregate query.
+
+    The bulk counterpart of get_matches_for_client above, and the reason
+    the Inquiries table stopped costing one query per row. That function
+    loads whole score rows — score, evidence, the field_scores JSON blob,
+    the reason text — for one client; asking it 500 times to end up with
+    three numbers per client moved hundreds of thousands of rows across
+    the wire to produce a few hundred integers. This transfers one row per
+    (client, bucket) pair and nothing else.
+
+    A client with no cached matches is absent from the result, exactly as
+    it is absent from the per-client path's own empty list — the caller
+    treats a missing entry as all-zero.
+    """
+    stmt = select(
+        ClientPropertyMatchRow.client_phone,
+        ClientPropertyMatchRow.bucket,
+        func.count(),
+    ).group_by(ClientPropertyMatchRow.client_phone, ClientPropertyMatchRow.bucket)
+    counts: Dict[str, Dict[str, int]] = {}
+    with get_client_session() as session:
+        for phone, bucket, count in session.execute(stmt).all():
+            counts.setdefault(phone, {})[bucket] = int(count)
+    return counts
+
+
+# How many (phone, property) pairs are asked about per statement. Purely a
+# guard on statement size — the pairs asked about are the hand-picked,
+# website-enquired, assigned and completed properties across every client,
+# which in practice is a few hundred in total.
+_PAIR_CHUNK = 2000
+
+
+def get_scored_pairs(pairs: Collection[Tuple[str, str]]) -> Set[Tuple[str, str]]:
+    """Which of these (client_phone, property_record_id) pairs currently
+    have a cached match row.
+
+    This is the one thing the bulk counts above cannot answer on their own:
+    the Inquiries table's total is a SET union of scored, hand-picked and
+    website-enquired properties minus completed visits, so the overlap
+    between those small lists and the (large) scored set has to be known
+    exactly. Asking about the pairs — rather than loading every scored id —
+    keeps that answer proportional to the small lists instead of to the
+    309k-row match table.
+
+    Hits the table's own (client_phone, property_record_id) unique index,
+    so each chunk is an index-only probe list.
+    """
+    wanted = list({pair for pair in pairs})
+    if not wanted:
+        return set()
+    found: Set[Tuple[str, str]] = set()
+    target = tuple_(ClientPropertyMatchRow.client_phone, ClientPropertyMatchRow.property_record_id)
+    with get_client_session() as session:
+        for start in range(0, len(wanted), _PAIR_CHUNK):
+            chunk = wanted[start : start + _PAIR_CHUNK]
+            stmt = select(
+                ClientPropertyMatchRow.client_phone, ClientPropertyMatchRow.property_record_id
+            ).where(target.in_(chunk))
+            found.update((phone, record_id) for phone, record_id in session.execute(stmt).all())
+    return found

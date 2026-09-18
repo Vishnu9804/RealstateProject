@@ -1,4 +1,5 @@
 import { apiClient } from "./client";
+import { SOLDOUT_FETCH_LIMIT } from "../lib/fetchLimits";
 import type { SoldOutActionResult, SoldOutPropertyRecord } from "./types";
 
 /**
@@ -15,7 +16,7 @@ export const soldoutPropertyApi = {
   /** Newest sale first. Deliberately photo-less, exactly like
    *  propertyApi.getProperties — `image_urls` is always [] and
    *  `image_count` carries the real number. */
-  getSoldOutProperties: (limit = 500): Promise<SoldOutPropertyRecord[]> =>
+  getSoldOutProperties: (limit: number = SOLDOUT_FETCH_LIMIT): Promise<SoldOutPropertyRecord[]> =>
     apiClient.get(`/soldout-properties?limit=${limit}`),
 
   /** One sold-out property's photos, fetched only when someone presses

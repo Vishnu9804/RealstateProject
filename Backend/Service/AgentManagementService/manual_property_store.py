@@ -6,7 +6,7 @@ in-memory-fallback-vs-Postgres split as every other store in this project.
 
 from __future__ import annotations
 
-from typing import Dict, List
+from typing import Collection, Dict, List
 
 from Database import manual_property_repository
 from Database.client_session import is_client_database_configured
@@ -62,3 +62,17 @@ def get_manual_properties(client_phone: str) -> List[str]:
     if is_client_database_configured():
         return manual_property_repository.get_for_client(client_phone)
     return list(_manual_properties.get(client_phone, []))
+
+
+def get_manual_properties_by_client(client_phones: Collection[str]) -> Dict[str, List[str]]:
+    """The bulk form of get_manual_properties above — one read for a whole
+    table of clients instead of one per row. A client with nothing
+    hand-picked is absent from the result, not present with an empty list,
+    so callers read a missing entry as "none"."""
+    if is_client_database_configured():
+        return manual_property_repository.get_by_clients(client_phones)
+    return {
+        phone: list(_manual_properties[phone])
+        for phone in {value for value in client_phones}
+        if _manual_properties.get(phone)
+    }

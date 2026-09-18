@@ -39,12 +39,6 @@ class Settings(BaseSettings):
     model_config = SettingsConfigDict(env_file=".env", env_file_encoding="utf-8", extra="ignore")
 
     zai_api_key: str = ""
-    # Google Gemini API key used by the inquiry-classification stage
-    # (Agent/WhatsAppInquiryHandlingAgent/inquiry_classifier.py) — separate
-    # from zai_api_key above, which is only used by the property-structuring
-    # stage (Agent/WhatsAppDataFetchingAgent/property_structurer.py).
-    gemini_api_key: str = ""
-    gemini_model: str = "gemini-2.5-flash-lite"
     # Single Postgres+pgvector database for the whole app — both the
     # property-listing data (whatsappDataFetching) and the client records
     # (whatsappInquiryHandling, Database/client_session.py) live in this one
@@ -73,6 +67,13 @@ class Settings(BaseSettings):
     # property is a lost client opportunity that never reaches the
     # dashboard. Set ZAI_MODEL=glm-4.7-flashx to go back.
     zai_model: str = "glm-4.6"
+    # Model for the inquiry-classification stage (Agent/WhatsAppInquiryHandlingAgent/
+    # inquiry_classifier.py) — deciding whether an incoming WhatsApp message is
+    # property-related at all. A much simpler fixed-shape judgment (one bool +
+    # a short reason) than property/requirement extraction, so GLM-4.7-FlashX's
+    # speed and lower cost apply here without the accuracy problems that moved
+    # zai_model off it above. Same Z.ai account/key as zai_api_key.
+    zai_inquiry_model: str = "glm-4.7-flashx"
     # OpenAI-compatible chat-completions endpoint. Override with ZAI_BASE_URL
     # only if Z.ai's regional/mainland endpoint is needed instead.
     zai_base_url: str = "https://api.z.ai/api/paas/v4/"
@@ -152,10 +153,6 @@ class Settings(BaseSettings):
     # changed via PATCH /api/auth/me/password while logged in as that admin.
     admin_username: str = ""
     admin_password: str = ""
-    # Owner's personal WhatsApp number. When set, adding/editing staff logins,
-    # changing the admin password and "forgot password" all require a code
-    # sent here. Blank = the admin's password is asked for instead.
-    admin_phone: str = ""
 
     # --- per-identity daily allowances (see Middleware/daily_quota.py) ---
     #

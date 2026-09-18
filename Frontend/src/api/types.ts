@@ -156,6 +156,17 @@ export interface InquiryFormSubmission {
 export interface InquiryClientRecord {
   phone: string;
   status: string;
+  /** Where this client FIRST reached us: "manual" (added from the Inquiries
+   *  page), "whatsapp" (the requirements form opened from the WhatsApp
+   *  welcome link), "instagram" (the same form from a DM link),
+   *  "website_form" (the public OTP-verified form), "website_enquiry" (a
+   *  landing-site property enquiry), "excel" (a bulk import), or "unknown"
+   *  for a client stored before this was recorded.
+   *
+   *  Read-only and write-once: the backend sets it when the client is
+   *  created and never rewrites it, so a returning client keeps the source
+   *  they arrived with. Nothing in any dialog sends it. */
+  source: string;
   name: string | null;
   email: string | null;
   /** Where the client lives now — staff-only free text, set from the
@@ -163,12 +174,27 @@ export interface InquiryClientRecord {
   current_address: string | null;
   /** Staff notes about the client's loan situation. Same staff-only rule. */
   about_loan: string | null;
+  /** Free-form staff notes — a catch-all, unlike current_address/about_loan
+   *  which are about one specific thing each. Same staff-only rule: set
+   *  only from the Inquiries page's Add/Edit dialog. */
+  notes: string | null;
+  /** Extra numbers for this client, beside `phone` — the WhatsApp number
+   *  that is their identity here and is verified. These are never
+   *  verified and never normalized: added from the Inquiries page's
+   *  Add/Edit dialog purely to be kept on file and shown, exactly as
+   *  typed. Null (not []) when there are none. */
+  additional_phones: string[] | null;
   /** When this client was last followed up with, as an ISO instant (UTC).
    *  Stamped automatically the moment the post-site-visit follow-up WhatsApp
    *  message goes out — 24h after a visit is marked complete — and editable
    *  by hand from the Inquiries page's "Last follow-up" cell. Always shown
    *  to the user in IST (see lib/formatters.ts's IST helpers). */
   last_follow_up_dates: string | null;
+  /** What was said on that follow-up, in staff's own words — written in the
+   *  same popover as the date beside it. Staff-only, never scored and never
+   *  embedded (see Backend's CLIENT_MATCH_NEUTRAL_FIELDS); null when nothing
+   *  has been written, which the UI shows as "-". */
+  follow_up_report: string | null;
   purpose: string | null;
   property_type: string | null;
   bhk: string | null;
@@ -499,6 +525,12 @@ export interface PropertyBatchShareResult extends ShareResult {
 export interface PropertyRecord {
   record_id: string;
   source_message_id: string;
+  /** Where this property came from: "whatsapp" (captured by the LLM
+   *  pipeline), "manual" (the Properties page's Add dialog), "excel" (a bulk
+   *  import), or "unknown" for a row stored before this was recorded.
+   *  Read-only — it is not one of the editable content fields, so an Edit
+   *  save can never change it. */
+  source: string;
   property_type: string | null;
   bhk: string | null;
   /** The unit's own number inside its building. The client's two
@@ -708,6 +740,10 @@ export interface LandingLeadRecord {
 export interface BrokerRequirementRecord {
   record_id: string;
   source_message_id: string;
+  /** Where this requirement came from: "whatsapp", "manual", "excel", or
+   *  "unknown" for a row stored before this was recorded. Read-only, exactly
+   *  like PropertyRecord.source. */
+  source: string;
   /** Which of the operator's own linked WhatsApp numbers this requirement
    *  was captured on. Never displayed and never edited — it exists so that
    *  "Send details on WhatsApp" replies FROM the number the requirement
@@ -776,19 +812,6 @@ export interface LoginResult {
   access_token: string;
   token_type: string;
   user: UserSummary;
-}
-
-export interface OwnerVerificationStatus {
-  method: "whatsapp" | "password";
-  available: boolean;
-  reason: "no_whatsapp_connection" | "invalid_owner_phone" | null;
-  phone_hint: string | null;
-}
-
-export interface VerificationCodeResult {
-  status: "sent" | "cooldown" | "unavailable" | "not_configured";
-  retry_after_seconds: number;
-  phone_hint: string | null;
 }
 
 export interface OwnerVerificationGrant {

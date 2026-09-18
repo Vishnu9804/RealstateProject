@@ -80,6 +80,9 @@ def start_agent_in_background() -> None:
 
 
 def get_status() -> dict:
+    # Both from one read — see client_store.get_clients_summary for why the
+    # poll that never stops must not ask the same table twice per tick.
+    clients_version, client_count = client_store.get_clients_summary()
     return {
         "status": whatsapp_connection_manager.get_inquiry_status_summary(),
         "captured_message_count": len(_captured_messages),
@@ -88,14 +91,14 @@ def get_status() -> dict:
         "property_inquiry_count": inquiry_pipeline_service.get_property_inquiry_count(),
         "non_property_message_count": inquiry_pipeline_service.get_non_property_count(),
         "client_database_configured": is_client_database_configured(),
-        "client_count": client_store.get_client_count(),
+        "client_count": client_count,
         # Cheap change signals for the Inquiries page: this status poll
         # already runs every tick, so piggybacking these here means the page
         # can skip re-fetching the (potentially large) clients/leads lists
         # unless one of these actually changed since the last tick — same
         # pattern as WhatsAppDataFetchingService/whatsapp_service.py's
         # properties_version.
-        "clients_version": client_store.get_clients_version(),
+        "clients_version": clients_version,
         "leads_version": lead_store.get_leads_version(),
         # How many identities currently hold a daily-allowance counter —
         # an in-memory number, so this costs the status poll nothing.
@@ -151,7 +154,7 @@ def handle_incoming_message(message: InquiryChatMessage) -> None:
     THE DAILY ALLOWANCE IS CHECKED HERE, and here is the only place it can
     usefully be checked: this is the first line of our own code a message
     reaches. Everything a message costs — the capture list, the per-number
-    buffer and its timer, the Gemini classification call, the client-record
+    buffer and its timer, the GLM classification call, the client-record
     lookups, the outbound reply — happens downstream of this function, so a
     message refused on this line costs a dictionary lookup and nothing else.
     Checking any later would mean paying for the very thing the limit

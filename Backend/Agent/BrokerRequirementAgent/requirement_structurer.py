@@ -80,6 +80,7 @@ from Agent.WhatsAppDataFetchingAgent.price_scales import (
 )
 from Config.settings import get_settings
 from Middleware import step_logger
+from Model.record_source import SOURCE_WHATSAPP
 from Model.BrokerRequirementModel.broker_requirement import StructuredRequirement
 from Model.WhatsAppDataFetchingModel.whatsapp_message import WhatsAppChatMessage
 from Service.LLMUsageService import message_model_service
@@ -710,6 +711,9 @@ def _to_structured_requirement(
     here, exactly as if they had arrived in separate messages."""
     areas = [area.strip() for area in item.preferred_areas if area and area.strip()]
     requirement = StructuredRequirement(
+        # Passed rather than left to the model default, for the same reason
+        # property_structurer._build_property passes it.
+        source=SOURCE_WHATSAPP,
         source_message_id=message.message_id,
         source_connection_id=message.connection_id,
         requirement_type=item.requirement_type,

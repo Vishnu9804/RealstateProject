@@ -102,8 +102,20 @@ def upsert_client(
         # exists to protect. last_follow_up_dates is carried over ALWAYS, the
         # same way the database never writes it from an upsert at all.
         if previous is not None:
-            carried = client_repository.PRESERVED_FIELDS if not update_staff_fields else (client_repository.FOLLOW_UP_FIELD,)
+            carried = (
+                client_repository.PRESERVED_FIELDS
+                if not update_staff_fields
+                else client_repository.FOLLOW_UP_FIELDS
+            )
             updates.update({name: getattr(previous, name) for name in carried})
+        # The in-memory mirror of the database path's write-once `source`
+        # rule, applied through the very same function so the two backends
+        # cannot disagree about where a client came from. `previous` is None
+        # for a brand-new client, which correctly takes the caller's value.
+        updates[client_repository.SOURCE_FIELD] = client_repository.resolve_source(
+            getattr(previous, client_repository.SOURCE_FIELD, None) if previous is not None else None,
+            getattr(record, client_repository.SOURCE_FIELD, None),
+        )
         if update_photo:
             if photo_url:
                 _client_photos[record.phone] = photo_url
@@ -270,6 +282,15 @@ def get_all_clients(limit: int = 100) -> List[ClientRecord]:
     return list(_clients.values())[-limit:]
 
 
+def get_all_client_phones(limit: int = 100) -> List[str]:
+    """The phone numbers get_all_clients would return, without the records —
+    see client_repository.get_all_client_phones for why a caller that only
+    needs the keys should not be handed every client's whole row."""
+    if is_client_database_configured():
+        return client_repository.get_all_client_phones(limit)
+    return [client.phone for client in list(_clients.values())[-limit:]]
+
+
 def get_client_count() -> int:
     if is_client_database_configured():
         return client_repository.get_client_count()
@@ -285,6 +306,26 @@ def get_clients_version() -> str:
         count, latest = client_repository.get_clients_version()
         return f"{count}:{latest.isoformat() if latest else '0'}"
     return f"{len(_clients)}:{_version_counter}"
+
+
+def get_clients_summary() -> Tuple[str, int]:
+    """(version, count) from ONE read.
+
+    The Inquiries status poll needs both on every tick, and asking
+    get_clients_version() and get_client_count() separately ran two
+    aggregate queries over the same table, several times a minute, for the
+    whole time anyone had that page open — against a database billed by
+    compute-time, on the one poll that never stops. The version query
+    already computes the count on its way to the newest updated_at (see
+    client_repository.get_clients_version), so the second query was asking
+    for a number the first one had already produced.
+
+    Both functions above are kept exactly as they are for callers that want
+    only one of the two."""
+    if is_client_database_configured():
+        count, latest = client_repository.get_clients_version()
+        return f"{count}:{latest.isoformat() if latest else '0'}", count
+    return get_clients_version(), len(_clients)
 
 
 # In-memory fallback only — the stand-in for ClientRow.matches_computed_at.
@@ -333,9 +374,18 @@ def assign_agent(phone: str, agent_id: Optional[str]) -> Optional[ClientRecord]:
     return upsert_client(record.model_copy(update={"assigned_agent_id": agent_id}))
 
 
-def set_last_follow_up(phone: str, when: Optional[datetime]) -> Optional[ClientRecord]:
-    """Records when this client was last followed up with — None clears it.
+def set_last_follow_up(
+    phone: str,
+    when: Optional[datetime],
+    report: Optional[str] = None,
+    update_report: bool = False,
+) -> Optional[ClientRecord]:
+    """Records when this client was last followed up with — None clears it —
+    and, when `update_report` is passed, the note staff wrote about it.
     Returns None when there is no client for this number.
+
+    The report is only ever touched when the caller says so: the automatic
+    post-visit stamp below knows nothing about it and must not blank it.
 
     Two callers, and deliberately no others: the automatic post-visit
     follow-up (Service/AgentManagementService/visit_reminder_service.py),
@@ -345,13 +395,16 @@ def set_last_follow_up(phone: str, when: Optional[datetime]) -> Optional[ClientR
     keeping it that way is what stops a save of unrelated details from
     overwriting a stamp (see Database/client_repository.set_last_follow_up)."""
     if is_client_database_configured():
-        return client_repository.set_last_follow_up(phone, when)
+        return client_repository.set_last_follow_up(phone, when, report, update_report)
     record = _clients.get(phone)
     if record is None:
         return None
     global _version_counter
     _version_counter += 1
-    updated = record.model_copy(update={client_repository.FOLLOW_UP_FIELD: when})
+    changes = {client_repository.FOLLOW_UP_FIELD: when}
+    if update_report:
+        changes[client_repository.FOLLOW_UP_REPORT_FIELD] = report
+    updated = record.model_copy(update=changes)
     _clients[phone] = updated
     return updated
 

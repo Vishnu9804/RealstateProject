@@ -51,6 +51,12 @@ EDITABLE_CONTENT_FIELDS = (
 
 _COLUMNS = (
     "source_message_id",
+    # Written on insert from the EmbeddedProperty the caller built and read
+    # back on every load — see PropertyRow.source. Safe to sit here despite
+    # being write-once in spirit: update_property never builds a row from a
+    # whole record, it only writes the keys in EDITABLE_CONTENT_FIELDS
+    # above, and "source" is deliberately not one of them.
+    "source",
     "property_type",
     "bhk",
     "unit_no",

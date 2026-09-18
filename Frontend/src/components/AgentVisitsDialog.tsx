@@ -1,4 +1,5 @@
 import { useEffect, useMemo, useState } from "react";
+import { PROPERTY_FETCH_LIMIT } from "../lib/fetchLimits";
 import { createPortal } from "react-dom";
 import { agentApi } from "../api/agentApi";
 import { propertyApi } from "../api/propertyApi";
@@ -82,7 +83,7 @@ export default function AgentVisitsDialog({
   useEffect(() => {
     let cancelled = false;
     propertyApi
-      .getProperties(500)
+      .getProperties(PROPERTY_FETCH_LIMIT)
       .then((data) => {
         if (!cancelled) setCachedPropertyList(data, null);
       })

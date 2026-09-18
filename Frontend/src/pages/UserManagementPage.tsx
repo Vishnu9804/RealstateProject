@@ -1,6 +1,6 @@
 import { useCallback, useEffect, useState } from "react";
 import { authApi } from "../api/authApi";
-import type { OwnerVerificationStatus, UserSummary } from "../api/types";
+import type { UserSummary } from "../api/types";
 import { plainError } from "../lib/apiError";
 import { relativeTime } from "../lib/formatters";
 import ChangePasswordDialog from "../components/ChangePasswordDialog";
@@ -11,41 +11,10 @@ import { Avatar, Button, EmptyState, Note, Panel, SkeletonRows } from "../compon
 import { IconEdit, IconLock, IconPlus, IconTrash, IconUserCheck, IconUsers } from "../components/ui/Icons";
 import { useAuth } from "../state/AuthProvider";
 
-function VerificationNote({ status }: { status: OwnerVerificationStatus | null }) {
-  if (!status) return null;
-  if (status.method === "password") {
-    return (
-      <Note tone="warn">
-        <strong>Owner phone verification is off.</strong> Adding or changing a login asks for your password instead of a
-        WhatsApp code, and "Forgot password" is unavailable. Set <code>ADMIN_PHONE</code> in <code>Backend/.env</code> and
-        restart the backend to turn it on.
-      </Note>
-    );
-  }
-  if (!status.available) {
-    return (
-      <Note tone="bad">
-        <strong>Verification codes can't be sent right now.</strong>{" "}
-        {status.reason === "invalid_owner_phone"
-          ? "ADMIN_PHONE in Backend/.env isn't a valid number."
-          : "No WhatsApp number is connected — link one on the Connection page."}{" "}
-        Adding or changing logins waits until then; removing access still works.
-      </Note>
-    );
-  }
-  return (
-    <Note tone="ok">
-      Adding or changing a login is confirmed with a code sent to the owner's WhatsApp ending in{" "}
-      <strong>{status.phone_hint?.slice(-2)}</strong>.
-    </Note>
-  );
-}
-
 export default function UserManagementPage() {
   const auth = useAuth();
   const toast = useToast();
   const [employees, setEmployees] = useState<UserSummary[] | null>(null);
-  const [verification, setVerification] = useState<OwnerVerificationStatus | null>(null);
   const [error, setError] = useState<string | null>(null);
   const [showAdd, setShowAdd] = useState(false);
   const [editing, setEditing] = useState<UserSummary | null>(null);
@@ -55,9 +24,8 @@ export default function UserManagementPage() {
 
   const load = useCallback(async () => {
     try {
-      const [list, status] = await Promise.all([authApi.listEmployees(), authApi.getOwnerVerification()]);
+      const list = await authApi.listEmployees();
       setEmployees(list);
-      setVerification(status);
       setError(null);
     } catch (err) {
       setError(plainError(err));
@@ -108,7 +76,7 @@ export default function UserManagementPage() {
         </div>
       </header>
 
-      <VerificationNote status={verification} />
+      <Note tone="ok">Adding or changing a login asks you to confirm your own admin password first.</Note>
 
       {error && employees === null ? (
         <Note tone="bad">{error}</Note>

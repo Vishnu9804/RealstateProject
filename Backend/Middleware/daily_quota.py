@@ -3,7 +3,7 @@
 THE PROBLEM THIS SOLVES. Everything else in this project is bounded by
 something: a poll interval, a batch size, a database row. Inbound messages
 are not. One person with a phone can send a thousand WhatsApp messages in a
-minute, and before this every one of them was buffered, handed to Gemini,
+minute, and before this every one of them was buffered, handed to the LLM,
 and answered — a thousand LLM calls, a thousand database lookups and a
 thousand outbound sends, all paid for by the business being messaged. The
 same is true of Instagram comments and shared reels. No amount of

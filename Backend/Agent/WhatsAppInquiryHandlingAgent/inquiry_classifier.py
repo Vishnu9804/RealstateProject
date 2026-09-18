@@ -6,40 +6,46 @@ greeting, "happy birthday", a wrong number, etc.).
 Genuinely agentic (LLM-driven) code — belongs in Agent/, not Service/
 (mirrors Agent/WhatsAppDataFetchingAgent/property_structurer.py).
 
+Runs on GLM-4.7-FlashX via Z.ai (Config/settings.py's zai_inquiry_model),
+the same account/transport the property and requirement structuring stages
+use (Agent/WhatsAppDataFetchingAgent/glm_client.py) — previously ran on
+Gemini, on its own separate account. A much simpler fixed-shape judgment
+(one bool + a short reason) than property/requirement extraction, so
+FlashX's speed and lower cost apply cleanly here. Because this now shares
+Z.ai's account-wide concurrency allowance, every call goes through the same
+process-wide gate (glm_gate.py) the other two stages use — necessary now,
+not merely inherited, since two simultaneous Z.ai requests are exactly what
+that gate exists to prevent.
+
 Token-efficiency (requirement #4 from the feature spec): every batch is
 classified in exactly ONE request containing only that batch's own text —
 never resending earlier batches/history for the same number, never
 including anything from another client's conversation, and asking for a
 minimal structured-output shape (a bool + a short reason, see
 inquiry_classification_schema.py) instead of free-form prose.
+
+Z.ai's API only offers `response_format: json_object` (a loose "valid JSON"
+guarantee, not a bound Pydantic schema, unlike Gemini's native
+response_schema), so the exact output shape is spelled out in the prompt
+instead and validated manually on the way back in — the same pattern
+property_structurer.py and requirement_structurer.py already use.
 """
 
 from __future__ import annotations
 
-from typing import List, Optional
+import json
+import re
+from typing import List
 
-from google import genai
-from google.genai import types
+from pydantic import ValidationError
 
+from Agent.WhatsAppDataFetchingAgent import glm_client
 from Agent.WhatsAppInquiryHandlingAgent.inquiry_classification_schema import InquiryClassification
 from Config.settings import get_settings
 from Middleware import step_logger
 from Model.WhatsAppInquiryHandlingModel.inquiry_message import InquiryChatMessage
-from Service.LLMUsageService import llm_usage_service
 
-_client: Optional[genai.Client] = None
-
-
-def _get_client() -> genai.Client:
-    global _client
-    if _client is None:
-        api_key = get_settings().gemini_api_key
-        if not api_key:
-            raise RuntimeError(
-                "GEMINI_API_KEY is not set — add it to Backend/.env before inquiry classification can run."
-            )
-        _client = genai.Client(api_key=api_key)
-    return _client
+_CODE_FENCE_RE = re.compile(r"^```(?:json)?\s*|\s*```$", re.IGNORECASE)
 
 
 def classify_batch(messages: List[InquiryChatMessage]) -> InquiryClassification:
@@ -53,43 +59,29 @@ def classify_batch(messages: List[InquiryChatMessage]) -> InquiryClassification:
     if not combined_text:
         return InquiryClassification(is_property_related=False, reason="empty batch")
 
-    model = get_settings().gemini_model
-    try:
-        client = _get_client()
-        response = client.models.generate_content(
-            model=model,
-            contents=_build_prompt(combined_text),
-            config=types.GenerateContentConfig(
-                response_mime_type="application/json",
-                response_schema=InquiryClassification,
-                temperature=0.0,
-            ),
-        )
-    except Exception as exc:  # noqa: BLE001
-        step_logger.error(f"Gemini inquiry-classification request failed: {exc!r}")
-        return InquiryClassification(is_property_related=False, reason=f"classification request failed: {exc!r}")
+    if not get_settings().zai_api_key:
+        step_logger.error("ZAI_API_KEY is not set — add it to Backend/.env before inquiry classification can run.")
+        return InquiryClassification(is_property_related=False, reason="ZAI_API_KEY not configured")
 
-    _record_usage(model, response)
-    return _parse_classification(response)
+    request_body = glm_client.build_request_body(_build_system_prompt(), _build_user_prompt(combined_text), max_tokens=300)
+    request_body["model"] = get_settings().zai_inquiry_model
 
+    failure: dict = {}
+    content = glm_client.post_with_retries(
+        request_body,
+        "an inquiry classification batch",
+        site="intent",
+        failure=failure,
+    )
+    if content is None:
+        reason = failure.get("reason") or "classification request failed"
+        step_logger.error(f"GLM inquiry-classification request failed: {reason}")
+        return InquiryClassification(is_property_related=False, reason=reason)
 
-def _record_usage(model: str, response) -> None:
-    """Best-effort: feeds this call's token counts to the Dashboard's LLM
-    Cost tab (Service/LLMUsageService/llm_usage_service.py). Never raises —
-    a tracking failure must never affect a real classification. The
-    google-genai SDK exposes this directly on the response as
-    `usage_metadata` (no request-shape change needed, unlike the streamed
-    GLM call sites)."""
-    try:
-        usage = getattr(response, "usage_metadata", None)
-        input_tokens = int(getattr(usage, "prompt_token_count", 0) or 0) if usage is not None else 0
-        output_tokens = int(getattr(usage, "candidates_token_count", 0) or 0) if usage is not None else 0
-        llm_usage_service.observe_call("intent", model, input_tokens, output_tokens)
-    except Exception as exc:  # noqa: BLE001
-        step_logger.warn(f"Could not record LLM usage for an inquiry-classification call: {exc!r}")
+    return _parse_classification(content)
 
 
-def _build_prompt(combined_text: str) -> str:
+def _build_system_prompt() -> str:
     return (
         "You are classifying a WhatsApp message (or a short burst of messages sent "
         "seconds apart by the same person) received by a real estate agency.\n\n"
@@ -98,23 +90,28 @@ def _build_prompt(combined_text: str) -> str:
         "for a genuine property inquiry. Answer false for greetings (\"hello\", \"hi\"), "
         "small talk, wrong numbers, spam, birthday/festival wishes, or anything else "
         "unrelated to property.\n\n"
-        f'Message(s):\n"""\n{combined_text}\n"""'
+        "Reply with ONLY a single JSON object, no other text and no markdown code "
+        'fence, shaped exactly like: {"is_property_related": true or false, "reason": '
+        '"one short phrase explaining the decision, e.g. \\"greeting only\\" or '
+        '\\"asks for a rented villa\\""}. "reason" may be null if there is nothing worth '
+        "noting."
     )
 
 
-def _parse_classification(response) -> InquiryClassification:
-    parsed = getattr(response, "parsed", None)
-    if isinstance(parsed, InquiryClassification):
-        return parsed
+def _build_user_prompt(combined_text: str) -> str:
+    return f'Message(s):\n"""\n{combined_text}\n"""'
 
-    # Fall back to manual parsing if the SDK couldn't auto-parse (e.g. the
-    # model's output didn't quite match the schema).
-    raw_text = getattr(response, "text", None)
-    if raw_text:
-        try:
-            return InquiryClassification.model_validate_json(raw_text)
-        except Exception as exc:  # noqa: BLE001
-            step_logger.error(f"Could not parse Gemini classification response: {exc!r}")
 
-    step_logger.error("Gemini returned no usable content for an inquiry classification request.")
-    return InquiryClassification(is_property_related=False, reason="unparseable model response")
+def _parse_classification(content: str) -> InquiryClassification:
+    cleaned = _CODE_FENCE_RE.sub("", content.strip()).strip()
+    try:
+        raw = json.loads(cleaned)
+    except json.JSONDecodeError as exc:
+        step_logger.error(f"GLM inquiry-classification response was not valid JSON: {exc}")
+        return InquiryClassification(is_property_related=False, reason="unparseable model response")
+
+    try:
+        return InquiryClassification.model_validate(raw)
+    except ValidationError as exc:
+        step_logger.error(f"GLM inquiry-classification response didn't match the expected schema: {exc}")
+        return InquiryClassification(is_property_related=False, reason="unparseable model response")

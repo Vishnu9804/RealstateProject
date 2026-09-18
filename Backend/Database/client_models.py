@@ -51,6 +51,18 @@ class ClientRow(ClientBase):
     # re-triggering the welcome flow.
     status: Mapped[str] = mapped_column(String, nullable=False, default="pending_registration")
 
+    # WHERE this client first reached us — see Model/record_source.py and
+    # ClientRecord.source. NOT NULL with a server default of 'unknown' so a
+    # row written before this column existed never reads back as NULL
+    # (ClientRecord.source is a required str) and is honestly labelled
+    # rather than guessed at.
+    #
+    # WRITE-ONCE, unlike every other column in client_repository's _COLUMNS:
+    # it is deliberately kept OUT of that list and written by hand in
+    # upsert_client, which only ever fills it in when the stored value is
+    # still 'unknown'. See ClientRecord.source for why first-write wins.
+    source: Mapped[str] = mapped_column(String, nullable=False, default="unknown", server_default="unknown")
+
     # --- client info ---
     name: Mapped[Optional[str]] = mapped_column(String, nullable=True)
     email: Mapped[Optional[str]] = mapped_column(String, nullable=True)
@@ -71,6 +83,20 @@ class ClientRow(ClientBase):
     # bank, amount, "cash buyer", anything. Free text, same staff-only
     # treatment as current_address above.
     about_loan: Mapped[Optional[str]] = mapped_column(Text, nullable=True)
+    # Extra numbers for this client, beside the WhatsApp number that is
+    # their primary key — a landline, a spouse's number, a second mobile.
+    # Free text, NOT verified and NOT normalized: unlike `phone`, nothing
+    # is ever sent to or matched against one of these, so there is nothing
+    # for a canonical E.164 form to protect here. Added and edited only
+    # from the Inquiries page's own Add/Edit dialog — same staff-only
+    # treatment as current_address and about_loan above, for the same
+    # reason (kept out of _COLUMNS, written only when
+    # update_staff_fields=True).
+    additional_phones: Mapped[Optional[list]] = mapped_column(JSON(none_as_null=True), nullable=True)
+    # Free-form staff notes — a catch-all, unlike current_address/about_loan
+    # which are about one specific thing each. Same staff-only treatment:
+    # kept out of _COLUMNS, written only when update_staff_fields=True.
+    notes: Mapped[Optional[str]] = mapped_column(Text, nullable=True)
     # When this client was last followed up with.
     #
     # Stamped automatically the moment the post-site-visit follow-up WhatsApp
@@ -86,6 +112,13 @@ class ClientRow(ClientBase):
     # which touches this column ALONE. So an Edit dialog save can never write
     # back a stale copy over a stamp that landed while the dialog was open.
     last_follow_up_dates: Mapped[Optional[datetime]] = mapped_column(DateTime(timezone=True), nullable=True)
+    # What was said on that follow-up, in staff's own words — written beside
+    # the stamp above, by the same single writer, and kept out of _COLUMNS
+    # for the same reason. Free text and staff-only: the client never sees
+    # it and no public form can write it. Not a requirement, so it is never
+    # embedded or scored (see Service/ClientPropertyMatchingService/
+    # matching_service.py's CLIENT_MATCH_NEUTRAL_FIELDS).
+    follow_up_report: Mapped[Optional[str]] = mapped_column(Text, nullable=True)
 
     # --- property requirements ---
     purpose: Mapped[Optional[str]] = mapped_column(String, nullable=True)  # e.g. "buy", "rent", "sell"

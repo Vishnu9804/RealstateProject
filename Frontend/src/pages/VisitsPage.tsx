@@ -1,4 +1,8 @@
 import { Fragment, useCallback, useEffect, useMemo, useRef, useState } from "react";
+import {
+  CLIENT_FETCH_LIMIT as SHARED_CLIENT_FETCH_LIMIT,
+  PROPERTY_FETCH_LIMIT,
+} from "../lib/fetchLimits";
 import { createPortal } from "react-dom";
 import { useNavigate } from "react-router-dom";
 import { agentApi } from "../api/agentApi";
@@ -70,7 +74,7 @@ import {
 type Tab = "assigned" | "completed";
 
 const REFRESH_INTERVAL_MS = 15_000;
-const CLIENT_FETCH_LIMIT = 500;
+const CLIENT_FETCH_LIMIT = SHARED_CLIENT_FETCH_LIMIT;
 
 /** One visit, active or completed, flattened out of its agent. */
 interface VisitEntry {
@@ -236,11 +240,20 @@ function fallbackClient(entry: VisitEntry): InquiryClientRecord {
   return {
     phone: entry.clientPhone,
     status: "",
+    // This record is reconstructed from a visit, not read from a client
+    // row, so where that client originally came from genuinely is not known
+    // here — "unknown" is the value the backend itself uses for exactly that
+    // (see Backend/Model/record_source.py's SOURCE_UNKNOWN), rather than
+    // guessing at one that would read as fact.
+    source: "unknown",
     name: entry.clientName,
     email: null,
     current_address: null,
     about_loan: null,
+    notes: null,
+    additional_phones: null,
     last_follow_up_dates: null,
+    follow_up_report: null,
     purpose: null,
     property_type: null,
     bhk: null,
@@ -318,7 +331,7 @@ export default function VisitsPage() {
   useEffect(() => {
     let cancelled = false;
     propertyApi
-      .getProperties(500)
+      .getProperties(PROPERTY_FETCH_LIMIT)
       .then((data) => {
         if (!cancelled) setCachedPropertyList(data, null);
       })

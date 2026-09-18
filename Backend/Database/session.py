@@ -624,6 +624,75 @@ def init_db() -> None:
                 "ON landing_page_leads (phone_e164, property_record_id)"
             )
         )
+        # WHERE a stored record came from — see Model/record_source.py, and
+        # PropertyRow.source / BrokerRequirementRow.source / ClientRow.source.
+        #
+        # NOT NULL DEFAULT 'unknown' rather than nullable, because the three
+        # pydantic models that mirror these tables all declare `source` as a
+        # required str: a NULL here would fail validation on the very first
+        # read of a pre-existing row. The default makes every such row
+        # readable immediately, and the three backfills below then replace
+        # 'unknown' with the REAL origin wherever the row itself still proves
+        # it — no guessing, and nothing is invented for the rows that don't.
+        connection.execute(
+            text("ALTER TABLE properties ADD COLUMN IF NOT EXISTS source VARCHAR NOT NULL DEFAULT 'unknown'")
+        )
+        connection.execute(
+            text(
+                "ALTER TABLE broker_requirements ADD COLUMN IF NOT EXISTS "
+                "source VARCHAR NOT NULL DEFAULT 'unknown'"
+            )
+        )
+        connection.execute(
+            text("ALTER TABLE clients ADD COLUMN IF NOT EXISTS source VARCHAR NOT NULL DEFAULT 'unknown'")
+        )
+        # A property or requirement entered by hand has always been given a
+        # synthetic source_message_id of "manual-{uuid4}" (see
+        # property_pipeline_service.create_property and
+        # requirement_pipeline_service.create_requirement); everything else
+        # in either table was captured from a real WhatsApp message id. So
+        # the origin of every pre-existing row is already recorded on the row
+        # — these two statements only make it explicit.
+        #
+        # LEFT(...) rather than LIKE 'manual-%', because a literal % inside a
+        # text() statement is one of the few things whose meaning can depend
+        # on how the driver is handed parameters — this migration is not the
+        # place to find that out. It says exactly the same thing.
+        #
+        # Both are gated on source = 'unknown', which is what makes them
+        # idempotent AND safe: after the first run nothing matches, so a
+        # value the application has since written can never be overwritten by
+        # a later start-up.
+        connection.execute(
+            text(
+                """
+                UPDATE properties
+                SET source = CASE WHEN LEFT(source_message_id, 7) = 'manual-' THEN 'manual' ELSE 'whatsapp' END
+                WHERE source = 'unknown'
+                """
+            )
+        )
+        connection.execute(
+            text(
+                """
+                UPDATE broker_requirements
+                SET source = CASE WHEN LEFT(source_message_id, 7) = 'manual-' THEN 'manual' ELSE 'whatsapp' END
+                WHERE source = 'unknown'
+                """
+            )
+        )
+        # Clients are the one table whose past rows do NOT all prove their
+        # own origin: a "registered" client looks identical whether they
+        # submitted the requirements form from a WhatsApp link, an Instagram
+        # DM link or the public website form. Exactly one case IS provable —
+        # status 'website_lead' is written by nothing but a landing-site
+        # property enquiry (see landing_page_service) — so that one is
+        # backfilled and the rest are deliberately left as 'unknown' rather
+        # than guessed at. Every client written from now on carries a real
+        # value, set by whichever path created them.
+        connection.execute(
+            text("UPDATE clients SET source = 'website_enquiry' WHERE source = 'unknown' AND status = 'website_lead'")
+        )
         # One-time backfill for rows that already had a reel link before this
         # column existed. qualified_at is the closest thing already recorded
         # ("when this property most recently gained a photo or a reel"), with
@@ -753,6 +822,18 @@ def init_db() -> None:
         connection.execute(text("ALTER TABLE clients ADD COLUMN IF NOT EXISTS current_address TEXT"))
         connection.execute(text("ALTER TABLE clients ADD COLUMN IF NOT EXISTS about_loan TEXT"))
         connection.execute(text("ALTER TABLE clients ADD COLUMN IF NOT EXISTS last_follow_up_dates TIMESTAMPTZ"))
+        # What was said on that follow-up, in staff's own words — a free-text
+        # field added beside the stamp above. Nullable with no default, so
+        # catalog-only with nothing to backfill: a client stored before this
+        # column existed reads as "no report yet".
+        connection.execute(text("ALTER TABLE clients ADD COLUMN IF NOT EXISTS follow_up_report TEXT"))
+        # Extra, unverified numbers for a client, beside the WhatsApp number
+        # that is their primary key — a JSON array of strings, same shape and
+        # same staff-only treatment as property_sizes above.
+        connection.execute(text("ALTER TABLE clients ADD COLUMN IF NOT EXISTS additional_phones JSON"))
+        # A free-form staff notes field — a catch-all, unlike the specific
+        # fields above. Same nullable, catalog-only, nothing-to-backfill shape.
+        connection.execute(text("ALTER TABLE clients ADD COLUMN IF NOT EXISTS notes TEXT"))
 
     _retire_extra_requirement_columns(engine)
 

@@ -4,7 +4,7 @@ from pydantic import BaseModel, Field
 
 
 class InquiryClassification(BaseModel):
-    """Structured-output shape Gemini returns when classifying one user's
+    """Structured-output shape GLM returns when classifying one user's
     buffered message batch (Agent/WhatsAppInquiryHandlingAgent/inquiry_classifier.py).
 
     Deliberately just a bool + a short reason — nothing here asks the model

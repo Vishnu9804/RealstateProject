@@ -10,7 +10,7 @@ import { fileToClientPhoto } from "../lib/imageProcessing";
 import { FURNISHING_OPTIONS } from "./PropertyFormDialog";
 import { useToast } from "./ui/Toast";
 import { Button, Note } from "./ui/Primitives";
-import { IconAlert, IconCheck, IconImage, IconTrash, IconX } from "./ui/Icons";
+import { IconAlert, IconCheck, IconImage, IconPlus, IconTrash, IconX } from "./ui/Icons";
 
 /**
  * The Inquiries page's own Add / Edit client dialog — one tall,
@@ -102,6 +102,15 @@ function sizesToSend(form: FormState): Record<string, string> | null {
   return Object.keys(sizes).length > 0 ? sizes : null;
 }
 
+/** Trimmed, blanks dropped, in the order typed — the same "empty means
+ *  cleared" shape sizesToSend uses. De-duplication and the count/length caps
+ *  are the backend's own job (manual_client_service._clean_additional_phones);
+ *  this only avoids sending obviously-empty rows left by a removed box. */
+function phonesToSend(phones: string[]): string[] | null {
+  const cleaned = phones.map((phone) => phone.trim()).filter(Boolean);
+  return cleaned.length > 0 ? cleaned : null;
+}
+
 const EMAIL_PATTERN = /^\S+@\S+\.\S+$/;
 
 interface FormState {
@@ -110,6 +119,12 @@ interface FormState {
   email: string;
   current_address: string;
   about_loan: string;
+  /** Free-form catch-all notes — same staff-only rule as the two above. */
+  notes: string;
+  /** Extra numbers besides `phone` — never verified, just stored and shown
+   *  as typed. Kept as a plain list of boxes (not comma-separated text) so
+   *  a number containing a comma or a name note isn't mistaken for two. */
+  additional_phones: string[];
   purpose: string;
   /** Every picked type, comma-separated ("Flat, Bungalow") — the shape the
    *  backend stores and the matcher reads one type at a time. */
@@ -133,6 +148,7 @@ type TextKey =
   | "email"
   | "current_address"
   | "about_loan"
+  | "notes"
   | "purpose"
   | "property_type"
   | "bhk"
@@ -144,6 +160,7 @@ const TEXT_KEYS: TextKey[] = [
   "email",
   "current_address",
   "about_loan",
+  "notes",
   "purpose",
   "property_type",
   "bhk",
@@ -158,6 +175,8 @@ const BLANK_FORM: FormState = {
   email: "",
   current_address: "",
   about_loan: "",
+  notes: "",
+  additional_phones: [],
   purpose: "",
   property_type: "",
   property_sizes: {},
@@ -188,6 +207,8 @@ function toFormState(client: InquiryClientRecord): FormState {
     email: client.email ?? "",
     current_address: client.current_address ?? "",
     about_loan: client.about_loan ?? "",
+    notes: client.notes ?? "",
+    additional_phones: client.additional_phones ?? [],
     purpose: client.purpose ?? "",
     property_type: types.join(", "),
     property_sizes: matchSizes(types, client.property_sizes),
@@ -275,6 +296,14 @@ function buildBody(
   const sizes = sizesToSend(form);
   if (mode === "add" ? sizes !== null : JSON.stringify(sizes) !== JSON.stringify(sizesToSend(initial))) {
     body.property_sizes = sizes;
+  }
+
+  // Same idea for the extra phone boxes: compared by what would actually be
+  // SENT, so an empty box left by "+ Add" and never filled in is not a
+  // change worth saving.
+  const phones = phonesToSend(form.additional_phones);
+  if (mode === "add" ? phones !== null : JSON.stringify(phones) !== JSON.stringify(phonesToSend(initial.additional_phones))) {
+    body.additional_phones = phones;
   }
   return { body, error: null };
 }
@@ -395,6 +424,22 @@ export default function ClientFormDialog({
 
   function set<K extends keyof FormState>(key: K, value: FormState[K]) {
     setForm((prev) => ({ ...prev, [key]: value }));
+  }
+
+  /** Adds one empty extra-phone box, focused via the "+" button. */
+  function addPhone() {
+    setForm((prev) => ({ ...prev, additional_phones: [...prev.additional_phones, ""] }));
+  }
+
+  function setPhoneAt(index: number, value: string) {
+    setForm((prev) => ({
+      ...prev,
+      additional_phones: prev.additional_phones.map((phone, i) => (i === index ? value : phone)),
+    }));
+  }
+
+  function removePhoneAt(index: number) {
+    setForm((prev) => ({ ...prev, additional_phones: prev.additional_phones.filter((_, i) => i !== index) }));
   }
 
   /** Ticks or unticks a type, keeping the order they were picked in. The
@@ -631,6 +676,43 @@ export default function ClientFormDialog({
               />
             </Field>
 
+            <Field
+              label="Other numbers"
+              hint="Not verified — a landline, a spouse's number, anything else worth having on file."
+            >
+              <div className="stack stack-2">
+                {form.additional_phones.map((phone, index) => (
+                  <div className="row-flex" style={{ gap: 8, flexWrap: "nowrap" }} key={index}>
+                    <input
+                      className="input"
+                      style={{ flex: 1 }}
+                      type="tel"
+                      inputMode="tel"
+                      autoComplete="off"
+                      autoFocus
+                      value={phone}
+                      onChange={(event) => setPhoneAt(index, event.target.value)}
+                      placeholder="e.g. 98765 43210"
+                      disabled={saving}
+                      maxLength={32}
+                      aria-label={`Other number ${index + 1}`}
+                    />
+                    <Button
+                      variant="ghost"
+                      size="sm"
+                      icon={<IconTrash size={14} />}
+                      onClick={() => removePhoneAt(index)}
+                      disabled={saving}
+                      aria-label={`Remove other number ${index + 1}`}
+                    />
+                  </div>
+                ))}
+                <Button variant="ghost" size="sm" icon={<IconPlus size={14} />} onClick={addPhone} disabled={saving}>
+                  Add a number
+                </Button>
+              </div>
+            </Field>
+
             <Field label="Name" htmlFor="client-form-name">
               <input
                 id="client-form-name"
@@ -683,6 +765,19 @@ export default function ClientFormDialog({
                 placeholder="e.g. HDFC pre-approved up to 60L"
                 disabled={saving}
                 maxLength={500}
+              />
+            </Field>
+
+            <Field label="Notes" htmlFor="client-form-notes-field" hint="Optional — anything else worth keeping on file about this client.">
+              <textarea
+                id="client-form-notes-field"
+                className="textarea"
+                rows={3}
+                value={form.notes}
+                onChange={(event) => set("notes", event.target.value)}
+                placeholder="e.g. Prefers evening calls, referred by Mehta Realty…"
+                disabled={saving}
+                maxLength={2000}
               />
             </Field>
 

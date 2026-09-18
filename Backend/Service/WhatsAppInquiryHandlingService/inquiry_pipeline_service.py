@@ -74,7 +74,7 @@ _WELCOME_TEXT_TEMPLATE = (
 def handle_batch_ready(phone: str, messages: List[InquiryChatMessage]) -> None:
     """Called by InquiryBufferService whenever one phone number's batch is
     flushed. Already runs on its own thread (see inquiry_buffer_service.py),
-    so the blocking Gemini/WhatsApp-send calls here never stall message
+    so the blocking GLM/WhatsApp-send calls here never stall message
     capture or any other user's buffer/timer."""
     global _property_inquiry_count, _non_property_count
 

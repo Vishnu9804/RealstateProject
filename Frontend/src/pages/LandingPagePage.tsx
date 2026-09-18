@@ -1,4 +1,5 @@
 import { useCallback, useEffect, useMemo, useRef, useState } from "react";
+import { PROPERTY_FETCH_LIMIT } from "../lib/fetchLimits";
 import { propertyApi } from "../api/propertyApi";
 import type { PropertyRecord } from "../api/types";
 import { useAppStatus } from "../state/StatusProvider";
@@ -46,7 +47,7 @@ import { IconAlert, IconCheck, IconImage, IconInbox, IconInstagram, IconRefresh 
  * purpose, so switching between the two never feels like a different tool.
  */
 
-const FETCH_LIMIT = 500;
+const FETCH_LIMIT = PROPERTY_FETCH_LIMIT;
 const PAGE_SIZE = 20;
 
 type PageTab = "ready" | "live";

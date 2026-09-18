@@ -12,7 +12,7 @@ see Database/landing_page_models.py for why.
 from __future__ import annotations
 
 from datetime import datetime
-from typing import List, Optional, Tuple
+from typing import Collection, Dict, List, Optional, Tuple
 
 from sqlalchemy import func, literal, select, update
 
@@ -115,6 +115,44 @@ def get_property_ids_for_phone(phone_e164: str, limit: int) -> List[str]:
                 seen.add(record_id)
                 ids.append(record_id)
     return ids
+
+
+def get_property_ids_by_phones(phone_e164s: Collection[str], limit: int) -> Dict[str, List[str]]:
+    """The bulk counterpart of get_property_ids_for_phone above: phone ->
+    the distinct property ids that number enquired about, newest first, for
+    every one of these numbers in ONE indexed query rather than one query
+    per number.
+
+    `limit` bounds the rows READ per number exactly as the single-phone
+    version does, applied here in Python over a query already restricted to
+    these numbers — the alternative (a window function per phone) would buy
+    nothing at this size and would not be expressible against the in-memory
+    fallback this mirrors. A number with no enquiry is absent from the
+    result, which the caller reads as an empty list."""
+    phones = list({phone for phone in phone_e164s if phone})
+    if not phones:
+        return {}
+    stmt = (
+        select(LandingLeadRow.phone_e164, LandingLeadRow.property_record_id)
+        .where(
+            LandingLeadRow.phone_e164.in_(phones),
+            LandingLeadRow.property_record_id.is_not(None),
+        )
+        .order_by(LandingLeadRow.created_at.desc())
+    )
+    grouped: Dict[str, List[str]] = {}
+    seen: Dict[str, set] = {}
+    with get_session() as session:
+        for phone, record_id in session.execute(stmt).all():
+            ids = grouped.setdefault(phone, [])
+            if len(ids) >= limit:
+                continue
+            already = seen.setdefault(phone, set())
+            if record_id in already:
+                continue
+            already.add(record_id)
+            ids.append(record_id)
+    return grouped
 
 
 def get_lead_name(phone_e164: str) -> Optional[str]:

@@ -3,17 +3,47 @@ structuring stage, and eventually the "Excel-like" dashboard data. Thin by
 design; state lives in Service/WhatsAppDataFetchingService/property_pipeline_service.py.
 """
 
-from typing import Any, List, Literal, Optional
+import threading
+from typing import Any, Dict, List, Literal, Optional
 
 from fastapi import APIRouter, Depends, HTTPException, Request, Response
-from pydantic import BaseModel, Field
+from pydantic import BaseModel, Field, TypeAdapter
 
 from Middleware import http_cache
 from Model.WhatsAppDataFetchingModel.property_record import PropertyRecord
 from Service.AuthManagementService.auth_dependencies import require_admin
-from Service.WhatsAppDataFetchingService import property_pipeline_service
+from Service.WhatsAppDataFetchingService import display_settings_service, property_pipeline_service
 
 router = APIRouter(prefix="/properties", tags=["properties"])
+
+# The ceiling GET /properties will serve in one response. Deliberately the
+# same number as the in-memory snapshot's own capacity (see
+# Service/WhatsAppDataFetchingService/property_snapshot.py's _SNAPSHOT_LIMIT
+# and match_candidates.MAX_PROPERTIES) — asking for more than the snapshot
+# holds cannot return more, so clamping here makes the two agree instead of
+# letting a caller believe it asked for something it cannot get.
+LIST_MAX_LIMIT = 5000
+
+# Serialises a whole page of properties in one go, producing byte-for-byte
+# what FastAPI's own response_model path produces for this route.
+_LIST_ADAPTER = TypeAdapter(List[PropertyRecord])
+
+# The rendered JSON of the property list, keyed by the ETag that identifies
+# it — i.e. by (limit, property version, time-format setting). The list is
+# identical for every open tab and every logged-in user, it changes only
+# when a property changes, and building it means serialising every held
+# property. Holding the finished bytes means the second tab, the page
+# revisit and the browser that dropped its cache all cost a memcpy instead
+# of a full re-serialisation.
+#
+# Bounded to a couple of entries because a new ETag makes every older entry
+# dead on arrival — this is a "the answer I just built" cache, not a
+# history. Keyed by ETag rather than cleared on write so there is no
+# invalidation to get wrong: an entry for a superseded version can never be
+# handed out, because nothing will ever ask for that key again.
+_LIST_BODY_MAX_ENTRIES = 3
+_list_bodies: Dict[str, bytes] = {}
+_list_bodies_lock = threading.Lock()
 
 
 class PropertyContentFields(BaseModel):
@@ -81,15 +111,63 @@ class PropertyUpdateRequest(PropertyContentFields):
 
 
 @router.get("", response_model=list[PropertyRecord])
-def get_properties(request: Request, response: Response, limit: int = 100) -> Any:
+def get_properties(request: Request, limit: int = 100) -> Any:
     """Conditional (see Middleware/http_cache.py): a browser that already
     holds the current list — a reload, a second tab, a page revisit — gets a
     bodyless 304 instead of the whole list again. The version it is checked
     against comes from memory, so proving nothing changed costs no database
-    work either."""
-    etag = http_cache.build_etag("properties", limit, property_pipeline_service.get_properties_version())
-    unchanged = http_cache.conditional(request, response, etag)
-    return unchanged if unchanged is not None else property_pipeline_service.get_properties(limit=limit)
+    work either.
+
+    `limit` is clamped to LIST_MAX_LIMIT above rather than trusted: this is
+    the endpoint every list page polls, and an unbounded number here would
+    let one request ask this process to serialise anything at all.
+
+    The time-format setting is part of the validator because it is part of
+    the answer — every row carries an already-formatted timestamp (see
+    property_pipeline_service._to_record), so flipping 12h/24h changes this
+    response without changing a single property. Leaving it out pinned the
+    old formatting in every open browser until something else happened to
+    change a property.
+
+    Returns the rendered bytes directly, from the cache above, instead of
+    handing FastAPI a list of models to re-validate and re-serialise on
+    every request. response_model is kept for the API schema; a route that
+    returns a Response hands it straight to the client, which is the same
+    thing the 304 path here has always done."""
+    limit = max(1, min(limit, LIST_MAX_LIMIT))
+    etag = http_cache.build_etag(
+        "properties",
+        limit,
+        property_pipeline_service.get_properties_version(),
+        display_settings_service.get_use_24_hour_format(),
+    )
+    if http_cache.is_unchanged(request, etag):
+        return http_cache.not_modified(etag)
+    body = _list_body(etag, limit)
+    rendered = Response(content=body, media_type="application/json")
+    http_cache.mark(rendered, etag)
+    return rendered
+
+
+def _list_body(etag: str, limit: int) -> bytes:
+    """The rendered list for this exact version, built at most once.
+
+    Two requests arriving together on a version nobody has rendered yet will
+    both build it — deliberately, rather than holding the lock across the
+    serialisation and making every other request queue behind it. Building
+    it twice costs a little CPU once; serialising under a global lock would
+    serialise the whole endpoint."""
+    cached = _list_bodies.get(etag)
+    if cached is not None:
+        return cached
+    body = _LIST_ADAPTER.dump_json(property_pipeline_service.get_properties(limit=limit))
+    with _list_bodies_lock:
+        _list_bodies[etag] = body
+        while len(_list_bodies) > _LIST_BODY_MAX_ENTRIES:
+            # Oldest insertion first — dicts preserve insertion order, and
+            # the oldest entry is the one whose version is furthest behind.
+            _list_bodies.pop(next(iter(_list_bodies)))
+    return body
 
 
 class PropertyImages(BaseModel):

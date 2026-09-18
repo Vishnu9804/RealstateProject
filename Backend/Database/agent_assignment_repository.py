@@ -6,7 +6,7 @@ DATABASE_URL is set.
 from __future__ import annotations
 
 from datetime import datetime
-from typing import Dict, List, Mapping, Optional, Sequence, Tuple
+from typing import Collection, Dict, List, Mapping, Optional, Sequence, Tuple
 
 from sqlalchemy import select, update
 
@@ -306,3 +306,21 @@ def _source(value: Optional[str]) -> str:
 def _to_pydantic(row: AgentAssignmentRow) -> ActiveAssignment:
     data = {name: getattr(row, name) for name in _COLUMNS}
     return ActiveAssignment(**data, property_source=_source(row.property_source), created_at=row.created_at)
+
+
+def get_active_property_ids_by_clients(client_phones: Collection[str]) -> Dict[str, List[str]]:
+    """The bulk counterpart of get_active_property_ids_for_client above —
+    client_phone -> the property ids currently out with an agent, for all
+    of these clients in ONE query. A client with nothing assigned is absent
+    from the result, which the caller reads as an empty list."""
+    phones = list({phone for phone in client_phones})
+    if not phones:
+        return {}
+    stmt = select(AgentAssignmentRow.client_phone, AgentAssignmentRow.property_record_id).where(
+        AgentAssignmentRow.client_phone.in_(phones)
+    )
+    grouped: Dict[str, List[str]] = {}
+    with get_client_session() as session:
+        for phone, record_id in session.execute(stmt).all():
+            grouped.setdefault(phone, []).append(record_id)
+    return grouped

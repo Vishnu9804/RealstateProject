@@ -6,7 +6,7 @@ complete_visit/get_all_visits once DATABASE_URL is set.
 from __future__ import annotations
 
 from datetime import datetime
-from typing import List, Optional
+from typing import Collection, Dict, List, Optional
 
 from sqlalchemy import select, update
 
@@ -144,3 +144,22 @@ def _to_pydantic(row: AgentVisitRow) -> VisitRecord:
     # NULL on every visit completed before builder projects could be
     # assigned — all of them properties.
     return VisitRecord(**data, property_source=row.property_source or "property", completed_at=row.completed_at)
+
+
+def get_completed_property_ids_by_clients(client_phones: Collection[str]) -> Dict[str, List[str]]:
+    """The bulk counterpart of get_completed_property_ids_for_client above —
+    client_phone -> the property ids that already have a completed visit,
+    for all of these clients in ONE query. A client with no completed visit
+    is absent from the result, which the caller reads as an empty list."""
+    phones = list({phone for phone in client_phones})
+    if not phones:
+        return {}
+    stmt = select(AgentVisitRow.client_phone, AgentVisitRow.property_record_id).where(
+        AgentVisitRow.client_phone.in_(phones),
+        AgentVisitRow.property_record_id.is_not(None),
+    )
+    grouped: Dict[str, List[str]] = {}
+    with get_client_session() as session:
+        for phone, record_id in session.execute(stmt).all():
+            grouped.setdefault(phone, []).append(record_id)
+    return grouped

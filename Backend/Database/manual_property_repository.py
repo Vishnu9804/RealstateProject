@@ -5,7 +5,7 @@ manual_property_store.py once DATABASE_URL is set.
 
 from __future__ import annotations
 
-from typing import List
+from typing import Collection, Dict, List
 
 from sqlalchemy import delete, select
 
@@ -53,3 +53,26 @@ def get_for_client(client_phone: str) -> List[str]:
     )
     with get_client_session() as session:
         return list(session.execute(stmt).scalars().all())
+
+
+def get_by_clients(client_phones: Collection[str]) -> Dict[str, List[str]]:
+    """The bulk counterpart of get_for_client above: client_phone -> its
+    hand-picked property ids, for every one of these clients that has any,
+    in ONE query instead of one per client. A client with none is simply
+    absent from the result, which the caller reads as an empty list.
+
+    Ordering within each client is preserved (created_at ascending, exactly
+    as get_for_client returns it) so both paths hand back the same list."""
+    phones = list({phone for phone in client_phones})
+    if not phones:
+        return {}
+    stmt = (
+        select(ManualPropertyRow.client_phone, ManualPropertyRow.property_record_id)
+        .where(ManualPropertyRow.client_phone.in_(phones))
+        .order_by(ManualPropertyRow.created_at.asc())
+    )
+    grouped: Dict[str, List[str]] = {}
+    with get_client_session() as session:
+        for phone, record_id in session.execute(stmt).all():
+            grouped.setdefault(phone, []).append(record_id)
+    return grouped

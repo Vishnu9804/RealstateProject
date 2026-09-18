@@ -20,6 +20,7 @@ import threading
 from typing import Optional
 
 from Middleware import step_logger
+from Model.record_source import SOURCE_INSTAGRAM, SOURCE_WEBSITE_FORM, SOURCE_WHATSAPP
 from Model.InstagramInquiryHandlingModel.instagram_contact_record import InstagramContactRecord
 from Model.WhatsAppInquiryHandlingModel.client_record import ClientRecord
 from Model.WhatsAppInquiryHandlingModel.form_submission import (
@@ -211,7 +212,11 @@ def get_verified_prefill(verification_token: str) -> Optional[FormPrefillRespons
 
 def submit_form(channel: Channel, identity: str, submission: FormSubmissionRequest) -> FormSubmissionResult:
     if channel == "whatsapp":
-        return _submit_whatsapp(identity, submission)
+        # A token we minted and sent in the WhatsApp welcome message, so
+        # this visitor reached the form from WhatsApp — unlike
+        # submit_public_form below, which is the same function reached from
+        # the open web and therefore records a different source.
+        return _submit_whatsapp(identity, submission, source=SOURCE_WHATSAPP)
     return _submit_instagram(identity, submission)
 
 
@@ -246,7 +251,7 @@ def submit_public_form(submission: FormSubmissionRequest) -> Optional[FormSubmis
         phone = normalize_phone(submission.phone or "")
     if phone is None:
         return None
-    return _submit_whatsapp(phone, submission)
+    return _submit_whatsapp(phone, submission, source=SOURCE_WEBSITE_FORM)
 
 
 # Everything a stored record carries that the form has no business
@@ -383,7 +388,7 @@ def _clean_property_sizes(sizes: Optional[dict], property_type: Optional[str]) -
 clean_property_sizes = _clean_property_sizes
 
 
-def _submit_whatsapp(phone: str, submission: FormSubmissionRequest) -> FormSubmissionResult:
+def _submit_whatsapp(phone: str, submission: FormSubmissionRequest, source: str) -> FormSubmissionResult:
     """`phone` is always an identity the CALLER established (a form token's,
     or one otp_service proved) — submission.phone is never read here, so
     nothing in the request body can redirect a save at somebody else.
@@ -429,6 +434,13 @@ def _submit_whatsapp(phone: str, submission: FormSubmissionRequest) -> FormSubmi
         phone=phone,
         status="registered",
         requirement_submission_count=submission_number,
+        # Which door this submission came through — "whatsapp" for a link we
+        # sent, "website_form" for the open public form. Required rather than
+        # defaulted so this function, which serves both, can never silently
+        # attribute one to the other. It only takes effect on a client who
+        # has no source yet; a returning client keeps theirs (see
+        # client_repository.resolve_source).
+        source=source,
         **_extract_requirement_fields(submission),
     )
     # defer_recompute: the match recompute is the slow half of this call and
@@ -514,6 +526,10 @@ def _submit_instagram(ig_user_id: str, submission: FormSubmissionRequest) -> For
             phone=normalized_phone,
             status="registered",
             requirement_submission_count=submission_number,
+            # They reached the form from an Instagram DM link — that is
+            # where this client came from, even though every message after
+            # this one goes to WhatsApp.
+            source=SOURCE_INSTAGRAM,
             **requirement_fields,
         )
         client_store.upsert_client(client_record, previous=existing_client, defer_recompute=True)

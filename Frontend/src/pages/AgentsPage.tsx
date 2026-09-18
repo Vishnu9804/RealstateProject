@@ -1,4 +1,5 @@
 import { useCallback, useMemo, useState } from "react";
+import { CLIENT_FETCH_LIMIT } from "../lib/fetchLimits";
 import { agentApi } from "../api/agentApi";
 import { inquiryClientApi } from "../api/inquiryClientApi";
 import type { AgentSummary, AssignedClientSummary, InquiryClientRecord, VisitRecord } from "../api/types";
@@ -40,7 +41,7 @@ export default function AgentsPage() {
   const load = useCallback(async (manual = false) => {
     setRefreshing(true);
     try {
-      const [agentData, clientData] = await Promise.all([agentApi.getAgents(), inquiryClientApi.getClients(500)]);
+      const [agentData, clientData] = await Promise.all([agentApi.getAgents(), inquiryClientApi.getClients(CLIENT_FETCH_LIMIT)]);
       setAgents(agentData);
       setCachedAgents(agentData);
       setClients(clientData);

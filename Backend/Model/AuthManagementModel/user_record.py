@@ -31,23 +31,6 @@ class LoginResult(BaseModel):
     user: UserSummary
 
 
-class OwnerVerificationStatus(BaseModel):
-    method: Literal["whatsapp", "password"]
-    available: bool
-    reason: Optional[Literal["no_whatsapp_connection", "invalid_owner_phone"]] = None
-    phone_hint: Optional[str] = None
-
-
-class VerificationCodeResult(BaseModel):
-    status: Literal["sent", "cooldown", "unavailable", "not_configured"]
-    retry_after_seconds: int = 0
-    phone_hint: Optional[str] = None
-
-
 class OwnerVerificationGrant(BaseModel):
     verification_token: str
     expires_in_seconds: int
-
-
-class RecoveryResetResult(BaseModel):
-    username: str

@@ -23,7 +23,7 @@ here.
 from __future__ import annotations
 
 from datetime import datetime, timezone
-from typing import Dict, List, Optional, Set
+from typing import Collection, Dict, List, Optional, Set, Tuple
 
 from Database import client_repository, matching_repository
 from Database.client_session import is_client_database_configured
@@ -54,11 +54,20 @@ CLIENT_MATCH_NEUTRAL_FIELDS = frozenset(
         # staff-only notes (Database/client_repository.py's STAFF_DETAIL_FIELDS)
         "current_address",
         "about_loan",
+        "notes",
+        # Extra, unverified numbers — contact details like `phone` above,
+        # never a requirement and never embedded or scored.
+        "additional_phones",
         # lifecycle and bookkeeping — written by the pipeline, never by the
         # Edit dialog, and read by nothing in scoring.py
         "status",
         "pending_action",
         "last_follow_up_dates",
+        # What was said on the last follow-up. A note about a CONVERSATION,
+        # not a brief: it is never embedded, never scored, and changing it
+        # must leave this client's matched properties exactly where they
+        # are — the same treatment the stamp above gets.
+        "follow_up_report",
         "requirement_submission_count",
         "assigned_agent_id",
         "handoff_sent_at",
@@ -283,6 +292,66 @@ def get_scored_property_ids(phone: str) -> set:
     aren't already reflected in the counts above)."""
     scores, _ = _read_scores(phone)
     return {score.record_id for score in scores}
+
+
+def get_scores_summary(phone: str) -> Tuple[Dict[str, int], Set[str]]:
+    """One client's per-bucket counts AND its scored ids, from a SINGLE
+    read of its cached scores.
+
+    get_match_counts and get_scored_property_ids above answer one half each,
+    and the counts endpoint needs both — asking them separately read every
+    one of that client's cached match rows twice, field_scores JSON and all,
+    for two summaries of the same rows. This is those two functions over one
+    read; they are kept as they are for callers that genuinely want only one
+    of the two."""
+    scores, _ = _read_scores(phone)
+    counts = {"high": 0, "medium": 0, "low": 0}
+    record_ids = set()
+    for score in scores:
+        counts[score.bucket.value] += 1
+        record_ids.add(score.record_id)
+    return counts, record_ids
+
+
+def get_bucket_counts_by_client() -> Dict[str, Dict[str, int]]:
+    """phone -> {"high": n, "medium": n, "low": n} for every client that has
+    any cached match — the bulk form of get_match_counts above, and what the
+    Inquiries table's counts are actually built from now.
+
+    Same numbers, one read instead of one per client. The per-client version
+    is kept for the single-client endpoint (and for anything that only ever
+    asks about one), but a table of hundreds of rows must never be served by
+    asking hundreds of separate questions."""
+    if is_client_database_configured():
+        return matching_repository.get_bucket_counts_by_client()
+    counts: Dict[str, Dict[str, int]] = {}
+    for phone, scores in _score_cache.items():
+        if not scores:
+            continue
+        per_bucket = {"high": 0, "medium": 0, "low": 0}
+        for score in scores:
+            per_bucket[score.bucket.value] += 1
+        counts[phone] = per_bucket
+    return counts
+
+
+def get_scored_pairs(pairs: Collection[Tuple[str, str]]) -> Set[Tuple[str, str]]:
+    """Which of these (phone, property record id) pairs are currently
+    scored — see matching_repository.get_scored_pairs for why the bulk
+    counts ask the question this way instead of loading every scored id."""
+    if is_client_database_configured():
+        return matching_repository.get_scored_pairs(pairs)
+    wanted = {pair for pair in pairs}
+    if not wanted:
+        return set()
+    found: Set[Tuple[str, str]] = set()
+    by_phone: Dict[str, Set[str]] = {}
+    for phone, record_id in wanted:
+        by_phone.setdefault(phone, set()).add(record_id)
+    for phone, record_ids in by_phone.items():
+        scored = {score.record_id for score in _score_cache.get(phone, [])}
+        found.update((phone, record_id) for record_id in record_ids & scored)
+    return found
 
 
 def has_requirements(client: ClientRecord) -> bool:

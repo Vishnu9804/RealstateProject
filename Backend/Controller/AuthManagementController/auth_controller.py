@@ -1,40 +1,24 @@
-"""Sign-in, the caller's own account, owner verification and owner password recovery.
+"""Sign-in, the caller's own account, and owner verification for staff-login
+changes.
+
+There is no "forgot password" flow: the admin account's password starts out
+as ADMIN_PASSWORD from .env and can only ever be changed by signing in and
+entering the current password. If it's ever truly forgotten, it must be
+reset directly in the database or by changing .env before an admin account
+exists.
 
 Credential mistakes return 400, never 401 — the frontend treats 401 as
 "session ended" and signs the user out.
 """
 
-from typing import Optional
-
 from fastapi import APIRouter, Depends, HTTPException, Request
 from pydantic import BaseModel, Field
 
-from Model.AuthManagementModel.user_record import (
-    LoginResult,
-    OwnerVerificationGrant,
-    OwnerVerificationStatus,
-    RecoveryResetResult,
-    UserRecord,
-    UserSummary,
-    VerificationCodeResult,
-)
-from Service.AuthManagementService import (
-    login_throttle,
-    owner_verification_service,
-    password_service,
-    token_service,
-    user_store,
-)
-from Service.AuthManagementService.auth_dependencies import (
-    bearer_token,
-    get_current_user,
-    require_admin,
-    require_owner_verification,
-)
+from Model.AuthManagementModel.user_record import LoginResult, OwnerVerificationGrant, UserRecord, UserSummary
+from Service.AuthManagementService import login_throttle, password_service, token_service, user_store
+from Service.AuthManagementService.auth_dependencies import bearer_token, get_current_user, require_admin
 
 router = APIRouter(prefix="/auth", tags=["auth"])
-
-_BAD_CODE = "That code isn't right, or it has expired."
 
 
 class LoginRequest(BaseModel):
@@ -48,13 +32,7 @@ class ChangeOwnPasswordRequest(BaseModel):
 
 
 class OwnerVerificationConfirmRequest(BaseModel):
-    code: Optional[str] = Field(default=None, max_length=12)
-    password: Optional[str] = Field(default=None, max_length=256)
-
-
-class RecoveryResetRequest(BaseModel):
-    code: str = Field(max_length=12)
-    new_password: str = Field(max_length=256)
+    password: str = Field(max_length=256)
 
 
 def _session(user: UserRecord) -> LoginResult:
@@ -109,9 +87,7 @@ def refresh_session(current_user: UserSummary = Depends(get_current_user)) -> Lo
 
 
 @router.patch("/me/password", response_model=LoginResult)
-def change_own_password(
-    body: ChangeOwnPasswordRequest, current_user: UserSummary = Depends(require_owner_verification)
-) -> LoginResult:
+def change_own_password(body: ChangeOwnPasswordRequest, current_user: UserSummary = Depends(require_admin)) -> LoginResult:
     user = user_store.get_by_id(current_user.user_id)
     if not password_service.verify_password(body.current_password, user.password_hash):
         raise HTTPException(status_code=400, detail="Your current password is incorrect.")
@@ -134,56 +110,21 @@ def end_other_sessions(current_user: UserSummary = Depends(require_admin)) -> Lo
     return _session(updated)
 
 
-@router.get("/owner-verification", response_model=OwnerVerificationStatus, dependencies=[Depends(require_admin)])
-def get_owner_verification_status() -> OwnerVerificationStatus:
-    return owner_verification_service.status()
-
-
-@router.post("/owner-verification/code", response_model=VerificationCodeResult, dependencies=[Depends(require_admin)])
-def request_owner_verification_code() -> VerificationCodeResult:
-    return owner_verification_service.request_code(owner_verification_service.STEP_UP)
-
-
 @router.post("/owner-verification/confirm", response_model=OwnerVerificationGrant)
 def confirm_owner_verification(
     body: OwnerVerificationConfirmRequest, request: Request, current_user: UserSummary = Depends(require_admin)
 ) -> OwnerVerificationGrant:
+    """Proves an admin, adding or changing a staff login, really knows the
+    admin password. This is the only step-up check in the app — there is no
+    OTP/WhatsApp option — so it always checks the caller's own password."""
     throttle_key = f"owner-verification:{current_user.user_id}"
     _throttled(throttle_key)
-    if owner_verification_service.status().method == "whatsapp":
-        ok = owner_verification_service.verify_code(owner_verification_service.STEP_UP, body.code or "")
-        detail = _BAD_CODE
-    else:
-        user = user_store.get_by_id(current_user.user_id)
-        ok = password_service.verify_password(body.password or "", user.password_hash)
-        detail = "That password is incorrect."
-    if not ok:
+    user = user_store.get_by_id(current_user.user_id)
+    if not password_service.verify_password(body.password, user.password_hash):
         login_throttle.record_failure(throttle_key)
-        raise HTTPException(status_code=400, detail=detail)
+        raise HTTPException(status_code=400, detail="That password is incorrect.")
     login_throttle.clear(throttle_key)
     return OwnerVerificationGrant(
         verification_token=token_service.create_owner_grant(current_user.user_id, bearer_token(request)),
         expires_in_seconds=token_service.OWNER_GRANT_TTL_SECONDS,
     )
-
-
-@router.post("/recovery/code", response_model=VerificationCodeResult)
-def request_recovery_code() -> VerificationCodeResult:
-    if user_store.get_admin() is None:
-        return VerificationCodeResult(status="not_configured")
-    return owner_verification_service.request_code(owner_verification_service.RECOVERY)
-
-
-@router.post("/recovery/reset", response_model=RecoveryResetResult)
-def reset_with_recovery_code(body: RecoveryResetRequest) -> RecoveryResetResult:
-    admin = user_store.get_admin()
-    if admin is None or owner_verification_service.status().method != "whatsapp":
-        raise HTTPException(status_code=400, detail="Password reset by WhatsApp isn't set up on this server.")
-    problem = password_service.password_problem(body.new_password, admin.username)
-    if problem:
-        raise HTTPException(status_code=400, detail=problem)
-    if not owner_verification_service.verify_code(owner_verification_service.RECOVERY, body.code):
-        raise HTTPException(status_code=400, detail=_BAD_CODE)
-    user_store.set_password(admin.user_id, body.new_password)
-    login_throttle.clear(admin.username)
-    return RecoveryResetResult(username=admin.username)

@@ -1,5 +1,5 @@
 import { apiClient } from "./client";
-import type { LoginResult, OwnerVerificationGrant, OwnerVerificationStatus, UserSummary, VerificationCodeResult } from "./types";
+import type { LoginResult, OwnerVerificationGrant, UserSummary } from "./types";
 
 export interface ChangeOwnPasswordRequest {
   current_password: string;
@@ -24,18 +24,12 @@ export const authApi = {
   getMe: (): Promise<UserSummary> => apiClient.get("/auth/me"),
   /** Swaps the current, still-valid token for a fresh one (AuthProvider calls it while the user is active). */
   refresh: (): Promise<LoginResult> => apiClient.post("/auth/refresh"),
-  changeOwnPassword: (body: ChangeOwnPasswordRequest, grant: string): Promise<LoginResult> =>
-    apiClient.patch("/auth/me/password", body, withGrant(grant)),
+  changeOwnPassword: (body: ChangeOwnPasswordRequest): Promise<LoginResult> => apiClient.patch("/auth/me/password", body),
   endOtherSessions: (): Promise<LoginResult> => apiClient.post("/auth/me/end-other-sessions"),
 
-  getOwnerVerification: (): Promise<OwnerVerificationStatus> => apiClient.get("/auth/owner-verification"),
-  requestOwnerCode: (): Promise<VerificationCodeResult> => apiClient.post("/auth/owner-verification/code"),
-  confirmOwnerVerification: (body: { code?: string; password?: string }): Promise<OwnerVerificationGrant> =>
+  /** The one step-up check in the app: confirms the caller's own (admin) password before a staff login is added or changed. */
+  confirmOwnerVerification: (body: { password: string }): Promise<OwnerVerificationGrant> =>
     apiClient.post("/auth/owner-verification/confirm", body),
-
-  requestRecoveryCode: (): Promise<VerificationCodeResult> => apiClient.post("/auth/recovery/code"),
-  resetWithRecoveryCode: (body: { code: string; new_password: string }): Promise<{ username: string }> =>
-    apiClient.post("/auth/recovery/reset", body),
 
   listEmployees: (): Promise<UserSummary[]> => apiClient.get("/users"),
   createEmployee: (body: CreateEmployeeRequest, grant: string): Promise<UserSummary> =>

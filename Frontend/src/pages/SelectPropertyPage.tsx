@@ -1,4 +1,5 @@
 import { useCallback, useEffect, useMemo, useRef, useState } from "react";
+import { PROPERTY_FETCH_LIMIT } from "../lib/fetchLimits";
 import { useLocation, useNavigate } from "react-router-dom";
 import { agentApi } from "../api/agentApi";
 import { inquiryClientApi } from "../api/inquiryClientApi";
@@ -31,7 +32,7 @@ import { Badge, Button, Copyable, EmptyState, Highlight, Note, Panel, SearchInpu
 import { IconAlert, IconArrowRight, IconBuilding, IconCheck, IconChevron, IconInbox, IconSearch } from "../components/ui/Icons";
 
 const REFRESH_INTERVAL_MS = 8000;
-const FETCH_LIMIT = 500;
+const FETCH_LIMIT = PROPERTY_FETCH_LIMIT;
 const PAGE_SIZE = 20;
 
 /**

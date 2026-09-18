@@ -19,6 +19,7 @@ import { useAuth } from "../state/AuthProvider";
 import { useDebounced } from "../hooks/useUi";
 import { friendlyError } from "../lib/apiError";
 import { formatIst, fromIstFields, relativeTime, toIstFields } from "../lib/formatters";
+import { CLIENT_FETCH_LIMIT } from "../lib/fetchLimits";
 import { getCachedClients, setCachedClients } from "../lib/inquiryListCache";
 import { useToast } from "../components/ui/Toast";
 import ClientMatchesDialog, { type DialogView } from "../components/ClientMatchesDialog";
@@ -98,7 +99,13 @@ export interface ClientPropertyCounts {
 }
 
 const REFRESH_INTERVAL_MS = 8000;
-const FETCH_LIMIT = 500;
+const FETCH_LIMIT = CLIENT_FETCH_LIMIT;
+/** How often the match-count map is re-read even when no version signal
+ *  moved — the backstop that catches a count changed somewhere this page
+ *  cannot observe (see the counts effect). Deliberately well above the
+ *  8-second poll: it is a safety net, not the refresh mechanism, and the
+ *  response it usually gets is a bodyless 304. */
+const COUNTS_HEARTBEAT_MS = 60000;
 
 export default function InquiryClientsPage() {
   const toast = useToast();
@@ -122,32 +129,34 @@ export default function InquiryClientsPage() {
   // load() below. null means "never fetched yet", which always forces a
   // fetch regardless of what the version says.
   const lastClientsVersion = useRef<string | null>(null);
-  // Purely a signal, never used to fetch a leads list any more (there
-  // isn't one on this page) — see load() below, where a change here
-  // forces every client's match counts to be re-fetched. A website
-  // enquiry about an existing, already-registered client's ALREADY-known
-  // requirements never touches that client's own updated_at (see Backend/
-  // Service/LandingPageService/landing_page_service.py's
-  // _sync_to_inquiries), so the per-client updated_at gate a few lines
-  // down would otherwise never notice that client's MatchCounts.website_only
-  // just changed.
-  const lastLeadsVersion = useRef<string | null>(null);
-
-  // AgentManagement feature: the field team (for the Agent column) and, per
-  // client, the cheap per-bucket match count (for the Matches pill + the
-  // pipeline Status badge) — matchingApi.getMatchCounts, NOT getMatches,
-  // since this runs for every visible client and the full match result
-  // enriches every match with its property's current display fields (an
-  // expensive join this column has no use for). matchResultsUpdatedAt is a
-  // ref, not state — it just remembers which client.updated_at each cached
-  // count was fetched for, so a client whose requirements haven't changed
-  // since is never re-fetched on every 8s poll.
-  const [matchCounts, setMatchCounts] = useState<Record<string, MatchCounts>>({});
-  const matchCountsUpdatedAt = useRef<Record<string, string>>({});
-  // Bumped to force the counts effect below to run again — adding a
-  // property by hand or handing one to an agent changes this client's
-  // counts without touching client.updated_at, so the version gate alone
-  // would keep serving the stale number.
+  // AgentManagement feature: every client's match counts (the Matches pill,
+  // the Completed pill and the pipeline Status badge), fetched as ONE map —
+  // matchingApi.getAllMatchCounts, not getMatchCounts per row.
+  //
+  // This used to be one request per visible client, gated on that client's
+  // own updated_at. The gate worked; the shape did not. Any tick that had
+  // to re-read them (a first load, a new registration, a website enquiry)
+  // opened one request per row, the browser ran six at a time, and every
+  // one of those requests loaded that client's entire cached match set
+  // server-side to produce three integers. With five hundred clients and
+  // three hundred thousand cached match rows behind them, that is what the
+  // spinners in those three columns actually were: a queue draining.
+  //
+  // One request now answers for every row, from one in-memory map on the
+  // backend (see Backend/Service/ClientPropertyMatchingService/
+  // match_counts_service.py). `countsVersion` remembers the
+  // (clients_version, leads_version) pair the held map was fetched for, so
+  // an ordinary poll that changed neither doesn't re-fetch at all — exactly
+  // the gate the per-row version did, applied once instead of per row.
+  const [matchCounts, setMatchCounts] = useState<Record<string, MatchCounts> | null>(null);
+  const countsSignature = useRef<string | null>(null);
+  const countsFetchedAt = useRef(0);
+  const countsInFlight = useRef(false);
+  // Bumped to force the counts effect below to run again, AND to ask the
+  // backend for a freshly rebuilt map rather than its held one — adding a
+  // property by hand or handing one to an agent changes a client's counts
+  // without touching clients_version, so the version gate alone would keep
+  // serving the stale number.
   const [countsNonce, setCountsNonce] = useState(0);
 
   // AgentManagement feature: "N properties" opens the matches dialog over
@@ -256,17 +265,11 @@ export default function InquiryClientsPage() {
         setInquiryStatus(statusData);
         setError(null);
 
-        // A new website enquiry can change an EXISTING client's Matches
-        // count (MatchCounts.website_only) without that client's own
-        // updated_at moving at all — see lastLeadsVersion's own comment.
-        // Clearing every cached entry forces the counts effect below to
-        // re-fetch for every visible client on its very next pass, exactly
-        // as invalidateCounts already does for one phone at a time.
-        if (lastLeadsVersion.current !== null && lastLeadsVersion.current !== statusData.leads_version) {
-          matchCountsUpdatedAt.current = {};
-          setCountsNonce((n) => n + 1);
-        }
-        lastLeadsVersion.current = statusData.leads_version;
+        // clients_version and leads_version are both carried on the status
+        // response and both feed the counts effect below (see
+        // countsVersion) — a new website enquiry can change an EXISTING
+        // client's Matches count without that client's own updated_at
+        // moving at all, so the counts have to watch both.
 
         const needsClients =
           manual ||
@@ -367,43 +370,69 @@ export default function InquiryClientsPage() {
     });
   }, [allClients, query]);
 
-  // AgentManagement feature: fetch (cheap, count-only — see
-  // matchingApi.getMatchCounts) the match count for any client whose
-  // updated_at has moved past what was last fetched for it. Runs once per
-  // load(), not on every render, since matchCountsUpdatedAt is a ref.
+  // AgentManagement feature: every client's match counts, in ONE request
+  // (see matchingApi.getAllMatchCounts for what this replaced and why).
+  //
+  // Gated exactly as the per-row version was, just once instead of per row:
+  // clients_version moves whenever any client is added, edited or removed,
+  // and leads_version whenever a website enquiry lands — between the two,
+  // every change the old per-client updated_at gate could notice is still
+  // noticed here. An ordinary poll that moves neither does not fetch at
+  // all, and a poll that does fetch revalidates against the backend's own
+  // content hash, so an unchanged answer costs a bodyless 304.
+  //
+  // countsNonce is the third trigger: an operator action (a hand-off, a
+  // hand-picked property) changes a count without moving either version, so
+  // it both re-runs this and asks the backend to rebuild rather than serve
+  // the map it is holding.
+  //
+  // And a slow heartbeat on top of those three, because some things that
+  // change a count move none of them: the nightly rescore, an agent
+  // completing a visit from the Visits page, another operator working in
+  // their own browser. The per-row version gate could not see any of those
+  // either — a number changed elsewhere simply stayed wrong on screen until
+  // something unrelated happened to that client. A re-read this
+  // infrequent, against a validator that is a hash of the counts
+  // themselves, costs a bodyless 304 whenever nothing has in fact changed.
   useEffect(() => {
-    const stale = allClients.filter((c) => matchCountsUpdatedAt.current[c.phone] !== (c.updated_at ?? ""));
-    // Referenced only to keep it an honest dependency: invalidateCounts
-    // clears the ref entry above and bumps this, and re-running is the
-    // entire effect it is asking for.
-    void countsNonce;
-    if (stale.length === 0) return;
-    let cancelled = false;
-    Promise.all(
-      stale.map((c) =>
-        matchingApi
-          .getMatchCounts(c.phone)
-          .then((counts) => ({ phone: c.phone, updatedAt: c.updated_at ?? "", counts }))
-          .catch(() => null),
-      ),
-    ).then((fetched) => {
-      if (cancelled) return;
-      setMatchCounts((prev) => {
-        const next = { ...prev };
-        for (const item of fetched) if (item) next[item.phone] = item.counts;
-        return next;
-      });
-      for (const item of fetched) if (item) matchCountsUpdatedAt.current[item.phone] = item.updatedAt;
-    });
-    return () => {
-      cancelled = true;
-    };
-  }, [allClients, countsNonce]);
+    if (!inquiryStatus) return;
+    // One at a time. `inquiryStatus` is a new object on every status tick,
+    // so this effect runs every few seconds; without this a request slower
+    // than the poll interval would have a second one started on top of it.
+    if (countsInFlight.current) return;
+    const signature = `${inquiryStatus.clients_version}|${inquiryStatus.leads_version}|${countsNonce}`;
+    const changed = countsSignature.current !== signature;
+    const heartbeatDue = Date.now() - countsFetchedAt.current >= COUNTS_HEARTBEAT_MS;
+    if (!changed && !heartbeatDue) return;
 
-  /** Re-read one client's property counts on the next tick — see
-   *  countsNonce above for why updated_at alone isn't enough. */
-  const invalidateCounts = useCallback((phone: string) => {
-    delete matchCountsUpdatedAt.current[phone];
+    const previous = countsSignature.current;
+    countsSignature.current = signature;
+    countsFetchedAt.current = Date.now();
+    countsInFlight.current = true;
+    matchingApi
+      // A real change is worth making the backend rebuild for, so the new
+      // number is on screen on this very response rather than whenever its
+      // held map next expires. The heartbeat deliberately does not: it is
+      // the backstop, and the backend's own expiry is what paces it.
+      .getAllMatchCounts(changed && previous !== null)
+      .then(setMatchCounts)
+      .catch(() => {
+        // Put the clock and the signature back so the next tick retries,
+        // rather than latching this one as "already fetched" — otherwise a
+        // single failed request would freeze the three columns.
+        countsSignature.current = previous;
+        countsFetchedAt.current = 0;
+      })
+      .finally(() => {
+        countsInFlight.current = false;
+      });
+  }, [inquiryStatus, countsNonce]);
+
+  /** Re-read the counts on the next tick, from a freshly rebuilt map — see
+   *  countsNonce above for why a version change alone isn't enough. Takes
+   *  the phone that changed for call-site readability; the map is fetched
+   *  whole either way, which is the entire point of it. */
+  const invalidateCounts = useCallback((_phone: string) => {
     setCountsNonce((n) => n + 1);
   }, []);
 
@@ -423,7 +452,12 @@ export default function InquiryClientsPage() {
 
   const countsFor = useCallback(
     (phone: string): ClientPropertyCounts | null => {
-      const counts = matchCounts[phone];
+      // null (the map itself, or this phone within it) means "not fetched
+      // yet" and renders as a spinner, exactly as it did when each row was
+      // fetched separately. Every client in the backend's list is in the
+      // map, so the only phone missing from a loaded map is one this page
+      // added locally a moment ago and the next fetch has yet to cover.
+      const counts = matchCounts?.[phone];
       if (!counts) return null;
       // Both figures come straight from the server, which computes them
       // as SETS (see MatchCounts.total). They used to be added up here
@@ -656,8 +690,8 @@ export default function InquiryClientsPage() {
             if (newlyAssigned > 0) {
               const phone = matchesPhone;
               setMatchCounts((prev) => {
-                const current = prev[phone];
-                if (!current) return prev;
+                const current = prev?.[phone];
+                if (!prev || !current) return prev;
                 return {
                   ...prev,
                   [phone]: { ...current, assigned: Math.min(current.assigned + newlyAssigned, current.total) },
@@ -706,6 +740,8 @@ function FollowUpPopover({
   const stored = toIstFields(client.last_follow_up_dates);
   const [date, setDate] = useState(stored?.date ?? "");
   const [time, setTime] = useState(stored?.time ?? "");
+  const storedReport = client.follow_up_report ?? "";
+  const [report, setReport] = useState(storedReport);
 
   // Same placement and dismissal rules as components/ui/FilterPopover.tsx —
   // re-measured on scroll/resize so it tracks its cell when the table scrolls
@@ -713,8 +749,11 @@ function FollowUpPopover({
   useEffect(() => {
     const place = () => {
       const rect = anchorEl.getBoundingClientRect();
-      const width = 260;
-      const height = 210;
+      const width = 300;
+      // Date/time row + the report box below it — kept in step with what
+      // this popover actually renders, since it decides whether there is
+      // room to open downwards or it has to flip above the cell.
+      const height = 360;
       const left = Math.max(8, Math.min(rect.left, window.innerWidth - width - 8));
       const below = rect.bottom + 8;
       const top = below + height > window.innerHeight - 8 ? Math.max(8, rect.top - height - 8) : below;
@@ -759,27 +798,48 @@ function FollowUpPopover({
     setTime(now.time);
   }
 
-  async function save(at: string | null) {
+  async function save(at: string | null, note: string | null) {
     setSaving(true);
     try {
-      onSaved(await inquiryClientApi.setFollowUp(client.phone, at));
+      onSaved(await inquiryClientApi.setFollowUp(client.phone, at, note));
       toast.push({
         tone: "ok",
-        title: at ? "Follow-up date saved" : "Follow-up date cleared",
-        message: at ? formatIst(at) : "This client now reads as never followed up.",
+        title: at || note ? "Follow-up saved" : "Follow-up cleared",
+        message: at
+          ? formatIst(at)
+          : note
+            ? "Report saved without a date."
+            : "This client now reads as never followed up.",
       });
       onClose();
     } catch (err) {
-      toast.push({ tone: "bad", title: "Couldn't save the follow-up date", message: friendlyError(err) });
+      toast.push({ tone: "bad", title: "Couldn't save the follow-up", message: friendlyError(err) });
     } finally {
       setSaving(false);
     }
   }
 
-  // A date with no time means midnight IST (see fromIstFields); no date at
-  // all means there is nothing to save, so Save stays disabled rather than
-  // silently storing something the operator did not choose.
+  // A date with no time means midnight IST (see fromIstFields). Both are
+  // saved together, so a report can be written on its own and a date picked
+  // on its own — Save is offered as soon as either is there or either has
+  // been changed, rather than only for a date as it used to be.
   const iso = date ? fromIstFields(date, time) : null;
+  const trimmedReport = report.trim();
+  const canSave = Boolean(iso || trimmedReport) || trimmedReport !== storedReport.trim();
+
+  function submit() {
+    if (saving || !canSave) return;
+    void save(iso, trimmedReport || null);
+  }
+
+  /** Enter saves from any box in here (the popover has no form to submit).
+   *  In the report box, Shift+Enter still starts a new line — a report is
+   *  free text and often more than one. */
+  function onKeyDown(event: React.KeyboardEvent) {
+    if (event.key !== "Enter" || event.shiftKey) return;
+    event.preventDefault();
+    submit();
+  }
 
   return createPortal(
     <div
@@ -790,7 +850,7 @@ function FollowUpPopover({
       style={{
         left: position?.left ?? -9999,
         top: position?.top ?? -9999,
-        width: 260,
+        width: 300,
         visibility: position ? "visible" : "hidden",
       }}
     >
@@ -809,6 +869,7 @@ function FollowUpPopover({
             aria-label="Follow-up date (IST)"
             value={date}
             onChange={(event) => setDate(event.target.value)}
+            onKeyDown={onKeyDown}
             disabled={saving}
           />
           <input
@@ -817,6 +878,7 @@ function FollowUpPopover({
             aria-label="Follow-up time (IST)"
             value={time}
             onChange={(event) => setTime(event.target.value)}
+            onKeyDown={onKeyDown}
             disabled={saving}
           />
         </div>
@@ -824,15 +886,33 @@ function FollowUpPopover({
           Times are IST. {iso ? formatIst(iso) : "Pick a date, or use Now."}
         </span>
 
+        <div className="field">
+          <label className="field__hint" htmlFor="follow-up-report">
+            Follow-up report
+          </label>
+          <textarea
+            id="follow-up-report"
+            className="input"
+            rows={4}
+            style={{ resize: "vertical", minHeight: 76 }}
+            placeholder="What was said on this follow-up?"
+            value={report}
+            onChange={(event) => setReport(event.target.value)}
+            onKeyDown={onKeyDown}
+            disabled={saving}
+          />
+          <span className="field__hint">Enter saves · Shift + Enter for a new line</span>
+        </div>
+
         <div className="row-flex" style={{ gap: 8, flexWrap: "wrap" }}>
           <Button size="sm" variant="ghost" onClick={setNow} disabled={saving}>
             Now
           </Button>
-          <Button size="sm" variant="primary" busy={saving} disabled={!iso} onClick={() => save(iso)}>
+          <Button size="sm" variant="primary" busy={saving} disabled={!canSave} onClick={submit}>
             Save
           </Button>
-          {client.last_follow_up_dates && (
-            <Button size="sm" variant="ghost" disabled={saving} onClick={() => save(null)}>
+          {(client.last_follow_up_dates || client.follow_up_report) && (
+            <Button size="sm" variant="ghost" disabled={saving} onClick={() => save(null, null)}>
               Clear
             </Button>
           )}

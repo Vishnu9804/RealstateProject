@@ -86,6 +86,17 @@ function ClientDetail({ client }: { client: InquiryClientRecord }) {
               {client.email}
             </div>
           )}
+          {/* Extra, unverified numbers — kept apart from the WhatsApp number
+              above, which is this client's actual identity here. */}
+          {client.additional_phones && client.additional_phones.length > 0 && (
+            <div className="faint small" style={{ marginTop: 4 }}>
+              {client.additional_phones.map((phone, index) => (
+                <div key={index}>
+                  <Copyable text={phone} />
+                </div>
+              ))}
+            </div>
+          )}
         </div>
 
         <div className="detail__block">
@@ -109,6 +120,17 @@ function ClientDetail({ client }: { client: InquiryClientRecord }) {
           </div>
         </div>
 
+        {/* Always shown, unlike the optional blocks below it: "nothing was
+            written" is itself worth seeing when someone is deciding whether
+            this client has been spoken to, so it reads "-" rather than
+            disappearing. Written in the same popover as the date above. */}
+        <div className="detail__block">
+          <div className="detail__k">Follow-up report</div>
+          <div className="detail__v" style={{ whiteSpace: "pre-wrap" }}>
+            {client.follow_up_report?.trim() || "-"}
+          </div>
+        </div>
+
         {client.current_address && (
           <div className="detail__block">
             <div className="detail__k">
@@ -122,6 +144,15 @@ function ClientDetail({ client }: { client: InquiryClientRecord }) {
           <div className="detail__block">
             <div className="detail__k">Loan</div>
             <div className="detail__v">{client.about_loan}</div>
+          </div>
+        )}
+
+        {client.notes && (
+          <div className="detail__block">
+            <div className="detail__k">Notes</div>
+            <div className="detail__v" style={{ whiteSpace: "pre-wrap" }}>
+              {client.notes}
+            </div>
           </div>
         )}
 

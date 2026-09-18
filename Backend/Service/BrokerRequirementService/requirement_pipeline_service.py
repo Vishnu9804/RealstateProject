@@ -55,6 +55,7 @@ from typing import Any, Dict, List, Optional, Set, Tuple
 from Agent.BrokerRequirementAgent import requirement_normalization, requirement_structurer
 from Database.broker_requirement_repository import EDITABLE_CONTENT_FIELDS
 from Middleware import step_logger
+from Model.record_source import SOURCE_MANUAL
 from Model.BrokerRequirementModel.broker_requirement import (
     BrokerRequirementRecord,
     StructuredRequirement,
@@ -416,6 +417,9 @@ def create_requirement(content_fields: Dict[str, Any]) -> BrokerRequirementRecor
     description = fields.get("description")
     requirement = StructuredRequirement(
         source_message_id=f"manual-{uuid.uuid4().hex}",
+        # Typed in by a member of staff on the Broker Requirements page —
+        # see StructuredRequirement.source.
+        source=SOURCE_MANUAL,
         area_name=area_name,
         preferred_areas=areas,
         group_name="Manually added",

@@ -107,6 +107,12 @@ class BrokerRequirementRow(Base):
     # correctly means "fall back to any listening connection when sending".
     source_connection_id: Mapped[Optional[str]] = mapped_column(String, nullable=True)
 
+    # WHERE this requirement came from — see Model/record_source.py and
+    # StructuredRequirement.source. Same NOT NULL + 'unknown' server default
+    # story as PropertyRow.source, including init_db's one-time backfill of
+    # pre-existing rows from their source_message_id.
+    source: Mapped[str] = mapped_column(String, nullable=False, default="unknown", server_default="unknown")
+
     # --- extracted by the LLM from the message text ---
     requirement_type: Mapped[Optional[str]] = mapped_column(String, nullable=True)
     bhk: Mapped[Optional[str]] = mapped_column(String, nullable=True)

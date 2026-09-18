@@ -21,7 +21,7 @@ from __future__ import annotations
 
 import uuid
 from datetime import datetime, timezone
-from typing import Dict, List, NamedTuple, Optional, Sequence, Tuple
+from typing import Collection, Dict, List, NamedTuple, Optional, Sequence, Tuple
 
 from Database import agent_assignment_repository, agent_repository, agent_visit_repository
 from Database.client_session import is_client_database_configured
@@ -414,6 +414,34 @@ def get_assigned_property_ids(client_phone: str) -> List[str]:
     if is_client_database_configured():
         return agent_assignment_repository.get_active_property_ids_for_client(client_phone)
     return [a.property_record_id for a in _assignments if a.client_phone == client_phone]
+
+
+def get_completed_property_ids_by_client(client_phones: Collection[str]) -> Dict[str, List[str]]:
+    """Bulk form of get_completed_property_ids above — the Inquiries table
+    needs this for every row it shows, and one query for the whole table is
+    the difference between a page that paints instantly and one that makes
+    hundreds of round trips. A client with no completed visit is absent."""
+    if is_client_database_configured():
+        return agent_visit_repository.get_completed_property_ids_by_clients(client_phones)
+    wanted = {phone for phone in client_phones}
+    grouped: Dict[str, List[str]] = {}
+    for visit in _visits:
+        if visit.client_phone in wanted and visit.property_record_id:
+            grouped.setdefault(visit.client_phone, []).append(visit.property_record_id)
+    return grouped
+
+
+def get_assigned_property_ids_by_client(client_phones: Collection[str]) -> Dict[str, List[str]]:
+    """Bulk form of get_assigned_property_ids above, for the same reason.
+    A client with nothing out with an agent is absent from the result."""
+    if is_client_database_configured():
+        return agent_assignment_repository.get_active_property_ids_by_clients(client_phones)
+    wanted = {phone for phone in client_phones}
+    grouped: Dict[str, List[str]] = {}
+    for assignment in _assignments:
+        if assignment.client_phone in wanted:
+            grouped.setdefault(assignment.client_phone, []).append(assignment.property_record_id)
+    return grouped
 
 
 def get_active_assignments_for_client(client_phone: str) -> List[ActiveAssignment]:

@@ -4,6 +4,8 @@ from typing import List, Literal, Optional
 
 from pydantic import BaseModel, Field
 
+from Model.record_source import SOURCE_WHATSAPP
+
 
 class StructuredRequirement(BaseModel):
     """A single broker REQUIREMENT (a demand — someone looking FOR a
@@ -44,6 +46,19 @@ class StructuredRequirement(BaseModel):
     # requirement captured before this was recorded, in which case sending
     # falls back to any listening connection exactly as it did before.
     source_connection_id: Optional[str] = None
+
+    # WHERE this requirement came from — one of Model/record_source.py's
+    # REQUIREMENT_SOURCES, as a plain string (never an enum, see that
+    # module). Same story as StructuredProperty.source, field for field:
+    # defaulted to "whatsapp" because the LLM structuring stage is the only
+    # builder for which that answer is uninteresting, passed explicitly
+    # there anyway (requirement_structurer._build_requirement), and required
+    # from every other writer.
+    #
+    # Provenance, not content: deliberately absent from
+    # Database/broker_requirement_repository.py's EDITABLE_CONTENT_FIELDS,
+    # so the Edit dialog can never rewrite it.
+    source: str = SOURCE_WHATSAPP
 
     # --- extracted by the LLM from the message text ---
     # The KIND of property being asked for, written with the names in

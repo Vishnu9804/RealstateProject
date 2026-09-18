@@ -1,4 +1,5 @@
 import { apiClient } from "./client";
+import { CLIENT_FETCH_LIMIT } from "../lib/fetchLimits";
 import type { InquiryClientRecord, InquiryStatusResponse, ManualLinkResponse } from "./types";
 
 /** Mirrors Backend/Controller/WhatsAppInquiryHandlingController/
@@ -83,6 +84,12 @@ export interface ClientDetailsBody {
    *  Backend/Database/client_repository.py's PRESERVED_FIELDS. */
   current_address?: string | null;
   about_loan?: string | null;
+  /** Free-form catch-all notes — same staff-only rule as the two above. */
+  notes?: string | null;
+  /** Extra numbers, beside the WhatsApp number this client is keyed on —
+   *  never verified, just stored and shown as typed. Null (or an empty
+   *  array) clears every stored one. */
+  additional_phones?: string[] | null;
   purpose?: string | null;
   property_type?: string | null;
   bhk?: string | null;
@@ -109,7 +116,7 @@ export interface ClientCreateBody extends ClientDetailsBody {
 
 export const inquiryClientApi = {
   getStatus: (): Promise<InquiryStatusResponse> => apiClient.get("/whatsapp-inquiry/status"),
-  getClients: (limit = 500): Promise<InquiryClientRecord[]> =>
+  getClients: (limit: number = CLIENT_FETCH_LIMIT): Promise<InquiryClientRecord[]> =>
     apiClient.get(`/whatsapp-inquiry/clients?limit=${limit}`),
   getClient: (phone: string): Promise<InquiryClientRecord> =>
     apiClient.get(`/whatsapp-inquiry/clients/${encodeURIComponent(phone)}`),
@@ -136,16 +143,20 @@ export const inquiryClientApi = {
     apiClient.patch(`/whatsapp-inquiry/clients/${encodeURIComponent(phone)}`, body),
 
   /** Sets (or clears, with null) when this client was last followed up
-   *  with. `at` is an ISO instant in UTC — the picker shows and reads IST,
-   *  and converts at the edge (lib/formatters.ts).
+   *  with, and the report written beside it. `at` is an ISO instant in UTC
+   *  — the picker shows and reads IST, and converts at the edge
+   *  (lib/formatters.ts); `report` is free text, null to clear it.
    *
    *  Its own endpoint rather than part of updateClient, because it writes
-   *  one column: the automatic post-visit stamp writes the same column, and
-   *  neither must be able to overwrite the other with a stale copy of the
-   *  rest of the record. */
-  setFollowUp: (phone: string, at: string | null): Promise<InquiryClientRecord> =>
+   *  only those two columns: the automatic post-visit stamp writes the same
+   *  date, and neither must be able to overwrite the other with a stale
+   *  copy of the rest of the record. The report is always sent from here,
+   *  so this popover can clear one on purpose — the automatic stamp never
+   *  sends the field at all and therefore never touches it. */
+  setFollowUp: (phone: string, at: string | null, report: string | null): Promise<InquiryClientRecord> =>
     apiClient.patch(`/whatsapp-inquiry/clients/${encodeURIComponent(phone)}/follow-up`, {
       last_follow_up_dates: at,
+      follow_up_report: report,
     }),
 
   /** One client's photo — never part of the client list (see

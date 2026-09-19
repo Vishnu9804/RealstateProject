@@ -22,6 +22,7 @@ here.
 
 from __future__ import annotations
 
+import heapq
 from datetime import datetime, timezone
 from typing import Collection, Dict, List, Optional, Set, Tuple
 
@@ -34,7 +35,12 @@ from Model.ClientPropertyMatchingModel.match_score import MatchScore
 from Model.ClientPropertyMatchingModel.matched_property import MatchedProperty
 from Model.WhatsAppDataFetchingModel.embedded_property import EmbeddedProperty
 from Model.WhatsAppInquiryHandlingModel.client_record import ClientRecord
-from Service.ClientPropertyMatchingService import client_requirement_text_builder, match_candidates, scoring
+from Service.ClientPropertyMatchingService import (
+    client_requirement_text_builder,
+    match_candidates,
+    match_config,
+    scoring,
+)
 from Service.WhatsAppDataFetchingService import embedding_service
 from Service.WhatsAppInquiryHandlingService import client_store
 
@@ -92,6 +98,27 @@ _REQUIREMENT_FIELDS = tuple(sorted(set(ClientRecord.model_fields) - CLIENT_MATCH
 # still reads it from here.
 _MAX_PROPERTIES_SCORED = match_candidates.MAX_PROPERTIES
 
+# How many matches one client ever keeps — their best, by the ranking order
+# in scoring.ranking_key. Defined with the rest of the engine's tunables in
+# match_config.py; re-exported here because this is where callers have always
+# read it from.
+MAX_MATCHES_PER_CLIENT = match_config.MAX_MATCHES_PER_CLIENT
+
+
+def _best_matches(scores: List[MatchScore]) -> List[MatchScore]:
+    """The highest-RANKED MAX_MATCHES_PER_CLIENT of `scores` (all of them when
+    there are fewer) — match score first, confidence as the tie-break, then
+    exactness (see scoring.ranking_key). Never an arbitrary hundred.
+
+    heapq rather than a full sort: for a broad brief this can be a couple of
+    thousand candidates, and only the top hundred are wanted. The order
+    within the result is irrelevant — the dashboard sorts each bucket
+    itself."""
+    if len(scores) <= MAX_MATCHES_PER_CLIENT:
+        return scores
+    return heapq.nlargest(MAX_MATCHES_PER_CLIENT, scores, key=scoring.ranking_key)
+
+
 # In-memory fallback only — untouched whenever DATABASE_URL is set.
 _score_cache: Dict[str, List[MatchScore]] = {}
 _computed_at_cache: Dict[str, datetime] = {}
@@ -111,31 +138,64 @@ def recompute_for_client(phone: str) -> Optional[ClientMatchResult]:
     if client is None:
         return None
 
-    scores: List[MatchScore] = []
-    if has_requirements(client):
-        vector = _embed_requirements(client)
-        plan = scoring.client_type_plan(client)
-        # score_client_property returns None for anything below
-        # scoring.LOW_CUTOFF (currently 70%) — filtered out here so those
-        # never reach the cache or the dashboard, in any bucket.
-        scores = [
-            score
-            for prop in match_candidates.get_all()
-            if _is_matchable(prop)
-            and (score := scoring.score_client_property(client, prop, vector, plan)) is not None
-        ]
-
-    computed_at = _now()
-    _persist_scores(phone, scores, computed_at)
-    # The watermark the daily rescore reads: everything up to now has been
-    # taken into account for this client, so tomorrow starts from here.
-    client_store.set_matches_computed_at({phone: computed_at})
+    vector = _embed_requirements(client) if has_requirements(client) else None
+    scores, computed_at = recompute_for_client_record(client, vector)
     result = _build_result(client, scores, computed_at)
     step_logger.info(
         f"[Matching] {phone}: recomputed — {len(result.high)} high, {len(result.medium)} medium, "
         f"{len(result.low)} low (out of {len(scores)} scored)."
     )
     return result
+
+
+def recompute_for_client_record(
+    client: ClientRecord,
+    vector: Optional[List[float]],
+    candidates: Optional[List[EmbeddedProperty]] = None,
+    computed_at: Optional[datetime] = None,
+    stamp_watermark: bool = True,
+) -> Tuple[List[MatchScore], datetime]:
+    """The body of a full recompute, over a client record and requirement
+    vector the caller already holds.
+
+    Split out of recompute_for_client so a bulk pass over every client (see
+    scheduled_recompute_service's one-time engine upgrade) can read the
+    client list, their stored vectors and the candidate list ONCE for the
+    whole run instead of once per client — the same shape the nightly
+    incremental pass already has. `vector` is None/empty for a client with
+    no requirements, who correctly ends up with no matches at all.
+
+    `stamp_watermark=False` leaves clients.matches_computed_at to the caller,
+    so a bulk pass can write every client's in one statement at the end
+    instead of one apiece; it must then write the SAME `computed_at` it
+    passed in, or the next nightly run re-examines listings this one already
+    took into account."""
+    scores: List[MatchScore] = []
+    if vector:
+        brief = scoring.build_brief(client, vector)
+        # score_client_property returns None both for a pair that is not a
+        # possible match at all (wrong purpose, wrong kind of property, a BHK
+        # the client ruled out, far over a stated maximum — see
+        # scoring.is_eligible) and for anything below
+        # match_config.MIN_STORED_MATCH_SCORE, so neither ever reaches the
+        # cache or the dashboard, in any bucket. A thin brief never removes
+        # anything: an incomplete brief lowers CONFIDENCE, which is stored and
+        # shown separately, and never the match score itself.
+        scores = _best_matches(
+            [
+                score
+                for prop in (match_candidates.get_all() if candidates is None else candidates)
+                if _is_matchable(prop) and (score := scoring.score_client_property(prop, brief)) is not None
+            ]
+        )
+
+    computed_at = computed_at or _now()
+    _persist_scores(client.phone, scores, computed_at)
+    # The watermark the daily rescore reads: everything up to now has been
+    # taken into account for this client, so tomorrow starts from here.
+    if stamp_watermark:
+        client_store.set_matches_computed_at({client.phone: computed_at})
+    return scores, computed_at
 
 
 def rescore_changed_properties(
@@ -164,11 +224,11 @@ def rescore_changed_properties(
     if not has_requirements(client):
         return 0
     vector = stored_vector if stored_vector else _embed_requirements(client)
-    plan = scoring.client_type_plan(client)
+    brief = scoring.build_brief(client, vector)
     scores = [
         score
         for prop in changed
-        if _is_matchable(prop) and (score := scoring.score_client_property(client, prop, vector, plan)) is not None
+        if _is_matchable(prop) and (score := scoring.score_client_property(prop, brief)) is not None
     ]
     # Everything looked at, matchable or not — see
     # matching_repository.merge_matches_for_client for why the merge needs
@@ -409,10 +469,12 @@ def _merge_scores(
     replaced by whatever they scored this time (or removed if they no
     longer score at all), and every other cached match survives untouched."""
     if is_client_database_configured():
-        matching_repository.merge_matches_for_client(phone, scores, considered_ids, computed_at)
+        matching_repository.merge_matches_for_client(
+            phone, scores, considered_ids, computed_at, keep_best=MAX_MATCHES_PER_CLIENT
+        )
         return
     kept = [score for score in _score_cache.get(phone, []) if score.record_id not in considered_ids]
-    _score_cache[phone] = kept + scores
+    _score_cache[phone] = _best_matches(kept + scores)
     _computed_at_cache[phone] = computed_at
 
 
@@ -441,8 +503,12 @@ def _build_result(client: ClientRecord, scores: List[MatchScore], computed_at: O
         enriched = MatchedProperty(**match.model_dump(), **_display_fields(prop))
         buckets[match.bucket].append(enriched)
 
+    # Ranked the way the engine ranks — match score first, then confidence,
+    # then exactness (scoring.ranking_key) — so what the broker reads top to
+    # bottom is the engine's own order and not a second, slightly different
+    # one.
     for group in (high, medium, low):
-        group.sort(key=lambda m: m.score, reverse=True)
+        group.sort(key=scoring.ranking_key, reverse=True)
 
     return ClientMatchResult(
         phone=client.phone,

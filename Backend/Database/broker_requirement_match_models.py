@@ -54,6 +54,10 @@ class BrokerRequirementMatchRow(Base):
 
     score: Mapped[float] = mapped_column(Float, nullable=False)
     bucket: Mapped[str] = mapped_column(String, nullable=False)  # "high" | "medium" | "low"
+    # How much was actually known to judge on — the demand-side twin of
+    # client_property_matches.confidence_score, and kept for exactly the same
+    # reasons (including why its bucket is not a column of its own).
+    confidence_score: Mapped[float] = mapped_column(Float, nullable=False, default=0.0, server_default="0")
     evidence_ratio: Mapped[float] = mapped_column(Float, nullable=False)
     is_partial_match: Mapped[bool] = mapped_column(Boolean, nullable=False, default=False)
     # "main" | "outsider" at the time this row was computed.

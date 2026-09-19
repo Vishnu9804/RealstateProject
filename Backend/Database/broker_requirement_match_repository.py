@@ -35,6 +35,7 @@ from Model.ClientPropertyMatchingModel.match_score import MatchScore
 _SCORE_COLUMNS = (
     "score",
     "bucket",
+    "confidence_score",
     "evidence_ratio",
     "is_partial_match",
     "property_category",
@@ -316,6 +317,7 @@ def _row_values(requirement_id: int, match: MatchScore) -> dict:
         "property_record_id": match.record_id,
         "score": match.score,
         "bucket": match.bucket.value,
+        "confidence_score": match.confidence_score,
         "evidence_ratio": match.evidence_ratio,
         "is_partial_match": match.is_partial_match,
         "property_category": match.property_category,
@@ -330,6 +332,7 @@ def _to_score(row: BrokerRequirementMatchRow) -> MatchScore:
         record_id=row.property_record_id,
         score=row.score,
         bucket=MatchBucket(row.bucket),
+        confidence_score=row.confidence_score,
         evidence_ratio=row.evidence_ratio,
         is_partial_match=row.is_partial_match,
         property_category=row.property_category,

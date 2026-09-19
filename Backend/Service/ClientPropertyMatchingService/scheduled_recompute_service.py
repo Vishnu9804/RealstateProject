@@ -50,13 +50,25 @@ _ALL_CLIENTS_LIMIT = 5000
 # is standing in for.
 
 # app_settings key recording that the one-time builder-project pass (see
-# start_builder_project_introduction_in_background) has completed. Written
-# only after a pass with no failures, so a failed or interrupted one simply
-# runs again on the next start.
+# _introduce_builder_projects_once) has completed. Written only after a pass
+# with no failures, so a failed or interrupted one simply runs again on the
+# next start.
 _BUILDER_PROJECT_INTRODUCTION_KEY = "builder_project_matching_v1"
-# How long after startup that pass waits before doing anything heavy, so it
-# never competes with the WhatsApp connections and the first page loads.
+# How long after startup the one-time passes wait before doing anything
+# heavy, so they never compete with the WhatsApp connections and the first
+# page loads.
 _BUILDER_PROJECT_INTRODUCTION_DELAY_SECONDS = 120
+
+# app_settings key recording that every stored client has been re-scored by
+# the CURRENT matching engine. Bump the name whenever the engine changes what
+# a stored match means, and every client is re-scored once, automatically, on
+# the next start; leave it alone and no client is ever re-scored for nothing.
+#
+# The broker-requirement side needs no equivalent: its stored runs carry a
+# fingerprint that already names the engine (see BrokerRequirementService/
+# requirement_matching_service._ENGINE_MARKER), so each requirement
+# re-scores itself the next time it is read or caught up.
+_MATCHING_ENGINE_KEY = "client_matching_engine_v3"
 
 
 def start_daily_recompute_in_background() -> None:
@@ -67,10 +79,114 @@ def start_daily_recompute_in_background() -> None:
         "(re-scores every existing client, then every broker requirement, against new/edited properties "
         "and builder projects)."
     )
-    start_builder_project_introduction_in_background()
+    start_one_time_passes_in_background()
 
 
-def start_builder_project_introduction_in_background() -> None:
+def start_one_time_passes_in_background() -> None:
+    """The catch-up passes that run at most once each, ever — on ONE thread,
+    one after the other.
+
+    Both write the same clients' match rows, so they must never run at the
+    same time as each other: a full re-score deleting a client's rows while a
+    merge is inserting into them would leave that client a mixture of the two.
+    Sequential on a single thread is the whole of the fix — and the engine
+    upgrade goes first, because a full re-score already scores builder
+    projects, which leaves the pass after it nothing to do for any client it
+    covered.
+
+    Database mode only (in-memory matches don't survive a restart, so there is
+    nothing older than this process to bring forward), daemon, and delayed, so
+    neither startup nor the 6 AM schedule ever waits for them and neither
+    competes with the WhatsApp connections and the first page loads."""
+    if not is_database_configured():
+        return
+    threading.Thread(target=_run_one_time_passes, name="matching-catch-up", daemon=True).start()
+
+
+def _run_one_time_passes() -> None:
+    time.sleep(_BUILDER_PROJECT_INTRODUCTION_DELAY_SECONDS)
+    _upgrade_client_matches_once()
+    _introduce_builder_projects_once()
+
+
+@cpu_usage_service.tracked("One-time client match engine upgrade", "Matching")
+def _upgrade_client_matches_once() -> None:
+    """Re-scores every stored client ONCE after the matching engine itself
+    changes — see _MATCHING_ENGINE_KEY.
+
+    Nothing else would: a client's matches are only recomputed when their own
+    requirements change, and the nightly catch-up deliberately compares each
+    client against new LISTINGS alone. So without this, every client scored
+    under an older engine would keep their old matches until they happened to
+    edit their brief."""
+    try:
+        if settings_repository.get_value(_MATCHING_ENGINE_KEY):
+            return
+    except Exception as exc:  # noqa: BLE001
+        step_logger.error(f"[Matching] Could not check the engine-upgrade flag (retried next start): {exc!r}")
+        return
+    try:
+        clients = client_store.get_all_clients(limit=_ALL_CLIENTS_LIMIT)
+        if not clients:
+            settings_repository.set_value(_MATCHING_ENGINE_KEY, {"done": True})
+            return
+        # Read once for the whole run, exactly as the nightly pass does: the
+        # candidate list comes from memory, and every client's stored vector
+        # arrives in a single query. Their requirements have not changed, so
+        # re-deriving those vectors would be pure waste.
+        candidates = match_candidates.get_all()
+        stored_vectors = client_store.get_requirement_embeddings([client.phone for client in clients])
+        run_started_at = datetime.now(timezone.utc)
+        failures = 0
+        rescored = 0
+        stamped: dict = {}
+        for client in clients:
+            if not matching_service.has_requirements(client):
+                continue
+            try:
+                vector = stored_vectors.get(client.phone)
+                if vector:
+                    # Watermarks are written as ONE statement below rather
+                    # than one per client, the same way the nightly pass does
+                    # it — five hundred single-row updates to say the same
+                    # thing is five hundred round trips for no reason.
+                    matching_service.recompute_for_client_record(
+                        client, vector, candidates, run_started_at, stamp_watermark=False
+                    )
+                    stamped[client.phone] = run_started_at
+                else:
+                    # No vector stored yet (a client saved before embeddings
+                    # were kept). Rare, and the only path here that has to run
+                    # the embedding model — so it is the only one that reads
+                    # and writes that one client on its own, watermark
+                    # included.
+                    matching_service.recompute_for_client(client.phone)
+                rescored += 1
+            except Exception as exc:  # noqa: BLE001
+                # Isolated per client, and deliberately NOT stamped or marked
+                # done: the pass runs again on the next start and picks this
+                # client up from where it was.
+                failures += 1
+                step_logger.error(
+                    f"[Matching] Engine upgrade failed for {client.phone} ({type(exc).__name__}): {exc!r}"
+                )
+        client_store.set_matches_computed_at(stamped)
+        if failures:
+            step_logger.warn(
+                f"[Matching] Engine upgrade re-scored {rescored} client(s) but {failures} failed — the pass runs "
+                "again on the next start."
+            )
+            return
+        settings_repository.set_value(_MATCHING_ENGINE_KEY, {"done": True})
+        step_logger.success(f"[Matching] Engine upgrade complete — {rescored} client(s) re-scored.")
+    except Exception as exc:  # noqa: BLE001
+        step_logger.error(
+            f"[Matching] Engine upgrade failed ({type(exc).__name__}): {exc!r} — it runs again on the next start."
+        )
+
+
+@cpu_usage_service.tracked("One-time builder-project matching pass", "Matching")
+def _introduce_builder_projects_once() -> None:
     """Builder projects are matched like properties from now on — a new or
     edited one reaches every client and requirement through the same
     incremental catch-up a property does. What that catch-up can NOT reach
@@ -84,26 +200,13 @@ def start_builder_project_introduction_in_background() -> None:
     what is stored — without moving any watermark, so properties changed
     since keep being caught up exactly as before. Recorded in app_settings
     once it completes cleanly, so every later start costs one primary-key
-    lookup and nothing else.
-
-    Database mode only: without DATABASE_URL nothing survives a restart, so
-    there is nothing older than the current process to catch up. On its own
-    one-shot daemon thread, so neither startup nor the 6 AM schedule ever
-    waits for it."""
-    if not is_database_configured():
-        return
-    threading.Thread(target=_introduce_builder_projects_once, name="builder-project-matching-intro", daemon=True).start()
-
-
-@cpu_usage_service.tracked("One-time builder-project matching pass", "Matching")
-def _introduce_builder_projects_once() -> None:
+    lookup and nothing else."""
     try:
         if settings_repository.get_value(_BUILDER_PROJECT_INTRODUCTION_KEY):
             return
     except Exception as exc:  # noqa: BLE001
         step_logger.error(f"[Matching] Could not check the builder-project matching flag (retried next start): {exc!r}")
         return
-    time.sleep(_BUILDER_PROJECT_INTRODUCTION_DELAY_SECONDS)
     try:
         client_failures, clients_done = _score_builder_projects_for_existing_clients()
         requirements_done, requirement_rows, requirement_failures = (
@@ -133,7 +236,7 @@ def _score_builder_projects_for_existing_clients() -> tuple:
     the builder projects only, merged into their cached matches through the
     same incremental path the daily run uses (rescore_changed_properties).
     Their daily watermark (clients.matches_computed_at) is deliberately left
-    alone, for the reason given in start_builder_project_introduction_in_background."""
+    alone, for the reason given in _introduce_builder_projects_once."""
     candidates = match_candidates.get_builder_projects()
     if not candidates:
         return 0, 0

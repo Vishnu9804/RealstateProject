@@ -11,7 +11,10 @@ from __future__ import annotations
 
 import difflib
 import re
-from typing import List, Optional, Tuple
+from functools import lru_cache
+from typing import Dict, List, Optional, Tuple
+
+from Service.ClientPropertyMatchingService import match_config as config
 
 # --- property type -----------------------------------------------------
 
@@ -411,10 +414,155 @@ def furnishing_score(client_raw: Optional[str], property_raw: Optional[str]) -> 
     offered = furnishing_level(property_raw)
     if wanted is None or offered is None:
         return None
+    return furnishing_distance_score(wanted, offered)
+
+
+def furnishing_distance_score(wanted: int, offered: int) -> float:
+    """The curve itself, over two already-read ladder positions.
+
+    Split out of furnishing_score so the scoring engine can read a client's
+    own level ONCE per client (scoring.ClientBrief) instead of re-running
+    these regexes against the same requirement text for every property in
+    the database. Identical arithmetic, same answers."""
     distance = abs(wanted - offered)
     if distance == 0:
         return 1.0
     return 0.55 if distance == 1 else 0.2
+
+
+# --- location --------------------------------------------------------------
+#
+# Location is not a yes/no check, and it is not a guess either. The tiers in
+# match_config (LOCATION_EXACT down to LOCATION_OTHER) are decided from the
+# words both sides actually wrote — the client's own preferred areas against
+# the listing's area/address/society — plus whatever adjacency the business
+# has configured for itself (match_config.NEARBY_AREAS, empty by default).
+# No geography is ever inferred: two localities are "nearby" only because
+# someone said so, and a listing is "in the same city" only because a city
+# name appears on both sides.
+
+_AREA_WORD_RE = re.compile(r"[a-z0-9]+")
+
+# One entry per distinct listing location text. Comfortably above the number
+# of live listings, so a full rescore parses each one once; bounded so it can
+# never become a leak.
+_LOCATION_CACHE_SIZE = 8192
+
+
+def client_area_tokens(preferred_areas: Optional[str]) -> List[str]:
+    """A client's preferred_areas as comparable tokens, one per area they
+    named. Comma- and slash-separated, because that is how the requirements
+    form, the WhatsApp extraction and a broker requirement's joined list all
+    write several areas."""
+    if not preferred_areas:
+        return []
+    return [token for token in (normalize_token(part) for part in preferred_areas.replace("/", ",").split(",")) if token]
+
+
+def _significant_words(text: str) -> List[str]:
+    """The words in an area name that could identify a place on their own —
+    "road", "gam", "near" and friends dropped (match_config.AREA_STOP_WORDS).
+    Without this, "Adajan Gam" and "Pal Gam" share a word and would read as
+    the same neighbourhood."""
+    return [
+        word
+        for word in _AREA_WORD_RE.findall(text)
+        if len(word) >= config.AREA_MIN_WORD_LENGTH and word not in config.AREA_STOP_WORDS
+    ]
+
+
+@lru_cache(maxsize=_LOCATION_CACHE_SIZE)
+def _parse_location(written: str) -> Tuple[str, frozenset, Dict[str, List[str]]]:
+    """One listing's location text, reduced to the three forms the tiers
+    compare against — memoised BY VALUE, which is what keeps this affordable.
+
+    A full rescore compares every client against every listing, so without
+    this cache the same listing's address would be lowercased, split and
+    bucketed once per client: a few thousand listings times a few hundred
+    clients is millions of identical regex passes per nightly run, all
+    producing the same answer. Keyed on the text rather than on a property,
+    so two listings in the same society share one entry and an edited listing
+    simply computes a new one. Bounded, so it can never grow into a leak on a
+    small Railway container — the working set is one entry per listing, a few
+    hundred kilobytes at this scale."""
+    haystack = normalize_token(written)
+    words = _significant_words(haystack)
+    return haystack, frozenset(words), _by_prefix(words)
+
+
+def _by_prefix(words: List[str]) -> Dict[str, List[str]]:
+    """Words bucketed by their first two letters — the prefilter that keeps
+    the fuzzy tier affordable. A full difflib comparison of every client word
+    against every word of every listing's address would be tens of millions
+    of ratio() calls per nightly run; two words that do not even start alike
+    are never close enough to matter, so only one bucket is ever compared."""
+    buckets: Dict[str, List[str]] = {}
+    for word in words:
+        buckets.setdefault(word[:2], []).append(word)
+    return buckets
+
+
+def location_score(
+    client_areas: List[str],
+    property_area: Optional[str],
+    property_address: Optional[str] = None,
+    property_society: Optional[str] = None,
+) -> Optional[float]:
+    """Geographic relevance in [0, 1], best tier wins across every area the
+    client named — or None when the client named no area (never scored, never
+    a filter) or when the LISTING has no location at all (an unknown, which
+    scoring prices as one rather than as a match).
+
+    The society/project name is part of the listing's location text because
+    people routinely write one in place of an area ("Black Residency") on
+    both sides of this comparison."""
+    if not client_areas:
+        return None
+    written = " ".join(part for part in (property_area, property_address, property_society) if part and part.strip())
+    if not written.strip():
+        return None
+    haystack, hay_set, hay_buckets = _parse_location(written)
+    # A client who named nothing but a city HAS stated that city as their
+    # area, so a listing in it is an exact hit. A client who named a locality
+    # as well has stated the locality — the city alone is then same-city, not
+    # the area they asked for.
+    city_only = all(area in config.CITY_NAMES for area in client_areas)
+    best = config.LOCATION_OTHER
+    for area in client_areas:
+        best = max(best, _area_tier(area, haystack, hay_set, hay_buckets, city_only))
+        if best >= config.LOCATION_EXACT:
+            break
+    return best
+
+
+def _area_tier(
+    area: str,
+    haystack: str,
+    hay_set: frozenset,
+    hay_buckets: Dict[str, List[str]],
+    city_only: bool,
+) -> float:
+    is_city = area in config.CITY_NAMES
+    if area and area in haystack:
+        return config.LOCATION_EXACT if (city_only or not is_city) else config.LOCATION_SAME_CITY
+    if is_city:
+        # The client named this city and the listing does not mention it.
+        # Nothing here can say whether it is next door or 400km away, so it
+        # gets the honest bottom tier rather than an invented distance.
+        return config.LOCATION_OTHER
+    words = _significant_words(area)
+    if any(word in hay_set for word in words):
+        return config.LOCATION_PARTIAL
+    for word in words:
+        for candidate in hay_buckets.get(word[:2], ()):
+            if abs(len(candidate) - len(word)) <= 2 and difflib.SequenceMatcher(None, word, candidate).ratio() >= (
+                config.LOCATION_FUZZY_RATIO
+            ):
+                return config.LOCATION_FUZZY
+    for neighbour in config.NEARBY_AREAS.get(area, ()):
+        if normalize_token(neighbour) in haystack:
+            return config.LOCATION_NEARBY
+    return config.LOCATION_OTHER
 
 
 _NON_RESIDENTIAL_WORDS_RE = re.compile(
@@ -629,36 +777,62 @@ def parse_bhk_intent(raw: Optional[str]) -> Optional[BhkIntent]:
     return BhkIntent("exact", numbers)
 
 
-def bhk_score(client_raw: Optional[str], property_raw: Optional[str]) -> Optional[float]:
-    """Soft field score in [0, 1], or None if either side has no usable
-    BHK data (not comparable — never scored as a match or a mismatch)."""
+def bhk_is_strict(client_raw: Optional[str]) -> bool:
+    """Whether the client ruled everything else out — "exactly 3 BHK", "only
+    3 BHK". The eligibility gate reads this to decide which of its two
+    distance limits applies (match_config.BHK_STRICT_MAX_DISTANCE), so
+    "exactly 3" rejects the 4 BHK its author explicitly excluded instead of
+    merely ranking it lower."""
+    intent = parse_bhk_intent(client_raw)
+    return intent is not None and intent.kind == "exact_strict"
+
+
+def bhk_distance(client_raw: Optional[str], property_raw: Optional[str]) -> Optional[float]:
+    """How many bedrooms this property is from the NEAREST configuration the
+    client would accept — 0.0 when the requirement is satisfied outright
+    (including every value inside a stated range or above a stated minimum),
+    and None when either side has no usable BHK data.
+
+    Split out of bhk_score below so ELIGIBILITY can be expressed in the unit
+    the requirement is actually written in — bedrooms — rather than in
+    whatever the decay curve happens to turn that distance into. "A 1 BHK is
+    two bedrooms away from a 3 BHK request, and that is too far" is a rule a
+    broker can read, check and change; "its score fell under 0.3" is not."""
     intent = parse_bhk_intent(client_raw)
     if intent is None or not property_raw:
         return None
     prop_numbers = [float(n) for n in _BHK_NUM_RE.findall(property_raw.lower())]
     if not prop_numbers:
         return None
-    p = prop_numbers[0]
+    return _intent_distance(prop_numbers[0], intent)
 
+
+def _intent_distance(p: float, intent: BhkIntent) -> float:
     if intent.kind == "range":
-        distance = _range_distance(p, intent)
-        return 1.0 if distance == 0 else _decay(distance, steep=False)
-
+        return _range_distance(p, intent)
     if intent.kind == "minimum":
         target = intent.values[0]
-        return 1.0 if p >= target else _decay(target - p, steep=False)
-
+        return 0.0 if p >= target else target - p
     if intent.kind == "set":
         low, high = min(intent.values), max(intent.values)
         if low <= p <= high:
-            return 1.0
-        distance = (low - p) if p < low else (p - high)
-        return _decay(distance, steep=False)
+            return 0.0
+        return (low - p) if p < low else (p - high)
+    return abs(p - intent.values[0])
 
-    steep = intent.kind == "exact_strict"
-    target = intent.values[0]
-    distance = abs(p - target)
-    return 1.0 if distance == 0 else _decay(distance, steep=steep)
+
+def bhk_score(client_raw: Optional[str], property_raw: Optional[str]) -> Optional[float]:
+    """Soft field score in [0, 1], or None if either side has no usable
+    BHK data (not comparable — never scored as a match or a mismatch).
+
+    The distance itself is bhk_distance above; this is only the curve over
+    it, so the two can never disagree about how far off a property is."""
+    distance = bhk_distance(client_raw, property_raw)
+    if distance is None:
+        return None
+    if distance == 0:
+        return 1.0
+    return _decay(distance, steep=bhk_is_strict(client_raw))
 
 
 def _range_distance(p: float, intent: BhkIntent) -> float:

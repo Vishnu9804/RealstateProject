@@ -147,11 +147,44 @@ const FIELD_SCORE_LABEL: Record<string, string> = {
   budget: "Budget",
   location: "Location",
   bhk: "BHK",
-  semantic: "Overall fit",
+  property_type: "Property type",
   size: "Size",
   furnishing: "Furnishing",
-  purpose_gate: "Purpose match",
-  property_type_gate: "Property type match",
+  purpose: "Buy/Rent",
+  semantic: "Overall fit",
+  // Keys the engine wrote before the two-score redesign. Kept only so a match
+  // cached by the previous engine still reads as words rather than as a raw
+  // field name, for the short while before that client is re-scored.
+  purpose_gate: "Buy/Rent",
+  property_type_gate: "Property type",
+  brief_specificity: "Brief completeness",
+};
+
+/** What CONFIDENCE means on a card, in the broker's terms. It is not a second
+ *  opinion on the property — it is how much the client told us, and how much
+ *  of that this particular listing could answer. A 92% match at low
+ *  confidence is a real 92% match against a one-line brief, and it is shown
+ *  as exactly that rather than being quietly marked down. */
+const CONFIDENCE_LABEL: Record<MatchBucket, string> = {
+  high: "High confidence",
+  medium: "Medium confidence",
+  low: "Low confidence",
+};
+
+/** Deliberately not the match badge's own ok/warn/bad ramp: confidence is
+ *  information, not a verdict on the property, and a high-confidence match
+ *  must not read as a second green tick beside the score. Only LOW earns
+ *  attention, because that is the one a broker needs to factor in. */
+const CONFIDENCE_TONE: Record<MatchBucket, "info" | "warn"> = {
+  high: "info",
+  medium: "info",
+  low: "warn",
+};
+
+const CONFIDENCE_HINT: Record<MatchBucket, string> = {
+  high: "The client gave a detailed brief and this listing answers most of it.",
+  medium: "Part of the brief is unstated, or this listing does not answer all of it.",
+  low: "The client gave very little to go on — this is a good fit for what little we know.",
 };
 
 /** The type row's "everything" option — a value no real type can have. */
@@ -903,10 +936,36 @@ export default function ClientMatchesDialog({
         key,
         items: typeVisibleItems
           .filter((item) => item.section === key)
-          .sort((a, b) => (b.match?.score ?? 0) - (a.match?.score ?? 0)),
+          .sort(
+            (a, b) =>
+              (b.match?.score ?? 0) - (a.match?.score ?? 0) ||
+              // Confidence as the tie-break, matching the engine's own order
+              // (Backend/Service/ClientPropertyMatchingService/scoring.py's
+              // ranking_key). For a broad brief nearly every card scores the
+              // same, so without this the order inside a bucket would be
+              // whatever the list happened to arrive in.
+              (b.match?.confidence_score ?? 0) - (a.match?.confidence_score ?? 0),
+          ),
       })).filter((section) => section.items.length > 0),
     [typeVisibleItems],
   );
+
+  /** A brief so broad that almost everything we found fits everything the
+   *  client told us. The scores are real — these properties DO match what was
+   *  said — but the shortlist cannot be narrowed further from this end, and
+   *  the useful next step is a question to the client rather than a longer
+   *  list. Said plainly here because a screen of "High match / Low
+   *  confidence" cards is otherwise easy to misread as a screen of strong
+   *  leads. */
+  const broadBrief = useMemo(() => {
+    const scored = typeVisibleItems.filter((item) => item.match != null);
+    // Only when the confidence figure is actually present (a match cached by
+    // the previous engine carries 0 until it is re-scored).
+    const known = scored.filter((item) => (item.match?.confidence_score ?? 0) > 0);
+    if (known.length < 10) return false;
+    const lowConfidence = known.filter((item) => item.match?.confidence_bucket === "low");
+    return lowConfidence.length >= known.length * 0.8;
+  }, [typeVisibleItems]);
 
   // Every card that came from a website enquiry, regardless of its own
   // PRIMARY section — this is what makes a High-matching website enquiry
@@ -1810,6 +1869,19 @@ export default function ClientMatchesDialog({
               </div>
             )}
 
+            {/* See the `broadBrief` memo. The percentages below are honest —
+                these properties match what this client asked for — but what
+                is missing is the brief, not the properties. */}
+            {!mainSectionLoading && inDrawer && broadBrief && (
+              <Note tone="info" icon={<IconAlert size={16} />}>
+                <strong>This client's brief is very broad.</strong> Everything
+                below matches what they have told us so far, so the scores are
+                genuine — but there is too little to narrow it down with.
+                Asking for their preferred area, BHK or property type will cut
+                this list to the few that really fit.
+              </Note>
+            )}
+
             {!mainSectionLoading &&
               inDrawer &&
               bucketSections.map((section) => (
@@ -2292,6 +2364,19 @@ function PropertyMatchCard({
         {item.fromWebsiteInquiry && item.section !== "website" && (
           <Badge tone="accent">Website enquiry</Badge>
         )}
+        {/* How much we actually knew, shown BESIDE the match percentage and
+            never folded into it. Hidden when it is 0, which means this match
+            was cached by the previous engine and has not been re-scored yet —
+            a real 0 is impossible for a client who has any requirement at
+            all, so there is nothing to say until then. */}
+        {item.match != null && item.match.confidence_score > 0 && (
+          <Badge
+            tone={CONFIDENCE_TONE[item.match.confidence_bucket]}
+            title={CONFIDENCE_HINT[item.match.confidence_bucket]}
+          >
+            {CONFIDENCE_LABEL[item.match.confidence_bucket]}
+          </Badge>
+        )}
         {item.match?.is_partial_match && (
           <Badge tone="info">Partial data</Badge>
         )}
@@ -2742,6 +2827,14 @@ export function PropertyMatchDetailDialog({
                   {Math.round(match.score * 100)}% match
                 </Badge>
               )}
+              {match != null && match.confidence_score > 0 && (
+                <Badge
+                  tone={CONFIDENCE_TONE[match.confidence_bucket]}
+                  title={CONFIDENCE_HINT[match.confidence_bucket]}
+                >
+                  {CONFIDENCE_LABEL[match.confidence_bucket]}
+                </Badge>
+              )}
               {match?.is_partial_match && (
                 <Badge tone="info">Partial data</Badge>
               )}
@@ -2795,7 +2888,18 @@ export function PropertyMatchDetailDialog({
           {match && (
             <div className="detail__block">
               <div className="detail__k">Why this match</div>
-              <div className="detail__v">{match.reason}</div>
+              {/* One line per requirement, in the engine's own order. Falls
+                  back to the single sentence for a match cached before the
+                  itemised list existed. */}
+              {match.reasons?.length > 0 ? (
+                <ul className="detail__v" style={{ margin: 0, paddingLeft: 18 }}>
+                  {match.reasons.map((note) => (
+                    <li key={note}>{note}</li>
+                  ))}
+                </ul>
+              ) : (
+                <div className="detail__v">{match.reason}</div>
+              )}
               {fieldScoreEntries.length > 0 && (
                 <div
                   className="faint small row-flex"
@@ -2809,9 +2913,29 @@ export function PropertyMatchDetailDialog({
                   ))}
                 </div>
               )}
+              {/* The requirements the client DID state that this listing
+                  cannot answer. Named explicitly, because "we don't know" and
+                  "it matches" must never look the same on a broker's screen —
+                  a listing with no price on it has not met a budget. */}
+              {match.missing_information?.length > 0 && (
+                <div className="faint small" style={{ marginTop: 6 }}>
+                  Not stated on this listing:{" "}
+                  {match.missing_information
+                    .map((name) => FIELD_SCORE_LABEL[name] ?? name)
+                    .join(", ")}
+                  .
+                </div>
+              )}
+              {match.confidence_score > 0 && (
+                <div className="faint small" style={{ marginTop: 6 }}>
+                  {CONFIDENCE_LABEL[match.confidence_bucket]} (
+                  {Math.round(match.confidence_score * 100)}%) —{" "}
+                  {CONFIDENCE_HINT[match.confidence_bucket]}
+                </div>
+              )}
               <div className="faint small" style={{ marginTop: 6 }}>
                 Data available for {Math.round(match.evidence_ratio * 100)}% of
-                the fields compared.
+                the requirements this client stated.
               </div>
             </div>
           )}

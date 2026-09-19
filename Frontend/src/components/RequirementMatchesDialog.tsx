@@ -77,6 +77,26 @@ const BUCKET_LABEL: Record<MatchBucket, string> = {
 };
 const BUCKET_TONE: Record<MatchBucket, "ok" | "warn" | "bad"> = { high: "ok", medium: "warn", low: "bad" };
 
+/** How much was actually known when this match was judged — a SEPARATE
+ *  number from the match percentage, never mixed into it. Same wording and
+ *  same tones as the client side (ClientMatchesDialog), because it is the
+ *  same engine scoring both. */
+const CONFIDENCE_LABEL: Record<MatchBucket, string> = {
+  high: "High confidence",
+  medium: "Medium confidence",
+  low: "Low confidence",
+};
+const CONFIDENCE_TONE: Record<MatchBucket, "info" | "warn"> = {
+  high: "info",
+  medium: "info",
+  low: "warn",
+};
+const CONFIDENCE_HINT: Record<MatchBucket, string> = {
+  high: "The requirement is detailed and this listing answers most of it.",
+  medium: "Part of the requirement is unstated, or this listing does not answer all of it.",
+  low: "The requirement gave very little to go on — this is a good fit for what little we know.",
+};
+
 /** The type row's "everything" option — a value no real type can have.
  *  Same sentinel, for the same reason, as ClientMatchesDialog's. */
 const ALL_TYPES = "__all__";
@@ -705,10 +725,28 @@ function RequirementMatchCard({
         {/* Only ever set for a requirement that named more than one type —
             says which of them this property answers. */}
         {item.match.matched_type && <Badge tone="accent">For {item.match.matched_type}</Badge>}
+        {/* Hidden at 0, which means this match has not been re-scored by the
+            two-score engine yet — a requirement with anything stated can
+            never really score 0 confidence, so there is nothing to say. */}
+        {item.match.confidence_score > 0 && (
+          <Badge
+            tone={CONFIDENCE_TONE[item.match.confidence_bucket]}
+            title={CONFIDENCE_HINT[item.match.confidence_bucket]}
+          >
+            {CONFIDENCE_LABEL[item.match.confidence_bucket]}
+          </Badge>
+        )}
         {item.match.is_partial_match && <Badge tone="info">Partial data</Badge>}
       </div>
 
       {item.match.reason && <div className="match-card__reason">{item.match.reason}</div>}
+      {/* The requirements that WERE stated and this listing cannot answer —
+          named, so "unknown" is never read as "matches". */}
+      {item.match.missing_information?.length > 0 && (
+        <div className="match-card__reason faint small">
+          Not stated on this listing: {item.match.missing_information.join(", ")}.
+        </div>
+      )}
 
       <div className="match-card__foot">
         <span className="pcard__price">{formatPrice(source.price_text, source.price_amount_inr)}</span>

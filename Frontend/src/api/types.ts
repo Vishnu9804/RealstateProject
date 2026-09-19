@@ -365,8 +365,27 @@ export type PropertySource = "property" | "builder_project";
 
 export interface MatchedProperty {
   record_id: string;
+  /** How well this property matches the requirements the client ACTUALLY
+   *  GAVE — nothing else. A thin brief never lowers it (that is what
+   *  confidence_score is for), so a card reading 92% means the property fits
+   *  92% of what was asked, not "we are 92% sure". */
   score: number;
   bucket: MatchBucket;
+  /** How much was actually known to judge on: how complete the client's
+   *  brief is, and how much of it this listing could answer. A SEPARATE
+   *  number from `score` — "92% match / Low confidence" is a valid and
+   *  useful pair, and the two are never mixed. 0 on a match cached before
+   *  this existed, until that client is next re-scored. */
+  confidence_score: number;
+  confidence_bucket: MatchBucket;
+  /** Which of the client's stated requirements this property satisfies, and
+   *  which of them this LISTING could not answer (a missing price, no BHK on
+   *  the listing, ...). Both derived by the backend from field_scores, so
+   *  they always agree with the numbers shown beside them. */
+  matched_requirements: string[];
+  missing_information: string[];
+  /** `reason`, itemised — one short phrase per requirement. */
+  reasons: string[];
   evidence_ratio: number;
   is_partial_match: boolean;
   /** Snapshot of which tab the property sat in when it was scored. Never
@@ -374,6 +393,10 @@ export interface MatchedProperty {
    *  see ClientMatchesDialog's categoryOf) and never "needs_review" in
    *  practice, since a flagged property is not scored at all. */
   property_category: string;
+  /** Stated requirement -> its score, or null where the listing could not
+   *  answer it. A requirement the client never stated is ABSENT from this
+   *  object, never null: "never asked about" and "asked about and unknown"
+   *  are opposite facts. */
   field_scores: Record<string, number | null>;
   reason: string;
   /** Which of the client's property types this matched — set only for a

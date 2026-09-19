@@ -710,6 +710,36 @@ def init_db() -> None:
                 """
             )
         )
+        # CONFIDENCE — how much was actually known when a match was judged,
+        # kept apart from how well the property matched (see Service/
+        # ClientPropertyMatchingService/scoring.py's "TWO NUMBERS, NEVER ONE").
+        # One column per match table and nothing else: the High/Medium/Low
+        # confidence bucket, the matched-requirement list and the
+        # missing-information list are all derived from what is already on the
+        # row (Model/ClientPropertyMatchingModel/match_score.py), so none of
+        # them costs a column on the two largest tables here.
+        #
+        # NOT NULL DEFAULT 0 rather than nullable, because the pydantic model
+        # declares confidence_score as a plain float: a NULL would fail
+        # validation on the very first read of a pre-existing row. On Postgres
+        # 11+ a DEFAULT on ADD COLUMN is catalog-only — no table rewrite, so
+        # this is instant on the existing match rows and costs no Neon compute
+        # beyond the statement itself. Every such row reads as "nothing
+        # known", which is exactly right until the one-time engine upgrade
+        # (ClientPropertyMatchingService/scheduled_recompute_service.py) or
+        # that requirement's next catch-up re-scores it.
+        connection.execute(
+            text(
+                "ALTER TABLE client_property_matches "
+                "ADD COLUMN IF NOT EXISTS confidence_score DOUBLE PRECISION NOT NULL DEFAULT 0"
+            )
+        )
+        connection.execute(
+            text(
+                "ALTER TABLE broker_requirement_matches "
+                "ADD COLUMN IF NOT EXISTS confidence_score DOUBLE PRECISION NOT NULL DEFAULT 0"
+            )
+        )
     with engine.begin() as connection:
         # One-time move of the original WhatsApp message fields (group_name,
         # chat_type, sender_name, sender_saved_name, sender_phone,

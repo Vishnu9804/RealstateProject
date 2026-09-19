@@ -359,18 +359,20 @@ def drop_property_from_memory_cache(property_record_id: str) -> None:
 
 
 def _type_plan(pseudo_client: ClientRecord) -> List[Tuple[str, None]]:
-    """The requirement's property types, one entry each, in the shape
-    scoring.score_client_property takes — with no size against any of them,
-    because a requirement has nowhere to state one (see _as_pseudo_client).
+    """The requirement's property types, one entry each — with no size
+    against any of them, because a requirement has nowhere to state one (see
+    _as_pseudo_client).
 
     A requirement naming SEVERAL types ("Flat, Row House") means all of them
     are acceptable, which is exactly what a client's own multi-select means,
-    so it is now scored the same way: each type on its own, best result kept,
+    so it is scored the same way: each type on its own, best result kept,
     tagged with the type it was for (MatchScore.matched_type) so the matches
-    dialog can split the shortlist one tab per type. One type, or none, takes
-    scoring.score_property unchanged — see score_client_property's own
-    fall-through, which is what keeps every single-type requirement's score
-    byte-for-byte what it always was."""
+    dialog can split the shortlist one tab per type. One type, or none, is
+    read whole, exactly as a client's single type is.
+
+    The scoring itself reads this off scoring.ClientBrief now; this is kept
+    for the one question _fingerprint below still asks of it — does this
+    requirement name more than one type?"""
     return [(group, None) for group in normalization.split_type_groups(pseudo_client.property_type)]
 
 
@@ -386,16 +388,19 @@ def _score(
         return []
     vector = _requirement_vector(requirement, pseudo_client)
     bhk_without_type = _asks_bhk_without_type(requirement)
-    plan = _type_plan(pseudo_client)
+    brief = scoring.build_brief(pseudo_client, vector)
     best: Dict[str, MatchScore] = {}
     for prop in candidates:
         if _excluded_for_requirement(bhk_without_type, prop):
             continue
-        score = scoring.score_client_property(pseudo_client, prop, vector, plan)
+        score = scoring.score_client_property(prop, brief)
         if score is None:
             continue
         previous = best.get(score.record_id)
-        if previous is None or score.score > previous.score:
+        # Ranked the same way a client's shortlist is (match score first, then
+        # confidence — scoring.ranking_key), so the two match surfaces can
+        # never order the same two properties differently.
+        if previous is None or scoring.ranking_key(score) > scoring.ranking_key(previous):
             best[score.record_id] = score
     return list(best.values())
 
@@ -412,16 +417,44 @@ def _score(
 # never re-scored for nothing.
 _PER_TYPE_SCORING_MARKER = "|| per-type scoring v1"
 
+# Appended to EVERY requirement's fingerprint, and bumped whenever the
+# scoring engine itself changes what a stored match means.
+#
+# The fingerprint's question is "is what is stored still the result of
+# scoring this requirement?" — and the answer stops being yes when the
+# engine changes, not only when the requirement's own words do. Naming the
+# engine here is what makes every stored requirement re-score itself exactly
+# once, on its next read or on the next nightly catch-up, with no migration,
+# no extra pass and no flag to remember to unset. The client side has no
+# fingerprint to lean on, so it gets the one-time pass in
+# ClientPropertyMatchingService/scheduled_recompute_service.py instead.
+#
+# v2: eligibility gates (buy/rent, kind of property, grossly over budget,
+# far-off BHK), a stated requirement the listing cannot answer priced as an
+# unknown rather than dropped, a bucket ceiling set by how complete the
+# requirement is, and a target band under a stated maximum.
+#
+# v3: the bucket ceiling is GONE. How well a property matches and how much we
+# know are two separate numbers now — the match score says only how well the
+# property fits what was asked for, and a thin brief lowers CONFIDENCE
+# instead of being made to lower the score. Also: BHK eligibility in bedrooms
+# rather than in score, tiered location relevance instead of a single
+# same/different test, property type as a small ranking weight on top of its
+# hard compatibility check, a stated size the listing cannot answer priced as
+# an unknown, and new bucket cutoffs. See
+# ClientPropertyMatchingService/scoring.py and match_config.py.
+_ENGINE_MARKER = "|| matching engine v3"
+
 
 def _fingerprint(pseudo_client: ClientRecord) -> str:
-    """sha256 of the exact text the requirement is scored and embedded from.
-    Every field scoring reads — buy/rent, type, BHK, budget, areas, society,
-    furnishing, description — is part of that text, so any change to them
-    changes this."""
+    """sha256 of the exact text the requirement is scored and embedded from,
+    plus the engine that scored it. Every field scoring reads — buy/rent,
+    type, BHK, budget, areas, society, furnishing, description — is part of
+    that text, so any change to them changes this."""
     text = client_requirement_text_builder.build_requirement_text(pseudo_client)
     if len(_type_plan(pseudo_client)) > 1:
         text = f"{text} {_PER_TYPE_SCORING_MARKER}"
-    return hashlib.sha256(text.encode("utf-8")).hexdigest()
+    return hashlib.sha256(f"{text} {_ENGINE_MARKER}".encode("utf-8")).hexdigest()
 
 
 def _now() -> datetime:
@@ -548,7 +581,7 @@ def _build_result(
         )
 
     for group in (high, medium, low):
-        group.sort(key=lambda m: m.score, reverse=True)
+        group.sort(key=scoring.ranking_key, reverse=True)
 
     return RequirementMatchResult(
         record_id=requirement.record_id,

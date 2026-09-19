@@ -114,7 +114,7 @@ const FETCH_LIMIT = PROPERTY_FETCH_LIMIT;
  * instead of several hundred, which is what the page actually pays for on
  * every poll, sort and keystroke.
  */
-const PAGE_SIZE = 20;
+export const PAGE_SIZE = 20;
 
 type ViewMode = "table" | "cards";
 export type SortKey = "time" | "price" | "areaSqft" | "areaVaar" | "society" | "locality";
@@ -1236,17 +1236,22 @@ export function Pager({
   pageCount,
   total,
   onChange,
+  label = "Property pages",
 }: {
   page: number;
   pageCount: number;
   total: number;
   onChange: (page: number) => void;
+  /** What the screen reader calls this pager. Defaults to the properties
+   *  wording every other page that uses it wants; the Inquiries table names
+   *  its own rows instead. */
+  label?: string;
 }) {
   const from = (page - 1) * PAGE_SIZE + 1;
   const to = Math.min(page * PAGE_SIZE, total);
 
   return (
-    <nav className="pager" aria-label="Property pages">
+    <nav className="pager" aria-label={label}>
       <span className="pager__info">
         Showing{" "}
         <strong className="tnum">

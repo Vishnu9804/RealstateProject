@@ -26,6 +26,7 @@ import ClientMatchesDialog, { type DialogView } from "../components/ClientMatche
 import ClientFormDialog from "../components/ClientFormDialog";
 import ClientDetailDialog, { formatBudgetRange } from "../components/ClientDetailDialog";
 import ConfirmDialog from "../components/ui/ConfirmDialog";
+import { PAGE_SIZE, Pager } from "./DashboardPage";
 import {
   Badge,
   Button,
@@ -370,6 +371,39 @@ export default function InquiryClientsPage() {
     });
   }, [allClients, query]);
 
+  // Paged exactly the way the Properties table is (same PAGE_SIZE, same
+  // Pager), and for the same reason: the whole list is already in memory —
+  // the search above and the Matches counts both need every row — so this
+  // buys nothing on the network and everything on rendering. Several
+  // hundred client rows, each with a Matches badge and a status pill, were
+  // being laid out again on every poll, every keystroke and every count
+  // refresh; twenty are not.
+  const [page, setPage] = useState(1);
+  const pageCount = Math.max(1, Math.ceil(visibleClients.length / PAGE_SIZE));
+  const pageItems = useMemo(
+    () => visibleClients.slice((page - 1) * PAGE_SIZE, page * PAGE_SIZE),
+    [visibleClients, page],
+  );
+  const listTopRef = useRef<HTMLDivElement>(null);
+
+  // A narrowed list invalidates the page you were on — page 7 of a 3-page
+  // result is a blank screen that reads as a bug.
+  useEffect(() => setPage(1), [query]);
+  useEffect(() => {
+    if (page > pageCount) setPage(pageCount);
+  }, [page, pageCount]);
+
+  // Turning the page should put you at the top of the new rows. Skipped on
+  // the first render, so opening the page doesn't scroll on its own.
+  const pagedOnce = useRef(false);
+  useEffect(() => {
+    if (!pagedOnce.current) {
+      pagedOnce.current = true;
+      return;
+    }
+    listTopRef.current?.scrollIntoView({ behavior: "smooth", block: "start" });
+  }, [page]);
+
   // AgentManagement feature: every client's match counts, in ONE request
   // (see matchingApi.getAllMatchCounts for what this replaced and why).
   //
@@ -610,24 +644,35 @@ export default function InquiryClientsPage() {
           )}
 
           {visibleClients.length > 0 && (
-            <ClientTable
-              clients={visibleClients}
-              query={query}
-              expandedPhone={expandedPhone}
-              setExpandedPhone={setExpandedPhone}
-              freshPhones={freshPhones}
-              onViewMatches={(phone, view) => {
-                setMatchesInitialView(view);
-                setMatchesPhone(phone);
-              }}
-              countsFor={countsFor}
-              onEdit={handleEdit}
-              onDelete={setDeleteTarget}
-              // The same fold-back an Edit save uses: the endpoint returns
-              // the updated record, so the cell and the shared list cache
-              // both show the new date without re-fetching the whole list.
-              onFollowUpSaved={(saved) => applySavedClient(saved, "edit")}
-            />
+            <>
+              <div ref={listTopRef} className="list-anchor" />
+              <ClientTable
+                clients={pageItems}
+                allClients={visibleClients}
+                query={query}
+                expandedPhone={expandedPhone}
+                setExpandedPhone={setExpandedPhone}
+                freshPhones={freshPhones}
+                onViewMatches={(phone, view) => {
+                  setMatchesInitialView(view);
+                  setMatchesPhone(phone);
+                }}
+                countsFor={countsFor}
+                onEdit={handleEdit}
+                onDelete={setDeleteTarget}
+                // The same fold-back an Edit save uses: the endpoint returns
+                // the updated record, so the cell and the shared list cache
+                // both show the new date without re-fetching the whole list.
+                onFollowUpSaved={(saved) => applySavedClient(saved, "edit")}
+              />
+              <Pager
+                page={page}
+                pageCount={pageCount}
+                total={visibleClients.length}
+                onChange={setPage}
+                label="Inquiry pages"
+              />
+            </>
           )}
 
       {clientForm && (
@@ -927,6 +972,7 @@ function FollowUpPopover({
 
 function ClientTable({
   clients,
+  allClients,
   query,
   expandedPhone,
   setExpandedPhone,
@@ -937,7 +983,14 @@ function ClientTable({
   onDelete,
   onFollowUpSaved,
 }: {
+  /** The rows this page of the table draws. */
   clients: InquiryClientRecord[];
+  /** Every row the current search matches, not just this page's. The two
+   *  overlays below are looked up in this rather than in `clients`, so a
+   *  poll that reorders the list while a detail dialog or a follow-up
+   *  popover is open cannot close it by moving that client onto another
+   *  page. */
+  allClients: InquiryClientRecord[];
   query: string;
   expandedPhone: string | null;
   setExpandedPhone: (phone: string | null) => void;
@@ -953,7 +1006,7 @@ function ClientTable({
   onFollowUpSaved: (saved: InquiryClientRecord) => void;
 }) {
   const [followUp, setFollowUp] = useState<{ phone: string; anchor: HTMLElement } | null>(null);
-  const followUpClient = followUp ? clients.find((c) => c.phone === followUp.phone) : undefined;
+  const followUpClient = followUp ? allClients.find((c) => c.phone === followUp.phone) : undefined;
   // Delete is admin-only — Backend/Controller/WhatsAppInquiryHandlingController/
   // whatsapp_inquiry_controller.py's DELETE /clients/{phone} requires it
   // server-side regardless; hiding the button here is purely so an
@@ -1130,7 +1183,7 @@ function ClientTable({
       )}
 
       {expandedPhone && (() => {
-        const client = clients.find((c) => c.phone === expandedPhone);
+        const client = allClients.find((c) => c.phone === expandedPhone);
         return client ? (
           <ClientDetailDialog
             client={client}

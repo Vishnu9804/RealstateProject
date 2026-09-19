@@ -1352,7 +1352,14 @@ mark.hl {
   transition: box-shadow var(--t-base) var(--ease-out);
 }
 .toolbar:focus-within { box-shadow: var(--elev-3); }
-.toolbar__grow { flex: 1 1 240px; min-width: 200px; }
+/* The search box gets a basis wide enough to show its whole placeholder.
+   On the Properties toolbar — search plus four capsules plus two buttons —
+   a 240px basis let it shrink until "Search society, area, address,
+   contact…" was cut to "Search society, area, ad". The toolbar already
+   wraps, so a wider basis simply moves the search onto a line of its own
+   when the controls beside it would otherwise squeeze it, which is the
+   right trade for the one control on the row people type into. */
+.toolbar__grow { flex: 1 1 360px; min-width: 260px; }
 .toolbar__meta { font-size: 12.5px; color: var(--ink-4); display: inline-flex; align-items: center; gap: 7px; }
 
 /* ---- utility ---------------------------------------------------------- */

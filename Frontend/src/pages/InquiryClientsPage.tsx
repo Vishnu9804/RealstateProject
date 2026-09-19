@@ -16,17 +16,27 @@ import type {
 } from "../api/types";
 import { usePolling } from "../hooks/usePolling";
 import { useAuth } from "../state/AuthProvider";
-import { useDebounced } from "../hooks/useUi";
+import { useDebounced, useSearchShortcut } from "../hooks/useUi";
 import { friendlyError } from "../lib/apiError";
 import { formatIst, fromIstFields, relativeTime, toIstFields } from "../lib/formatters";
 import { CLIENT_FETCH_LIMIT } from "../lib/fetchLimits";
 import { getCachedClients, setCachedClients } from "../lib/inquiryListCache";
+import {
+  compileFilters,
+  countActiveFilters,
+  describeFilter,
+  isFilterActive,
+  type ColumnFilter,
+  type FilterState,
+} from "../lib/propertyFilters";
+import { CLIENT_FILTER_DEF_BY_KEY, CLIENT_FILTER_DEFS } from "../lib/clientFilters";
 import { useToast } from "../components/ui/Toast";
+import FilterPopover from "../components/ui/FilterPopover";
 import ClientMatchesDialog, { type DialogView } from "../components/ClientMatchesDialog";
 import ClientFormDialog from "../components/ClientFormDialog";
 import ClientDetailDialog, { formatBudgetRange } from "../components/ClientDetailDialog";
 import ConfirmDialog from "../components/ui/ConfirmDialog";
-import { PAGE_SIZE, Pager } from "./DashboardPage";
+import { FilterTrigger, PAGE_SIZE, Pager } from "./DashboardPage";
 import {
   Badge,
   Button,
@@ -99,6 +109,18 @@ export interface ClientPropertyCounts {
   completed: number;
 }
 
+/** The filterable columns, in the order the table draws them. Every entry in
+ *  CLIENT_FILTER_DEFS has a column here and every one of these has a def —
+ *  the same arrangement the Properties page's table view has, where a filter
+ *  is reached by clicking the heading it belongs to and nowhere else. */
+const COLUMN_FILTERS: { key: string; label: string; numeric?: boolean }[] = [
+  { key: "purpose", label: "Purpose" },
+  { key: "type", label: "Type" },
+  { key: "bhk", label: "BHK" },
+  { key: "budget", label: "Budget", numeric: true },
+  { key: "areas", label: "Areas" },
+];
+
 const REFRESH_INTERVAL_MS = 8000;
 const FETCH_LIMIT = CLIENT_FETCH_LIMIT;
 /** How often the match-count map is re-read even when no version signal
@@ -122,6 +144,14 @@ export default function InquiryClientsPage() {
   const [search, setSearch] = useState("");
   const query = useDebounced(search, 180);
   const [expandedPhone, setExpandedPhone] = useState<string | null>(null);
+
+  // Per-column filters — the Properties page's own machinery and popover,
+  // pointed at client rows (see lib/clientFilters.ts). Purely local: every
+  // field they read is already on the list this page holds, so nothing here
+  // costs a request or a database read.
+  const [filters, setFilters] = useState<FilterState>({});
+  const activeFilterCount = countActiveFilters(filters);
+  const [openFilter, setOpenFilter] = useState<{ key: string; anchor: HTMLElement } | null>(null);
 
   const searchRef = useRef<HTMLInputElement>(null);
   const seenPhones = useRef<Set<string> | null>(null);
@@ -334,24 +364,22 @@ export default function InquiryClientsPage() {
 
   usePolling(() => load(false), REFRESH_INTERVAL_MS);
 
-  useEffect(() => {
-    const onKeyDown = (event: KeyboardEvent) => {
-      const target = event.target as HTMLElement | null;
-      const typing = target && /^(INPUT|TEXTAREA|SELECT)$/.test(target.tagName);
-      if (event.key === "/" && !typing && !event.metaKey && !event.ctrlKey) {
-        event.preventDefault();
-        searchRef.current?.focus();
-      }
-    };
-    window.addEventListener("keydown", onKeyDown);
-    return () => window.removeEventListener("keydown", onKeyDown);
-  }, []);
+  // "/" jumps to search from anywhere on the page — see useSearchShortcut.
+  useSearchShortcut(searchRef);
 
   const allClients = useMemo(() => clients ?? [], [clients]);
+
+  // Built once per filter change rather than per row, exactly as the
+  // Properties page does it.
+  const passesFilters = useMemo(
+    () => compileFilters<InquiryClientRecord>(filters, CLIENT_FILTER_DEFS),
+    [filters],
+  );
 
   const visibleClients = useMemo(() => {
     const needle = query.trim().toLowerCase();
     return allClients.filter((client) => {
+      if (!passesFilters(client)) return false;
       if (!needle) return true;
       const haystack = [
         client.name,
@@ -369,7 +397,7 @@ export default function InquiryClientsPage() {
         .toLowerCase();
       return haystack.includes(needle);
     });
-  }, [allClients, query]);
+  }, [allClients, query, passesFilters]);
 
   // Paged exactly the way the Properties table is (same PAGE_SIZE, same
   // Pager), and for the same reason: the whole list is already in memory —
@@ -388,7 +416,7 @@ export default function InquiryClientsPage() {
 
   // A narrowed list invalidates the page you were on — page 7 of a 3-page
   // result is a blank screen that reads as a bug.
-  useEffect(() => setPage(1), [query]);
+  useEffect(() => setPage(1), [query, filters]);
   useEffect(() => {
     if (page > pageCount) setPage(pageCount);
   }, [page, pageCount]);
@@ -505,10 +533,22 @@ export default function InquiryClientsPage() {
     [matchCounts],
   );
 
-  const filtersActive = query.trim().length > 0;
+  const filtersActive = query.trim().length > 0 || activeFilterCount > 0;
   function resetAll() {
     setSearch("");
+    setFilters({});
   }
+
+  const setColumnFilter = useCallback((key: string, next: ColumnFilter | undefined) => {
+    setFilters((prev) => {
+      const merged = { ...prev };
+      if (next === undefined) delete merged[key];
+      else merged[key] = next;
+      return merged;
+    });
+  }, []);
+
+  const openFilterDef = openFilter ? CLIENT_FILTER_DEF_BY_KEY[openFilter.key] : undefined;
 
   const loading = clients === null && error === null;
 
@@ -516,7 +556,7 @@ export default function InquiryClientsPage() {
     <div className="stack stack-5">
       <header className="section-head">
         <div>
-          <div className="section-head__eyebrow">whatsappInquiryHandling</div>
+          <div className="section-head__eyebrow">Step 3 — WhatsApp inquiry handling</div>
           <h1 className="page-title">Inquiries</h1>
           <p className="section-head__sub">
             Everyone who's reached out about a property — through the WhatsApp
@@ -591,7 +631,8 @@ export default function InquiryClientsPage() {
                 inputRef={searchRef}
                 value={search}
                 onChange={setSearch}
-                placeholder="Search name, phone, area, requirements…  (press / )"
+                placeholder="Search name, phone, area, requirements…"
+                shortcutHint="/"
                 ariaLabel="Search clients"
               />
             </div>
@@ -602,6 +643,27 @@ export default function InquiryClientsPage() {
               </Button>
             )}
           </div>
+
+          {/* Applied filters stay visible after the popover closes — a filter
+              you cannot see is a filter you forget you set, and then the
+              table looks like it is missing rows. */}
+          {activeFilterCount > 0 && (
+            <div className="filter-strip">
+              {CLIENT_FILTER_DEFS.filter((def) => isFilterActive(filters[def.key])).map((def) => (
+                <span key={def.key} className="chip chip--filter">
+                  <strong>{def.label}:</strong> <span>{describeFilter(def, filters[def.key]!)}</span>
+                  <button
+                    type="button"
+                    className="chip__x"
+                    onClick={() => setColumnFilter(def.key, undefined)}
+                    aria-label={`Remove the ${def.label} filter`}
+                  >
+                    <IconX size={12} />
+                  </button>
+                </span>
+              ))}
+            </div>
+          )}
 
           {error && (
             <Note tone="bad" icon={<IconAlert size={17} />}>
@@ -637,7 +699,7 @@ export default function InquiryClientsPage() {
               <EmptyState
                 icon={<IconSearch size={36} />}
                 title="No matches"
-                body={`None of the ${allClients.length} clients match the current search.`}
+                body={`None of the ${allClients.length} clients match the current search and filters.`}
                 action={<Button onClick={resetAll}>Clear everything</Button>}
               />
             </Panel>
@@ -658,6 +720,9 @@ export default function InquiryClientsPage() {
                   setMatchesPhone(phone);
                 }}
                 countsFor={countsFor}
+                filters={filters}
+                openFilterKey={openFilter?.key ?? null}
+                onOpenFilter={(key, anchor) => setOpenFilter(openFilter?.key === key ? null : { key, anchor })}
                 onEdit={handleEdit}
                 onDelete={setDeleteTarget}
                 // The same fold-back an Edit save uses: the endpoint returns
@@ -674,6 +739,20 @@ export default function InquiryClientsPage() {
               />
             </>
           )}
+
+      {openFilter && openFilterDef && (
+        <FilterPopover<InquiryClientRecord>
+          def={openFilterDef}
+          anchorEl={openFilter.anchor}
+          /* Every loaded client, not just the ones currently on screen —
+             cross-filtering the picker would hide the very option someone
+             is trying to add to their selection. */
+          properties={allClients}
+          filter={filters[openFilter.key]}
+          onChange={(next) => setColumnFilter(openFilter.key, next)}
+          onClose={() => setOpenFilter(null)}
+        />
+      )}
 
       {clientForm && (
         <ClientFormDialog
@@ -979,6 +1058,9 @@ function ClientTable({
   freshPhones,
   onViewMatches,
   countsFor,
+  filters,
+  openFilterKey,
+  onOpenFilter,
   onEdit,
   onDelete,
   onFollowUpSaved,
@@ -997,6 +1079,10 @@ function ClientTable({
   freshPhones: Set<string>;
   onViewMatches: (phone: string, view: DialogView) => void;
   countsFor: (phone: string) => ClientPropertyCounts | null;
+  /** The live filter state, so a filtered column heading shows its count. */
+  filters: FilterState;
+  openFilterKey: string | null;
+  onOpenFilter: (key: string, anchor: HTMLElement) => void;
   /** Opens this client's pre-filled Edit dialog — requirements read-only
    *  while any of their properties is still out with an agent. */
   onEdit: (client: InquiryClientRecord) => void;
@@ -1020,11 +1106,19 @@ function ClientTable({
             <tr>
               <th>Name</th>
               <th>Phone</th>
-              <th>Purpose</th>
-              <th>Type</th>
-              <th>BHK</th>
-              <th style={{ textAlign: "right" }}>Budget</th>
-              <th>Areas</th>
+              {/* The five columns drawn from a vocabulary the data itself
+                  supplies open the Properties page's filter dialog on click
+                  — same popover, same chips, same "values seen so far". */}
+              {COLUMN_FILTERS.map((column) => (
+                <th key={column.key} style={column.numeric ? { textAlign: "right" } : undefined}>
+                  <FilterTrigger
+                    label={column.label}
+                    filter={filters[column.key]}
+                    expanded={openFilterKey === column.key}
+                    onOpen={(anchor) => onOpenFilter(column.key, anchor)}
+                  />
+                </th>
+              ))}
               <th>Last follow-up</th>
               <th>Updated</th>
               <th>Matches</th>

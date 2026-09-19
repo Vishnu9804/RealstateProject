@@ -6,7 +6,7 @@ import { soldoutPropertyApi } from "../api/soldoutPropertyApi";
 import type { PropertyRecord, SoldOutPropertyRecord } from "../api/types";
 import { useAppStatus } from "../state/StatusProvider";
 import { useAuth } from "../state/AuthProvider";
-import { useDebounced, usePersistentState } from "../hooks/useUi";
+import { useDebounced, usePersistentState, useSearchShortcut } from "../hooks/useUi";
 import { friendlyError } from "../lib/apiError";
 import { formatArea, formatPrice, relativeTime } from "../lib/formatters";
 import {
@@ -358,19 +358,8 @@ export default function DashboardPage() {
   }, [viewTab, filtersActive, soldoutVersion, loadSoldout]);
 
   // "/" jumps to search from anywhere on the page — the single most-used
-  // control should never require aiming at it.
-  useEffect(() => {
-    const onKeyDown = (event: KeyboardEvent) => {
-      const target = event.target as HTMLElement | null;
-      const typing = target && /^(INPUT|TEXTAREA|SELECT)$/.test(target.tagName);
-      if (event.key === "/" && !typing && !event.metaKey && !event.ctrlKey) {
-        event.preventDefault();
-        searchRef.current?.focus();
-      }
-    };
-    window.addEventListener("keydown", onKeyDown);
-    return () => window.removeEventListener("keydown", onKeyDown);
-  }, []);
+  // control should never require aiming at it. See useSearchShortcut.
+  useSearchShortcut(searchRef);
 
   const allProperties = useMemo(() => properties ?? [], [properties]);
   const onSoldOutTab = viewTab === "soldout";
@@ -848,7 +837,8 @@ export default function DashboardPage() {
             inputRef={searchRef}
             value={search}
             onChange={setSearch}
-            placeholder="Search society, area, address, contact…  (press / )"
+            placeholder="Search society, area, address, contact…"
+            shortcutHint="/"
             ariaLabel="Search properties"
           />
         </div>

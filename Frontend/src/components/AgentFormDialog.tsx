@@ -1,11 +1,11 @@
-import { useRef, useState } from "react";
+import { useEffect, useRef, useState } from "react";
 import { createPortal } from "react-dom";
 import { agentApi } from "../api/agentApi";
 import type { AgentSummary } from "../api/types";
 import { friendlyError } from "../lib/apiError";
 import { useToast } from "./ui/Toast";
-import { Button } from "./ui/Primitives";
-import { IconPlus, IconTag, IconX } from "./ui/Icons";
+import { Button, Note } from "./ui/Primitives";
+import { IconAlert, IconPlus, IconTag, IconX } from "./ui/Icons";
 
 /**
  * The Agents page's Add/Edit agent dialog — name, WhatsApp number, and the
@@ -32,6 +32,23 @@ export default function AgentFormDialog({
   const [newArea, setNewArea] = useState("");
   const [saving, setSaving] = useState(false);
   const areaInputRef = useRef<HTMLInputElement>(null);
+  const nameInputRef = useRef<HTMLInputElement>(null);
+  const phoneInputRef = useRef<HTMLInputElement>(null);
+  const errorRef = useRef<HTMLDivElement>(null);
+  // Why the last Save attempt didn't go through — the missing-field case
+  // included. It used to be silent: Save was simply disabled while a
+  // required field was blank, so pressing it did nothing, said nothing, and
+  // read as a broken button. The "Add a client" dialog has always answered
+  // this properly (ClientFormDialog's formError); this is the same answer.
+  const [formError, setFormError] = useState<string | null>(null);
+  // Which required boxes to outline. Cleared per field as it is filled in,
+  // so the red goes away as the problem is fixed rather than on the next
+  // Save.
+  const [invalid, setInvalid] = useState<{ name: boolean; phone: boolean }>({ name: false, phone: false });
+
+  useEffect(() => {
+    if (formError) errorRef.current?.scrollIntoView({ block: "nearest", behavior: "smooth" });
+  }, [formError]);
 
   function addArea() {
     const cleaned = newArea.trim();
@@ -49,13 +66,34 @@ export default function AgentFormDialog({
     setAreas((prev) => prev.filter((a) => a !== area));
   }
 
-  const canSave = name.trim().length > 0 && phone.trim().length > 0 && !saving;
-
+  /**
+   * Save is always pressable (except while a save is in flight) — a disabled
+   * button is the one control that cannot explain itself. Whatever is
+   * missing is named here instead, in the order the fields are read.
+   */
   async function handleSave() {
-    if (!canSave) return;
+    if (saving) return;
+    const trimmedName = name.trim();
+    const trimmedPhone = phone.trim();
+    const missingName = trimmedName.length === 0;
+    const missingPhone = trimmedPhone.length === 0;
+    if (missingName || missingPhone) {
+      setInvalid({ name: missingName, phone: missingPhone });
+      setFormError(
+        missingName && missingPhone
+          ? "Enter the agent's name and WhatsApp number — both are needed before they can be sent a site visit."
+          : missingName
+            ? "Enter the agent's name — it's what every client and visit is listed under."
+            : "Enter the agent's WhatsApp number — it's where every site-visit hand-off is sent.",
+      );
+      (missingName ? nameInputRef : phoneInputRef).current?.focus();
+      return;
+    }
+
     setSaving(true);
+    setFormError(null);
     try {
-      const body = { name: name.trim(), phone: phone.trim(), coverage_areas: areas };
+      const body = { name: trimmedName, phone: trimmedPhone, coverage_areas: areas };
       if (mode === "edit" && agent) {
         const updated = await agentApi.updateAgent(agent.agent_id, body);
         toast.push({ tone: "ok", title: "Agent updated", message: updated.name });
@@ -66,7 +104,13 @@ export default function AgentFormDialog({
         onSaved({ ...created, active_clients: [], completed_visits: [], visits_this_month: 0 });
       }
     } catch (err) {
-      toast.push({ tone: "bad", title: mode === "edit" ? "Couldn't update this agent" : "Couldn't add this agent", message: friendlyError(err) });
+      // Also kept in the dialog, not only in a toast: the toast fades while
+      // this modal is still open, and the backend's own wording ("already
+      // exists", "not a valid number") is the explanation the user needs
+      // while they are looking at the field it is about.
+      const message = friendlyError(err);
+      setFormError(message);
+      toast.push({ tone: "bad", title: mode === "edit" ? "Couldn't update this agent" : "Couldn't add this agent", message });
     } finally {
       setSaving(false);
     }
@@ -92,16 +136,39 @@ export default function AgentFormDialog({
           <div className="stack stack-4">
             <div style={{ display: "grid", gridTemplateColumns: "repeat(auto-fit, minmax(220px, 1fr))", gap: 14 }}>
               <div className="field">
-                <label className="field__hint" style={{ fontWeight: 560, color: "var(--ink-2)" }}>
-                  Name
+                <label className="field__hint" style={{ fontWeight: 560, color: "var(--ink-2)" }} htmlFor="agent-name">
+                  Name <span style={{ color: "var(--bad)" }}>*</span>
                 </label>
-                <input className="input" value={name} onChange={(e) => setName(e.target.value)} placeholder="e.g. Ravi Patel" autoFocus />
+                <input
+                  id="agent-name"
+                  ref={nameInputRef}
+                  className={`input${invalid.name ? " input--bad" : ""}`}
+                  aria-invalid={invalid.name || undefined}
+                  value={name}
+                  onChange={(e) => {
+                    setName(e.target.value);
+                    if (invalid.name && e.target.value.trim()) setInvalid((prev) => ({ ...prev, name: false }));
+                  }}
+                  placeholder="e.g. Ravi Patel"
+                  autoFocus
+                />
               </div>
               <div className="field">
-                <label className="field__hint" style={{ fontWeight: 560, color: "var(--ink-2)" }}>
-                  WhatsApp number
+                <label className="field__hint" style={{ fontWeight: 560, color: "var(--ink-2)" }} htmlFor="agent-phone">
+                  WhatsApp number <span style={{ color: "var(--bad)" }}>*</span>
                 </label>
-                <input className="input" value={phone} onChange={(e) => setPhone(e.target.value)} placeholder="90034 55667" />
+                <input
+                  id="agent-phone"
+                  ref={phoneInputRef}
+                  className={`input${invalid.phone ? " input--bad" : ""}`}
+                  aria-invalid={invalid.phone || undefined}
+                  value={phone}
+                  onChange={(e) => {
+                    setPhone(e.target.value);
+                    if (invalid.phone && e.target.value.trim()) setInvalid((prev) => ({ ...prev, phone: false }));
+                  }}
+                  placeholder="90034 55667"
+                />
               </div>
             </div>
 
@@ -146,6 +213,14 @@ export default function AgentFormDialog({
               </div>
               <span className="field__hint">Optional — used to flag "Covers this area" when assigning a client.</span>
             </div>
+
+            {formError && (
+              <div ref={errorRef}>
+                <Note tone="bad" icon={<IconAlert size={16} />}>
+                  {formError}
+                </Note>
+              </div>
+            )}
           </div>
         </div>
 
@@ -154,7 +229,7 @@ export default function AgentFormDialog({
             Cancel
           </Button>
           <span style={{ marginLeft: "auto" }}>
-            <Button variant="primary" onClick={handleSave} busy={saving} disabled={!canSave}>
+            <Button variant="primary" onClick={handleSave} busy={saving}>
               {mode === "edit" ? "Save changes" : "Add agent"}
             </Button>
           </span>

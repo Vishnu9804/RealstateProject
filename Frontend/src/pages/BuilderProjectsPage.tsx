@@ -3,7 +3,7 @@ import { createPortal } from "react-dom";
 import { BUILDER_PROJECT_LIST_LIMIT, builderProjectApi } from "../api/builderProjectApi";
 import type { BuilderProjectRecord } from "../api/types";
 import { useAppStatus } from "../state/StatusProvider";
-import { useDebounced, usePersistentState } from "../hooks/useUi";
+import { useDebounced, usePersistentState, useSearchShortcut } from "../hooks/useUi";
 import { friendlyError } from "../lib/apiError";
 import { formatArea, formatPrice, relativeTime } from "../lib/formatters";
 import {
@@ -255,18 +255,7 @@ export default function BuilderProjectsPage() {
   }, [appStatus?.builder_projects_version, load]);
 
   // "/" jumps to search from anywhere on the page, same as Properties.
-  useEffect(() => {
-    const onKeyDown = (event: KeyboardEvent) => {
-      const target = event.target as HTMLElement | null;
-      const typing = target && /^(INPUT|TEXTAREA|SELECT)$/.test(target.tagName);
-      if (event.key === "/" && !typing && !event.metaKey && !event.ctrlKey) {
-        event.preventDefault();
-        searchRef.current?.focus();
-      }
-    };
-    window.addEventListener("keydown", onKeyDown);
-    return () => window.removeEventListener("keydown", onKeyDown);
-  }, []);
+  useSearchShortcut(searchRef);
 
   const allProjects = useMemo(() => projects ?? [], [projects]);
 
@@ -491,7 +480,8 @@ export default function BuilderProjectsPage() {
             inputRef={searchRef}
             value={search}
             onChange={setSearch}
-            placeholder="Search society, area, address, contact…  (press / )"
+            placeholder="Search society, area, address, contact…"
+            shortcutHint="/"
             ariaLabel="Search builder projects"
           />
         </div>

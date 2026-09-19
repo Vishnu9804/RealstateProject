@@ -5,7 +5,7 @@ import { requirementApi } from "../api/requirementApi";
 import type { BrokerRequirementRecord } from "../api/types";
 import { useAppStatus } from "../state/StatusProvider";
 import { useAuth } from "../state/AuthProvider";
-import { useDebounced, usePersistentState } from "../hooks/useUi";
+import { useDebounced, usePersistentState, useSearchShortcut } from "../hooks/useUi";
 import { friendlyError } from "../lib/apiError";
 import { formatCompactInr, relativeTime } from "../lib/formatters";
 import {
@@ -332,18 +332,7 @@ export default function BrokerRequirementsPage() {
   }, [appStatus?.requirements_version, load]);
 
   // "/" jumps to search from anywhere on the page, same as Properties.
-  useEffect(() => {
-    const onKeyDown = (event: KeyboardEvent) => {
-      const target = event.target as HTMLElement | null;
-      const typing = target && /^(INPUT|TEXTAREA|SELECT)$/.test(target.tagName);
-      if (event.key === "/" && !typing && !event.metaKey && !event.ctrlKey) {
-        event.preventDefault();
-        searchRef.current?.focus();
-      }
-    };
-    window.addEventListener("keydown", onKeyDown);
-    return () => window.removeEventListener("keydown", onKeyDown);
-  }, []);
+  useSearchShortcut(searchRef);
 
   const allRequirements = useMemo(() => requirements ?? [], [requirements]);
 
@@ -580,7 +569,8 @@ export default function BrokerRequirementsPage() {
             inputRef={searchRef}
             value={search}
             onChange={setSearch}
-            placeholder="Search area, BHK, budget, contact, details…  (press / )"
+            placeholder="Search area, BHK, budget, contact, details…"
+            shortcutHint="/"
             ariaLabel="Search requirements"
           />
         </div>

@@ -1,4 +1,4 @@
-import { useCallback, useEffect, useRef, useState } from "react";
+import { useCallback, useEffect, useRef, useState, type RefObject } from "react";
 
 /** True when the OS asks for reduced motion. Components use this to skip
  *  count-ups and other purely decorative motion rather than relying only on
@@ -108,6 +108,50 @@ export function useDebounced<T>(value: T, delayMs = 180): T {
     return () => clearTimeout(id);
   }, [value, delayMs]);
   return debounced;
+}
+
+/**
+ * "/" jumps to the page's search box from anywhere on it — the shortcut the
+ * search placeholders advertise, in one place instead of copied into every
+ * list page.
+ *
+ * Registered on `document` in the CAPTURE phase rather than as an ordinary
+ * window listener, so nothing between the key press and here can swallow it:
+ * this fires before any handler on the element the key was pressed in,
+ * whether that element is a table row, a card or anything inside a portal.
+ *
+ * It deliberately does nothing when:
+ *  - the user is typing (an input, a textarea, a select, or any
+ *    contenteditable/role="textbox" surface) — "/" is a character there;
+ *  - a modifier is held — Ctrl+/ and ⌘+/ belong to the browser;
+ *  - a dialog is open — the search box behind it isn't what "/" means while
+ *    a modal has the screen, and stealing focus out of one is worse than
+ *    doing nothing.
+ *
+ * The existing text is selected as well as focused, so pressing "/" and
+ * typing replaces the old query instead of appending to it.
+ */
+export function useSearchShortcut(inputRef: RefObject<HTMLInputElement>): void {
+  useEffect(() => {
+    const onKeyDown = (event: KeyboardEvent) => {
+      if (event.key !== "/" || event.metaKey || event.ctrlKey || event.altKey) return;
+      if (event.defaultPrevented) return;
+      const target = event.target;
+      if (target instanceof HTMLElement) {
+        if (/^(INPUT|TEXTAREA|SELECT)$/.test(target.tagName)) return;
+        if (target.isContentEditable || target.closest('[contenteditable="true"],[role="textbox"]')) return;
+      }
+      // A modal or popover owns the screen while it is open.
+      if (document.querySelector('.modal-scrim, .popover, [aria-modal="true"]')) return;
+      const input = inputRef.current;
+      if (!input) return;
+      event.preventDefault();
+      input.focus();
+      input.select();
+    };
+    document.addEventListener("keydown", onKeyDown, true);
+    return () => document.removeEventListener("keydown", onKeyDown, true);
+  }, [inputRef]);
 }
 
 /** True once the page has scrolled past `offset` — used to push the header

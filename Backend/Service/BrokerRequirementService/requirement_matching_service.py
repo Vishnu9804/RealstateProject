@@ -35,13 +35,21 @@ by scoring.score_client_property, the same function the client side uses. A
 requirement with one type, or none, goes through scoring.score_property
 exactly as it always did.
 
-THE ONE RULE ADDED ON TOP: A BHK MEANS A HOME
+NO RULES OF ITS OWN, NOT EVEN ONE
 
-A broker requirement very often names no property type ("2 BHK Fully
-Furnished, Vesu"), and scoring treats a missing type as "every type is open".
-A bedroom count is only ever asked of a home, so a requirement that asks for
-a BHK but names no type never matches a land or commercial property (see
-_excluded_for_requirement). Properties of unknown type are still scored.
+This module used to add a single rule on top of the shared engine: a bedroom
+count means a home, so a requirement asking for a BHK with no type named
+never matched a plot or a shop. That rule was right — and the client side
+never had it, so a client who asked for "3 BHK" and named no type WAS being
+shown plots. It now lives in the engine's own eligibility gate
+(scoring.is_eligible, config.REJECT_NON_RESIDENTIAL_FOR_BHK) where both
+surfaces get it, and this module is left with no scoring logic whatsoever.
+
+THE SAME CEILING, TOO
+
+A requirement keeps at most MAX_MATCHES_PER_REQUIREMENT matches, chosen by
+the same ranking a client's shortlist uses (see best_matches below). That was
+the one thing the demand side genuinely lacked.
 
 HOW MATCHES ARE STORED AND KEPT CURRENT
 
@@ -85,6 +93,7 @@ _requirement_vector) — it is never stored and never costs database traffic.
 from __future__ import annotations
 
 import hashlib
+import heapq
 from datetime import datetime, timezone
 from typing import Dict, Iterable, List, Optional, Tuple
 
@@ -100,6 +109,7 @@ from Service.BrokerRequirementService import requirement_match_store, requiremen
 from Service.ClientPropertyMatchingService import (
     client_requirement_text_builder,
     match_candidates,
+    match_config,
     matching_service,
     normalization,
     scoring,
@@ -156,8 +166,20 @@ def get_matches_for_requirement(record_id: str) -> Optional[RequirementMatchResu
         if changed or gone:
             rescored = _score(requirement, pseudo_client, changed)
             considered = {prop.record_id for prop in changed} | gone
-            requirement_match_store.merge_matches(record_id, rescored, considered, run_started_at, fingerprint)
-            scores = [score for score in scores if score.record_id not in considered] + rescored
+            requirement_match_store.merge_matches(
+                record_id,
+                rescored,
+                considered,
+                run_started_at,
+                fingerprint,
+                keep_best=match_config.MAX_MATCHES_PER_REQUIREMENT,
+            )
+            # Trimmed the same way the store just trimmed the stored rows, so
+            # the dialog shows exactly what is held and not a longer list that
+            # would shrink on the next open.
+            scores = best_matches(
+                [score for score in scores if score.record_id not in considered] + rescored
+            )
             computed_at = run_started_at
 
     result = _build_result(requirement, pseudo_client, scores, computed_at, properties)
@@ -289,7 +311,9 @@ def rescore_all_requirements() -> Tuple[int, int, int]:
             )
 
     written = requirement_match_store.replace_matches(full, run_started_at) if full else 0
-    written += requirement_match_store.merge_matches_bulk(incremental, run_started_at)
+    written += requirement_match_store.merge_matches_bulk(
+        incremental, run_started_at, keep_best=match_config.MAX_MATCHES_PER_REQUIREMENT
+    )
     return len(full) + len(incremental), len(runs) - len(pending), written
 
 
@@ -340,7 +364,13 @@ def score_builder_projects_for_scored_requirements() -> Tuple[int, int, int]:
                 f"[Matching] Builder projects could not be scored for requirement {requirement.record_id} "
                 f"({type(exc).__name__}): {exc!r}"
             )
-    written = requirement_match_store.merge_matches_bulk(updates, _now(), keep_watermarks=True) if updates else 0
+    written = (
+        requirement_match_store.merge_matches_bulk(
+            updates, _now(), keep_watermarks=True, keep_best=match_config.MAX_MATCHES_PER_REQUIREMENT
+        )
+        if updates
+        else 0
+    )
     return len(updates), written, failed
 
 
@@ -387,12 +417,9 @@ def _score(
     if not candidates:
         return []
     vector = _requirement_vector(requirement, pseudo_client)
-    bhk_without_type = _asks_bhk_without_type(requirement)
     brief = scoring.build_brief(pseudo_client, vector)
     best: Dict[str, MatchScore] = {}
     for prop in candidates:
-        if _excluded_for_requirement(bhk_without_type, prop):
-            continue
         score = scoring.score_client_property(prop, brief)
         if score is None:
             continue
@@ -402,7 +429,24 @@ def _score(
         # never order the same two properties differently.
         if previous is None or scoring.ranking_key(score) > scoring.ranking_key(previous):
             best[score.record_id] = score
-    return list(best.values())
+    return best_matches(list(best.values()))
+
+
+def best_matches(scores: List[MatchScore]) -> List[MatchScore]:
+    """The highest-RANKED MAX_MATCHES_PER_REQUIREMENT of `scores` — the demand
+    side's half of the same ceiling a client's shortlist has always had, and
+    applied the same way (scoring.ranking_key, never an arbitrary hundred).
+
+    It was missing here, and that was a live problem waiting for the first
+    busy week. A requirement naming only a budget matches most of the property
+    list, so with 1,600 listings and the 1,000-requirement window the nightly
+    catch-up covers, the demand side alone could have grown past a million
+    rows in Neon — every one of them read back on a dialog open, and none of
+    them ever looked at past the first screen. Public so the store's
+    in-memory fallback applies the identical rule."""
+    if len(scores) <= match_config.MAX_MATCHES_PER_REQUIREMENT:
+        return scores
+    return heapq.nlargest(match_config.MAX_MATCHES_PER_REQUIREMENT, scores, key=scoring.ranking_key)
 
 
 # Appended to a MULTI-TYPE requirement's fingerprint, and to nothing else.
@@ -459,17 +503,6 @@ def _fingerprint(pseudo_client: ClientRecord) -> str:
 
 def _now() -> datetime:
     return datetime.now(timezone.utc)
-
-
-def _asks_bhk_without_type(requirement: StructuredRequirement) -> bool:
-    return not (requirement.requirement_type or "").strip() and bool((requirement.bhk or "").strip())
-
-
-def _excluded_for_requirement(bhk_without_type: bool, prop: EmbeddedProperty) -> bool:
-    """See the module docstring's "A BHK MEANS A HOME". Only ever removes a
-    land/commercial property from a requirement that asked for a BHK and
-    named no type; every other pair is left entirely to scoring."""
-    return bhk_without_type and normalization.is_non_residential_type(prop.property_type)
 
 
 def _as_pseudo_client(requirement: StructuredRequirement) -> ClientRecord:

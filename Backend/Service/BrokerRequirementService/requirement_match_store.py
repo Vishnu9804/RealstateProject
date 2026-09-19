@@ -26,6 +26,18 @@ from Service.BrokerRequirementService import requirement_store
 _matches: Dict[str, Tuple[List[MatchScore], datetime, str]] = {}
 
 
+def _trim(scores: List[MatchScore], keep_best: Optional[int]) -> List[MatchScore]:
+    """The in-memory fallback's copy of the ceiling. Delegates the RANKING to
+    requirement_matching_service.best_matches so there is exactly one
+    definition of "the best matches" across both backends — imported lazily
+    because that module imports this one."""
+    if keep_best is None or len(scores) <= keep_best:
+        return scores
+    from Service.BrokerRequirementService import requirement_matching_service
+
+    return requirement_matching_service.best_matches(scores)
+
+
 def get_matches(record_id: str) -> Tuple[List[MatchScore], Optional[datetime], Optional[str]]:
     """(scores, computed_at, requirement_fingerprint); computed_at is None
     when the requirement has never been scored."""
@@ -65,17 +77,23 @@ def merge_matches(
     considered_record_ids: Set[str],
     computed_at: datetime,
     fingerprint: str,
+    keep_best: Optional[int] = None,
 ) -> None:
     """Re-scored properties replace their stored rows; considered properties
-    that no longer match are removed; everything else is kept."""
+    that no longer match are removed; everything else is kept.
+
+    `keep_best` is the requirement's match ceiling, applied here because an
+    incremental pass merges into rows that are already stored — a full
+    re-score applies it before writing. Both backends apply it, so the
+    in-memory fallback can never hold a longer shortlist than Postgres would."""
     if is_database_configured():
         broker_requirement_match_repository.merge_matches(
-            record_id, scores, considered_record_ids, computed_at, fingerprint
+            record_id, scores, considered_record_ids, computed_at, fingerprint, keep_best=keep_best
         )
         return
     previous = _matches.get(record_id, ([], computed_at, fingerprint))[0]
     kept = [score for score in previous if score.record_id not in considered_record_ids]
-    _matches[record_id] = (kept + list(scores), computed_at, fingerprint)
+    _matches[record_id] = (_trim(kept + list(scores), keep_best), computed_at, fingerprint)
 
 
 def get_run_index(limit: int) -> Dict[str, Tuple[Optional[datetime], Optional[str]]]:
@@ -95,6 +113,7 @@ def merge_matches_bulk(
     updates: Dict[str, Tuple[List[MatchScore], Set[str], str]],
     computed_at: datetime,
     keep_watermarks: bool = False,
+    keep_best: Optional[int] = None,
 ) -> int:
     """merge_matches for many requirements at once (record_id -> (scores,
     considered property ids, fingerprint)), one transaction in database mode.
@@ -108,7 +127,7 @@ def merge_matches_bulk(
     requirement with nothing stored is left alone in that mode."""
     if is_database_configured():
         return broker_requirement_match_repository.merge_matches_bulk(
-            updates, computed_at, keep_watermarks=keep_watermarks
+            updates, computed_at, keep_watermarks=keep_watermarks, keep_best=keep_best
         )
     written = 0
     for record_id, (scores, considered, fingerprint) in updates.items():
@@ -117,9 +136,9 @@ def merge_matches_bulk(
             if stored is None:
                 continue
             kept = [score for score in stored[0] if score.record_id not in considered]
-            _matches[record_id] = (kept + list(scores), stored[1], stored[2])
+            _matches[record_id] = (_trim(kept + list(scores), keep_best), stored[1], stored[2])
         else:
-            merge_matches(record_id, scores, considered, computed_at, fingerprint)
+            merge_matches(record_id, scores, considered, computed_at, fingerprint, keep_best=keep_best)
         written += len(scores)
     return written
 

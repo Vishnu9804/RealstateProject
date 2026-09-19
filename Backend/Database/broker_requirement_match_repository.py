@@ -139,6 +139,7 @@ def merge_matches_bulk(
     updates: Dict[str, Tuple[List[MatchScore], Set[str], str]],
     computed_at: datetime,
     keep_watermarks: bool = False,
+    keep_best: Optional[int] = None,
 ) -> int:
     """merge_matches for many requirements in ONE transaction: record_id ->
     (re-scored properties that still match, properties considered, fingerprint).
@@ -192,6 +193,13 @@ def merge_matches_bulk(
                     set_={column: getattr(upsert.excluded, column) for column in _SCORE_COLUMNS},
                 )
             )
+        # One statement for the whole batch — the ranking is partitioned by
+        # requirement inside Postgres, so a nightly catch-up over a thousand
+        # requirements still costs exactly one trim and transfers nothing.
+        # Only the requirements that actually gained rows are considered.
+        grew = [ids[record_id] for record_id, (scores, _, _) in updates.items() if record_id in ids and scores]
+        if grew:
+            _trim_to_ceiling(session, grew, keep_best)
         if not keep_watermarks:
             _upsert_runs(
                 session,
@@ -251,11 +259,14 @@ def merge_matches(
     considered_record_ids: Set[str],
     computed_at: datetime,
     fingerprint: str,
+    keep_best: Optional[int] = None,
 ) -> None:
     """Incremental update for one requirement: `scores` are the re-scored
     properties that still match (inserted or overwritten), anything in
     `considered_record_ids` that is not among them no longer matches and is
-    deleted, and every other stored row is left exactly as it was."""
+    deleted, and every other stored row is left exactly as it was.
+
+    `keep_best` is the requirement's match ceiling — see _trim_to_ceiling."""
     with get_session() as session:
         requirement_id = session.execute(
             select(func.min(BrokerRequirementRow.id)).where(BrokerRequirementRow.record_id == record_id)
@@ -280,10 +291,60 @@ def merge_matches(
                     BrokerRequirementMatchRow.property_record_id.in_(list(dropped)),
                 )
             )
+        # Only when this pass could have ADDED rows. With nothing re-scored the
+        # stored count can only have fallen, so the trim would be a statement
+        # that is certain to delete nothing.
+        if scores:
+            _trim_to_ceiling(session, [requirement_id], keep_best)
         _upsert_runs(
             session,
             [{"requirement_id": requirement_id, "computed_at": computed_at, "requirement_fingerprint": fingerprint}],
         )
+
+
+def _trim_to_ceiling(session, requirement_ids: List[int], keep_best: Optional[int]) -> None:
+    """Drops every stored match past the ceiling for these requirements,
+    lowest-ranked first (score, then confidence — the same order
+    scoring.ranking_key defines).
+
+    A full re-score applies the ceiling in Python before it writes anything.
+    An INCREMENTAL pass cannot: the rows it is merging into are already in the
+    table, so without this a requirement's shortlist would creep past the
+    ceiling one nightly catch-up at a time.
+
+    Done as ONE statement that transfers NO ROWS — the ranking happens inside
+    Postgres. The obvious alternative, reading a requirement's stored rows
+    back to decide which to drop, would pull a score row per match across the
+    wire on every catch-up for every requirement, which on a database billed
+    by transfer is the whole cost of the feature for none of the benefit.
+    """
+    if keep_best is None or not requirement_ids:
+        return
+    ranked = (
+        select(
+            BrokerRequirementMatchRow.id,
+            func.row_number()
+            .over(
+                partition_by=BrokerRequirementMatchRow.requirement_id,
+                order_by=(
+                    BrokerRequirementMatchRow.score.desc(),
+                    BrokerRequirementMatchRow.confidence_score.desc(),
+                    # A stable last resort, so two identically-ranked rows
+                    # never trade places between runs and cause a pointless
+                    # delete-and-reinsert.
+                    BrokerRequirementMatchRow.id,
+                ),
+            )
+            .label("rn"),
+        )
+        .where(BrokerRequirementMatchRow.requirement_id.in_(requirement_ids))
+        .subquery()
+    )
+    session.execute(
+        delete(BrokerRequirementMatchRow).where(
+            BrokerRequirementMatchRow.id.in_(select(ranked.c.id).where(ranked.c.rn > keep_best))
+        )
+    )
 
 
 def _requirement_id_for(record_id: str):

@@ -371,6 +371,15 @@ def is_eligible(prop: EmbeddedProperty, brief: ClientBrief) -> bool:
         distance = brief.bhk_distance(prop.bhk)
         if distance is not None and distance > brief.bhk_max_distance:
             return False
+        # ...and a bedroom count means a home: somebody who asked for a BHK
+        # and named no type is not shown plots or shops. See
+        # config.REJECT_NON_RESIDENTIAL_FOR_BHK.
+        if (
+            config.REJECT_NON_RESIDENTIAL_FOR_BHK
+            and not brief.type_stated
+            and normalization.is_non_residential_type(prop.property_type)
+        ):
+            return False
 
     return True
 

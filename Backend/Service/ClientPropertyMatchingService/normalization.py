@@ -570,14 +570,22 @@ _NON_RESIDENTIAL_WORDS_RE = re.compile(
 )
 
 
+@lru_cache(maxsize=512)
 def is_non_residential_type(raw: Optional[str]) -> bool:
     """True when a property type is land or commercial — a kind of property
     nobody asks for by bedroom count. Unknown/empty is NOT non-residential
     (False): only a type that positively says land/commercial counts.
 
-    Used only by the broker-requirement side (Service/BrokerRequirementService/
-    requirement_matching_service.py), never by property_type_gate or anything
-    else the client-inquiry scoring runs, so client matching is unaffected."""
+    Read by the ELIGIBILITY GATE for both match surfaces now (scoring.
+    is_eligible's "a BHK means a home" rule) rather than by the broker side
+    alone, so a client who asks for "3 BHK" and names no type is no longer
+    shown plots and shops either — which was simply the client side missing a
+    rule the broker side already had.
+
+    Memoised because the gate asks it once per (brief, property): this
+    database holds about ten distinct property-type strings between all of its
+    listings, so the regex below runs once per distinct value per process
+    instead of once per pair."""
     if not raw:
         return False
     token = canonical_type_token(raw)

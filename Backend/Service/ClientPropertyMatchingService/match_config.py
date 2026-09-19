@@ -47,6 +47,23 @@ TYPE_HARD_FLOOR = 0.6
 # listing through as an UNKNOWN on the property-type field instead.
 REJECT_UNKNOWN_PROPERTY_TYPE = True
 
+# A BEDROOM COUNT MEANS A HOME.
+#
+# A brief very often names a BHK and no property type at all ("2 BHK Fully
+# Furnished, Vesu"), and a missing type is correctly read as "no preference".
+# But nobody asks for a plot or a shop by bedroom count, so a brief that asks
+# for a BHK and names no type never matches a land or commercial listing.
+#
+# This was always the rule on the broker-requirement side and was simply
+# missing on the client side — the two now share one gate, so both behave the
+# same. Against this project's own data it removes 61 stored rows across 69
+# clients, every one of them a Plot or a Commercial listing offered to
+# somebody who had asked for bedrooms, and leaves no client without matches.
+#
+# Listings of UNKNOWN type are unaffected: only a type that positively says
+# land or commercial is excluded (see normalization.is_non_residential_type).
+REJECT_NON_RESIDENTIAL_FOR_BHK = True
+
 # BHK, in bedrooms away from the nearest configuration the client would
 # accept (see normalization.bhk_distance — 0 means the requirement is
 # satisfied outright, including every value inside a stated range).
@@ -345,3 +362,11 @@ PARTIAL_EVIDENCE_CUTOFF = 0.6
 # merge, so the ceiling holds however a client's matches were arrived at,
 # and always by keeping the HIGHEST-ranked — never an arbitrary hundred.
 MAX_MATCHES_PER_CLIENT = 100
+
+# The same ceiling for the DEMAND side — one broker requirement's stored
+# matches (Service/BrokerRequirementService/requirement_matching_service.
+# best_matches). Named separately so the two can be tuned apart if a
+# requirement ever wants a different shortlist length, and equal by default
+# because a requirement and a client inquiry are the same thing said by two
+# different people.
+MAX_MATCHES_PER_REQUIREMENT = MAX_MATCHES_PER_CLIENT

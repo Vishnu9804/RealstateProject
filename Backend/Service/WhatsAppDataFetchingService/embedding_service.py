@@ -31,6 +31,7 @@ from typing import Any, Iterable, List, Mapping, Optional
 
 from sentence_transformers import SentenceTransformer
 
+from Model import phone_numbers
 from Model.WhatsAppDataFetchingModel.structured_property import StructuredProperty
 
 EMBEDDING_MODEL_NAME = "sentence-transformers/all-MiniLM-L6-v2"
@@ -81,8 +82,21 @@ def build_embedding_text_from_fields(fields: Mapping[str, Any]) -> str:
     than a StructuredProperty — a builder project (Service/
     BuilderProjectService/builder_project_store.py). Same fields, same
     order, same separator, so a builder project and a property with the same
-    details produce byte-for-byte the same text and the same vector."""
-    return _join_parts(fields.get(name) for name in EMBEDDING_TEXT_FIELDS)
+    details produce byte-for-byte the same text and the same vector.
+
+    contact_phone is the one name that is no longer a stored column on
+    either side (see Model/phone_numbers.py): a StructuredProperty still
+    exposes it as the first of its contact_phones, and a row of plain column
+    values has to be given the same treatment here, or two listings with the
+    same number would embed differently depending on which side they came
+    from."""
+    return _join_parts(_field_value(fields, name) for name in EMBEDDING_TEXT_FIELDS)
+
+
+def _field_value(fields: Mapping[str, Any], name: str) -> Any:
+    if name == "contact_phone":
+        return phone_numbers.primary_phone(fields.get("contact_phones")) or fields.get(name)
+    return fields.get(name)
 
 
 def _join_parts(parts: Iterable[Any]) -> str:

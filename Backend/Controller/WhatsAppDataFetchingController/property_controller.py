@@ -86,6 +86,15 @@ class PropertyContentFields(field_validation.ListingContentValidators):
     price_amount_inr: Optional[float] = Field(default=None, ge=0, le=field_validation.MAX_INR)
     listing_type: Literal["Sale", "Rent"] = "Sale"
     contact_name: Optional[str] = None
+    # The dialog's list of contact numbers, each stored as "+91" + 10
+    # digits — see Model/phone_numbers.py. Optional[List] rather than a
+    # plain list so a PATCH that leaves it out stays silent about it
+    # (exclude_unset), which is what keeps Accept/Move from blanking a
+    # listing's numbers.
+    contact_phones: Optional[List[str]] = None
+    # Retired, still accepted: what a browser running the previous bundle
+    # sends. field_validation.bridge_contact_phones is what folds it into
+    # contact_phones above, and nothing downstream ever stores it.
     contact_phone: Optional[str] = None
     description: Optional[str] = None
     instagram_reel_url: Optional[str] = None
@@ -240,12 +249,19 @@ def _property_etag(scope: str, record_id: str) -> Optional[str]:
 
 @router.post("", response_model=PropertyRecord, status_code=201)
 def create_property(body: PropertyContentFields) -> PropertyRecord:
-    return property_pipeline_service.create_property(body.model_dump())
+    return property_pipeline_service.create_property(
+        field_validation.bridge_contact_phones(body.model_dump())
+    )
 
 
 @router.patch("/{record_id}", response_model=PropertyRecord)
 def update_property(record_id: str, body: PropertyUpdateRequest) -> PropertyRecord:
-    sent = body.model_dump(exclude_unset=True)
+    # bridge_contact_phones BEFORE exclude_unset is read for anything
+    # else: it both canonicalises the numbers a current browser sends and
+    # folds an old browser's single contact_phone into them, without ever
+    # introducing the key when this PATCH mentioned neither (which is what
+    # keeps Accept/Move/Send from blanking a property's numbers).
+    sent = field_validation.bridge_contact_phones(body.model_dump(exclude_unset=True))
     review_status = sent.pop("review_status", None)
     needs_review = sent.pop("needs_review", None)
     landing_page = sent.pop("landing_page", None)

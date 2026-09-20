@@ -1,4 +1,6 @@
-from typing import Literal, Optional
+from typing import List, Literal, Optional
+
+from pydantic import Field
 
 from Model.ClientPropertyMatchingModel.match_score import MatchScore
 
@@ -25,6 +27,12 @@ class MatchedProperty(MatchScore):
     area_vaar: Optional[float] = None
     furnishing: Optional[str] = None
     contact_name: Optional[str] = None
+    # Every number on the matched listing, and the primary one on its own —
+    # the same pair StructuredProperty carries, filled here from the live
+    # listing at read time (matching_service._display_fields), never stored
+    # on the match row. That is what makes adding it free: the match tables
+    # hold hundreds of thousands of rows and gain no byte from this.
+    contact_phones: List[str] = Field(default_factory=list)
     contact_phone: Optional[str] = None
     description: Optional[str] = None
     review_status: str

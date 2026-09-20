@@ -536,6 +536,13 @@ def _display_fields(prop: EmbeddedProperty) -> dict:
         "area_vaar": prop.area_vaar,
         "furnishing": prop.furnishing,
         "contact_name": prop.contact_name,
+        # Both shapes: the full list for the dialogs that show every number,
+        # and the primary on its own for everything that shows one line.
+        # Neither is stored on the match row — this whole dict is rebuilt
+        # from the live listing on read (see this function's caller), which
+        # is what lets a match card show a corrected number without the
+        # match itself being re-scored.
+        "contact_phones": list(prop.contact_phones),
         "contact_phone": prop.contact_phone,
         "description": prop.description,
         "review_status": prop.review_status,

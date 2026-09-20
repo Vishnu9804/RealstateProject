@@ -2,8 +2,9 @@ import uuid
 from datetime import datetime
 from typing import List, Literal, Optional
 
-from pydantic import BaseModel, Field
+from pydantic import BaseModel, Field, model_validator
 
+from Model import phone_numbers
 from Model.record_source import SOURCE_WHATSAPP
 
 
@@ -113,6 +114,14 @@ class StructuredRequirement(BaseModel):
     listing_type: Literal["Sale", "Rent"] = "Sale"
 
     contact_name: Optional[str] = None
+    # EVERY contact number on this requirement, each one canonical "+91" plus 10
+    # digits — the same field, the same rule and the same producer as
+    # StructuredProperty.contact_phones (Model/phone_numbers.py). See that
+    # model for the full reasoning.
+    contact_phones: List[str] = Field(default_factory=list)
+    # The PRIMARY number, derived from contact_phones[0] on every
+    # construction and never stored as a column of its own — again exactly
+    # as on StructuredProperty.
     contact_phone: Optional[str] = None
     # A short summary plus every stated detail that has no field of its own
     # (see the class docstring).
@@ -126,6 +135,23 @@ class StructuredRequirement(BaseModel):
     sender_phone: str
     message_text: str
     message_timestamp: datetime
+
+    @model_validator(mode="before")
+    @classmethod
+    def _reconcile_contact_phones(cls, data):
+        """contact_phones is the truth, contact_phone is its first entry --
+        the identical rule StructuredProperty._reconcile_contact_phones
+        documents in full (including why it has to run "before"), applied
+        here so a listing and a property behave the same wherever one stands
+        in for the other."""
+        if not isinstance(data, dict):
+            return data
+        supplied = data.get("contact_phones")
+        if supplied is not None:
+            numbers = phone_numbers.normalize_phone_list(supplied)
+        else:
+            numbers = phone_numbers.split_phone_numbers(data.get("contact_phone"))
+        return {**data, "contact_phones": numbers, "contact_phone": phone_numbers.primary_phone(numbers)}
 
 
 class BrokerRequirementRecord(StructuredRequirement):

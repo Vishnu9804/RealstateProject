@@ -87,7 +87,7 @@ _in_flight_fingerprints: Set[str] = set()
 # re-scored. These two do not, so an edit confined to them leaves the stored
 # shortlist exactly as it stands. The listing-side twin of this rule lives in
 # match_invalidation_service.MATCH_NEUTRAL_FIELDS.
-MATCH_NEUTRAL_REQUIREMENT_FIELDS = frozenset({"contact_name", "contact_phone"})
+MATCH_NEUTRAL_REQUIREMENT_FIELDS = frozenset({"contact_name", "contact_phones", "contact_phone"})
 
 
 @cpu_usage_service.tracked("Requirement batch — LLM structuring, save & matching", "WhatsApp → Requirements")

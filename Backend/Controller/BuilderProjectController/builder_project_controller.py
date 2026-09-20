@@ -42,6 +42,15 @@ class BuilderProjectContentFields(field_validation.ListingContentValidators):
     price_amount_inr: Optional[float] = Field(default=None, ge=0, le=field_validation.MAX_INR)
     listing_type: Literal["Sale", "Rent"] = "Sale"
     contact_name: Optional[str] = None
+    # The dialog's list of contact numbers, each stored as "+91" + 10
+    # digits — see Model/phone_numbers.py. Optional[List] rather than a
+    # plain list so a PATCH that leaves it out stays silent about it
+    # (exclude_unset), which is what keeps Accept/Move from blanking a
+    # listing's numbers.
+    contact_phones: Optional[List[str]] = None
+    # Retired, still accepted: what a browser running the previous bundle
+    # sends. field_validation.bridge_contact_phones is what folds it into
+    # contact_phones above, and nothing downstream ever stores it.
     contact_phone: Optional[str] = None
     description: Optional[str] = None
     instagram_reel_url: Optional[str] = None
@@ -122,12 +131,16 @@ def get_builder_project_images(record_id: str, request: Request, response: Respo
 
 @router.post("", response_model=BuilderProjectRecord, status_code=201)
 def create_builder_project(body: BuilderProjectContentFields) -> BuilderProjectRecord:
-    return builder_project_service.create_builder_project(body.model_dump())
+    return builder_project_service.create_builder_project(
+        field_validation.bridge_contact_phones(body.model_dump())
+    )
 
 
 @router.patch("/{record_id}", response_model=BuilderProjectRecord)
 def update_builder_project(record_id: str, body: BuilderProjectUpdateRequest) -> BuilderProjectRecord:
-    updated = builder_project_service.update_builder_project(record_id, body.model_dump(exclude_unset=True))
+    updated = builder_project_service.update_builder_project(
+        record_id, field_validation.bridge_contact_phones(body.model_dump(exclude_unset=True))
+    )
     if updated is None:
         raise HTTPException(status_code=404, detail="Builder project not found")
     return updated

@@ -135,7 +135,16 @@ class GLMPropertyListing(BaseModel):
         default=None, description="A person's name given IN THE MESSAGE TEXT as the contact for this property."
     )
     contact_phone: Optional[str] = Field(
-        default=None, description="A phone number given IN THE MESSAGE TEXT for this property."
+        default=None,
+        # Still ONE string, deliberately: the extraction schema stays the
+        # shape the model already answers well in, and
+        # Model/phone_numbers.py splits the answer into the separate numbers
+        # it stores (a listing very often carries an owner's number and a
+        # broker's). Asking for ", " between them only makes that split
+        # unambiguous — it is not required for it to work, since two numbers
+        # run together are separated too.
+        description='EVERY phone number given IN THE MESSAGE TEXT for this property, joined with ", " when '
+        "there is more than one, in the order the message gives them.",
     )
     description: Optional[str] = Field(
         default=None, description="A short, factual one/two-sentence summary written from the message content only."

@@ -62,7 +62,9 @@ class BuilderProjectCandidate(EmbeddedProperty):
             price_amount_inr=fields.get("price_amount_inr"),
             listing_type=fields.get("listing_type") or "Sale",
             contact_name=fields.get("contact_name"),
-            contact_phone=fields.get("contact_phone"),
+            # The stored list; contact_phone is derived from it by
+            # StructuredProperty's own validator, so it is not passed here.
+            contact_phones=fields.get("contact_phones") or [],
             description=fields.get("description"),
             instagram_reel_url=fields.get("instagram_reel_url"),
             # Photos never travel through matching — see the property

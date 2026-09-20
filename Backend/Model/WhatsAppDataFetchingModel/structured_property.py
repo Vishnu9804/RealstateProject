@@ -2,8 +2,9 @@ import uuid
 from datetime import datetime
 from typing import List, Literal, Optional
 
-from pydantic import BaseModel, Field
+from pydantic import BaseModel, Field, model_validator
 
+from Model import phone_numbers
 from Model.record_source import SOURCE_WHATSAPP
 
 
@@ -98,6 +99,29 @@ class StructuredProperty(BaseModel):
     # an explicit signal earning it.
     listing_type: Literal["Sale", "Rent"] = "Sale"
     contact_name: Optional[str] = None
+    # EVERY contact number on this listing, each one canonical "+91" plus 10
+    # digits — see Model/phone_numbers.py, which is the only thing that
+    # produces a value for this field. A listing routinely carries two or
+    # three numbers (an owner and a broker, or a number and a WhatsApp-only
+    # number), and before this they all had to share one box: a message that
+    # said "98765 43210 / 98765 43211" was stored as that whole string, and
+    # the client's spreadsheet had gone further still and run two numbers
+    # together into one unusable 20-digit run.
+    contact_phones: List[str] = Field(default_factory=list)
+    # The PRIMARY number — contact_phones[0], kept as its own field rather
+    # than left to every caller to index.
+    #
+    # It is derived, never independently set: _reconcile_contact_phones
+    # below overwrites whatever is passed with contact_phones[0] on every
+    # construction. It exists because this one string is what a one-line
+    # display, a share message and the embedding text all actually want (see
+    # Service/WhatsAppDataFetchingService/embedding_service.py's
+    # EMBEDDING_TEXT_FIELDS, whose output must stay comparable with the
+    # vectors already stored), and because it lets anything built before
+    # multiple numbers existed keep reading exactly what it always read.
+    #
+    # NOT a column: Database/property_repository.py persists contact_phones
+    # and nothing else, so the two can never drift apart in storage.
     contact_phone: Optional[str] = None
     description: Optional[str] = None
     # --- set by a human on the Properties page, never by the LLM ---
@@ -196,3 +220,47 @@ class StructuredProperty(BaseModel):
     # by. Set whenever an edit adds photos or a reel link, never touched by
     # the Landing Page page's own Send/Remove actions.
     qualified_at: Optional[datetime] = None
+
+    @model_validator(mode="before")
+    @classmethod
+    def _reconcile_contact_phones(cls, data):
+        """Makes contact_phones the single truth and contact_phone its first
+        entry, whichever of the two the caller supplied.
+
+        Three kinds of caller reach this, and each needs a different half:
+
+        - The LLM structuring stage passes contact_phone only, as one free
+          text string straight out of the message ("98765 43210 / 98765
+          43211"). That is split here -- which is what turns a multi-number
+          message into a multi-number listing without the extraction schema
+          having to change shape.
+        - The Add/Edit dialog and the one-time migration pass
+          contact_phones, already canonical. The all-canonical fast path in
+          normalize_phone_list means that costs a handful of character
+          comparisons and no rebuilding at all.
+        - Every read out of Postgres passes contact_phones too (it is the
+          stored column), so this runs on every property in the in-memory
+          snapshot -- hence the care above about it being cheap.
+
+        WHY "before" AND NOT "after", WHICH READS MORE NATURALLY
+
+        Only the raw input can tell "no list was given, read the scalar"
+        apart from "an EMPTY list was given, meaning the numbers were
+        cleared" -- by the time the model exists both look like []. That
+        distinction is the whole correctness of clearing a listing's
+        numbers: a model rebuilt from its own model_dump() (which
+        property_pipeline_service.update_property and _to_record both do)
+        still carries the PREVIOUS scalar, and an "after" validator would
+        read it back and resurrect the number that was just deleted.
+
+        So: a contact_phones key that is present and not None always wins,
+        even when it is empty. contact_phone is read only when there is no
+        list at all."""
+        if not isinstance(data, dict):
+            return data
+        supplied = data.get("contact_phones")
+        if supplied is not None:
+            numbers = phone_numbers.normalize_phone_list(supplied)
+        else:
+            numbers = phone_numbers.split_phone_numbers(data.get("contact_phone"))
+        return {**data, "contact_phones": numbers, "contact_phone": phone_numbers.primary_phone(numbers)}

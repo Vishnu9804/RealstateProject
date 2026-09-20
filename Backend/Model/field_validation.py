@@ -29,9 +29,11 @@ them instead of pydantic's own field dump).
 from __future__ import annotations
 
 import re
-from typing import List, Optional
+from typing import Any, Dict, List, Mapping, Optional
 
 from pydantic import BaseModel, field_validator
+
+from Model import phone_numbers
 
 # The ceiling on any rupee amount a form may carry — ₹1 lakh crore. Far above
 # any real property, and low enough that a stray "1e20" typed into a budget
@@ -83,6 +85,93 @@ def check_contact_phone(value: Optional[str]) -> Optional[str]:
     if digits < _MIN_CONTACT_DIGITS or digits > _MAX_CONTACT_DIGITS:
         raise ValueError("That doesn't look like a valid phone number.")
     return trimmed
+
+
+def check_phone_numbers(values: Optional[List[str]]) -> List[str]:
+    """The Add/Edit dialogs' list of contact numbers, canonicalised to
+    "+91" + 10 digits each — the form-facing half of
+    Model/phone_numbers.py.
+
+    Unlike check_contact_phone above (which only asked "are there enough
+    digits in here to be a number at all", and stored whatever was typed),
+    this REWRITES what it is given, because the shape is now a promise the
+    rest of the application relies on: every display formats a stored number
+    by splitting it after the country code, and every share message sends
+    it as written.
+
+    It raises rather than silently keeping a box that holds digits but not a
+    number — a person filling in a form is right there to correct it, which
+    is the distinction this module's own docstring draws. A box holding no
+    digits at all is treated as prose the person meant to keep (a note like
+    "ask at the site office") and is kept as written, exactly as
+    phone_numbers.split_phone_numbers does: refusing that would make it
+    impossible to save an edit to a legacy property whose contact box holds
+    one.
+
+    An empty list is returned for "no numbers", never None — this field is
+    a list on the way in and a list on the way out."""
+    if not values:
+        return []
+    if isinstance(values, str):
+        values = [values]
+    collected: List[str] = []
+    for value in values:
+        entry = clean_text(str(value))
+        if entry is None:
+            continue
+        parsed = phone_numbers.split_phone_numbers(entry)
+        if len(parsed) == 1 and not phone_numbers.is_canonical(parsed[0]):
+            # Not readable as a number. Refuse it only if it was clearly
+            # MEANT to be one — see this function's docstring.
+            if any(character.isdigit() for character in entry):
+                raise ValueError(
+                    f"“{entry}” isn’t a valid phone number — enter the 10 digits of an "
+                    "Indian number."
+                )
+        collected.extend(parsed)
+    return phone_numbers.normalize_phone_list(collected)
+
+
+# The sentinel for "this key was not in the request body at all", which a
+# PATCH must tell apart from "this key was sent as null" (see
+# bridge_contact_phones).
+_ABSENT = object()
+
+
+def bridge_contact_phones(fields: Mapping[str, Any]) -> Dict[str, Any]:
+    """Returns `fields` with contact_phones canonical and the retired
+    `contact_phone` key removed.
+
+    Every Add/Edit path runs its request body through this before the body
+    reaches a pipeline service. Two things depend on it:
+
+    - A BROWSER STILL RUNNING THE OLD BUNDLE sends contact_phone (a single
+      string) and no contact_phones. Nothing forces a dashboard tab to
+      reload the moment the backend deploys, so that request must not
+      quietly save a property with no contact number at all. Here it is read
+      exactly as a WhatsApp message would be, split and all.
+    - A PATCH THAT NEVER MENTIONED EITHER KEY must stay silent about them.
+      This only ever ADDS contact_phones when one of the two keys was
+      actually present, because the update path applies precisely the keys
+      it is handed (see property_controller's exclude_unset) — adding the
+      key unconditionally would blank a property's numbers every time
+      somebody pressed Accept."""
+    merged = dict(fields)
+    legacy = merged.pop("contact_phone", _ABSENT)
+    supplied = merged.get("contact_phones", _ABSENT)
+    if supplied is not _ABSENT and supplied is not None:
+        merged["contact_phones"] = phone_numbers.normalize_phone_list(supplied)
+    elif legacy is not _ABSENT and legacy is not None:
+        # An old browser's single box. Note this is reached even on a full
+        # Add body, where contact_phones IS present but null simply because
+        # that browser does not know the field exists.
+        merged["contact_phones"] = phone_numbers.split_phone_numbers(legacy)
+    elif supplied is not _ABSENT:
+        # The key arrived as null: on an Add body that means "nothing was
+        # typed", and on a PATCH it means "every box was emptied". Both are
+        # the empty list, never None -- the column is NOT NULL.
+        merged["contact_phones"] = []
+    return merged
 
 
 def to_e164(value: Optional[str]) -> Optional[str]:
@@ -204,6 +293,16 @@ class ListingContentValidators(BaseModel):
     the request body, not on StructuredProperty (see this module's own
     docstring)."""
 
+    @field_validator("contact_phones", check_fields=False)
+    @classmethod
+    def _v_contact_phones(cls, values: Optional[List[str]]) -> List[str]:
+        return check_phone_numbers(values)
+
+    # Still accepted, still checked, and no longer what gets stored: a
+    # browser running the previous bundle sends this instead of the list
+    # above, and bridge_contact_phones is what turns it into one. Kept
+    # deliberately lenient (a digit count, not a parse) so that old browser
+    # is never refused something it used to be allowed to save.
     @field_validator("contact_phone", check_fields=False)
     @classmethod
     def _v_contact_phone(cls, value: Optional[str]) -> Optional[str]:

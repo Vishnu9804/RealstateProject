@@ -49,7 +49,7 @@ from Middleware import step_logger
 #
 # Three of them (unit_no, location_url, video_available, image_urls) are not
 # read by scoring.py and are not in embedding_service.EMBEDDING_TEXT_FIELDS
-# either, so no score CAN move. contact_phone is the one exception: it is
+# either, so no score CAN move. The contact number is the one exception: it is
 # part of the embedding text, so the semantic half of the score may shift by
 # a hair. That is accepted deliberately and it does not go uncorrected —
 # every edit still bumps the listing's updated_at, so the 6 AM incremental
@@ -68,6 +68,9 @@ MATCH_NEUTRAL_FIELDS = frozenset(
         "location_url",
         "video_available",
         "unit_no",
+        # The list is what an edit actually moves now; the scalar is kept
+        # beside it because an old browser's PATCH still names it.
+        "contact_phones",
         "contact_phone",
     }
 )

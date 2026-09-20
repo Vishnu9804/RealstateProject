@@ -38,7 +38,9 @@ EDITABLE_CONTENT_FIELDS = (
     "budget_max_inr",
     "listing_type",
     "contact_name",
-    "contact_phone",
+    # The list, never the derived scalar: `contact_phone` is not a column
+    # any more (see this table's model) and must not be written back.
+    "contact_phones",
     "description",
 )
 
@@ -60,7 +62,9 @@ _COLUMNS = (
     "budget_max_inr",
     "listing_type",
     "contact_name",
-    "contact_phone",
+    # The list, never the derived scalar: `contact_phone` is not a column
+    # any more (see this table's model) and must not be written back.
+    "contact_phones",
     "description",
 )
 

@@ -124,6 +124,22 @@ class PropertyRow(Base):
     listing_type: Mapped[str] = mapped_column(String, nullable=False, default="Sale", server_default="Sale")
     contact_name: Mapped[Optional[str]] = mapped_column(String, nullable=True)
     contact_phone: Mapped[Optional[str]] = mapped_column(String, nullable=True)
+    # EVERY contact number on this property — a JSON array of canonical
+    # "+91" + 10-digit strings, in the order they were written, produced by
+    # and only by Model/phone_numbers.py.
+    #
+    # NOT NULL with a server default of '[]' so a row written before this
+    # column existed reads as "no numbers" rather than NULL (the pydantic
+    # side declares a plain list). On Postgres 11+ a DEFAULT on ADD COLUMN
+    # is catalog-only, so retrofitting this costs no table rewrite.
+    #
+    # The older single-value `contact_phone` column is deliberately NOT
+    # dropped and is no longer read or written by anything: it is the
+    # untouched original of every value the one-time migration in
+    # Database/session.py rewrote, kept exactly as the client's spreadsheet
+    # delivered it. Dropping a column destroys what it holds, and an
+    # unused nullable column costs nothing.
+    contact_phones: Mapped[list] = mapped_column(JSON, nullable=False, default=list, server_default="[]")
     description: Mapped[Optional[str]] = mapped_column(Text, nullable=True)
     # Set by a human on the Properties page, never by the LLM — see
     # StructuredProperty.instagram_reel_url.

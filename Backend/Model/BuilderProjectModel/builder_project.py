@@ -2,7 +2,9 @@ import uuid
 from datetime import datetime
 from typing import List, Literal, Optional
 
-from pydantic import BaseModel, Field
+from pydantic import BaseModel, Field, model_validator
+
+from Model import phone_numbers
 
 
 class BuilderProject(BaseModel):
@@ -43,6 +45,14 @@ class BuilderProject(BaseModel):
     price_amount_inr: Optional[float] = None
     listing_type: Literal["Sale", "Rent"] = "Sale"
     contact_name: Optional[str] = None
+    # EVERY contact number on this project, each one canonical "+91" plus 10
+    # digits — the same field, the same rule and the same producer as
+    # StructuredProperty.contact_phones (Model/phone_numbers.py). See that
+    # model for the full reasoning.
+    contact_phones: List[str] = Field(default_factory=list)
+    # The PRIMARY number, derived from contact_phones[0] on every
+    # construction and never stored as a column of its own — again exactly
+    # as on StructuredProperty.
     contact_phone: Optional[str] = None
     description: Optional[str] = None
     instagram_reel_url: Optional[str] = None
@@ -63,6 +73,23 @@ class BuilderProject(BaseModel):
     # in-memory fallback — never by the API caller.
     created_at: Optional[datetime] = None
     updated_at: Optional[datetime] = None
+
+    @model_validator(mode="before")
+    @classmethod
+    def _reconcile_contact_phones(cls, data):
+        """contact_phones is the truth, contact_phone is its first entry --
+        the identical rule StructuredProperty._reconcile_contact_phones
+        documents in full (including why it has to run "before"), applied
+        here so a listing and a property behave the same wherever one stands
+        in for the other."""
+        if not isinstance(data, dict):
+            return data
+        supplied = data.get("contact_phones")
+        if supplied is not None:
+            numbers = phone_numbers.normalize_phone_list(supplied)
+        else:
+            numbers = phone_numbers.split_phone_numbers(data.get("contact_phone"))
+        return {**data, "contact_phones": numbers, "contact_phone": phone_numbers.primary_phone(numbers)}
 
 
 class BuilderProjectRecord(BuilderProject):

@@ -45,7 +45,9 @@ EDITABLE_CONTENT_FIELDS = (
     "price_amount_inr",
     "listing_type",
     "contact_name",
-    "contact_phone",
+    # The list, never the derived scalar: `contact_phone` is not a column
+    # any more (see this table's model) and must not be written back.
+    "contact_phones",
     "description",
     "instagram_reel_url",
     "image_urls",

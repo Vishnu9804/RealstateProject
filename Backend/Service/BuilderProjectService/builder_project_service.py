@@ -25,7 +25,12 @@ from Service.WhatsAppDataFetchingService import display_settings_service, timest
 # Columns that are NOT NULL in the table — an explicit null in a PATCH means
 # "leave it", never "clear it" (the dialog never sends one; this is what
 # keeps a hand-written request from failing on a constraint instead).
-_NON_NULLABLE_FIELDS = ("listing_type", "image_urls")
+# Fields whose model type is not Optional, so an explicit null in a PATCH
+# body must be ignored rather than written. contact_phones is one of them:
+# the column is NOT NULL and the model declares a plain list (the
+# controller's bridge_contact_phones already turns a null into [], so this
+# is the second line of defence, not the first).
+_NON_NULLABLE_FIELDS = ("listing_type", "image_urls", "contact_phones")
 
 
 def get_builder_projects(limit: int = 500) -> List[BuilderProjectRecord]:

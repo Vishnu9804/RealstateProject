@@ -14,8 +14,10 @@ Nothing in the app requires a database to exist in order to run.
 
 from __future__ import annotations
 
+import json
+
 from contextlib import contextmanager
-from typing import Iterator, Optional
+from typing import Iterator, List, Optional
 
 from sqlalchemy import create_engine
 from sqlalchemy.orm import Session, sessionmaker
@@ -246,6 +248,160 @@ def _add_agent_phone_unique_index(engine) -> None:
             f"number. New duplicates are refused regardless; merge the existing pair and this clears itself "
             f"on the next start. ({exc!r})"
         )
+
+
+# The tables whose contact number moved from one free-text column to a list
+# of canonical ones. `properties` is the only one that actually holds data
+# today; the other three are migrated with it so that a listing moved between
+# them (a property sold out, a builder project matched beside a property) can
+# never find one shape on one side and the other shape on the other.
+_CONTACT_PHONE_TABLES = ("properties", "soldout_properties", "builder_projects", "broker_requirements")
+
+# How many rows one UPDATE carries. The whole point of batching is Neon:
+# 1,600 single-row UPDATEs is 1,600 round trips on a metered connection,
+# while this is four. Large enough to make that true, small enough that the
+# statement and its parameters stay a modest size.
+_CONTACT_PHONE_BATCH = 500
+
+
+def _migrate_contact_phones(engine) -> int:
+    """Rewrites every stored contact number into `contact_phones` -- a list
+    of "+91" + 10-digit strings -- and returns how many rows were rewritten.
+
+    WHAT THIS REPAIRS
+
+    The properties imported from the client's spreadsheet include cells where
+    two numbers were typed into one box with nothing between them, so
+    "9824750171" and "9825907179" were stored as "98247501719825907179".
+    That is not a number anyone can call and no display can fix it; it has to
+    be split back into the two numbers it always was. See
+    Model/phone_numbers.py, which is what does the reading -- this function
+    only moves rows.
+
+    WHY IT DOES NOT TOUCH updated_at
+
+    `properties.updated_at` is not bookkeeping. The nightly incremental match
+    pass asks "which listings changed since I last ran" and re-scores exactly
+    those (Service/ClientPropertyMatchingService/match_candidates.
+    get_changed_since). Bumping it on every property at once would order a
+    full re-score of every property against every client and every broker
+    requirement -- hundreds of thousands of rows of work, and a Neon bill to
+    match -- for a change that cannot move a single score (the contact number
+    is in MATCH_NEUTRAL_FIELDS precisely because nothing scores on it).
+
+    Two things would otherwise bump it, and both are handled: SQLAlchemy's
+    own `onupdate`, avoided by writing raw SQL rather than going through the
+    ORM; and the BEFORE UPDATE trigger init_db installs on `properties`,
+    which is disabled for the duration and restored immediately. Both the
+    disable and the restore are DDL inside this function's single
+    transaction, so a failure anywhere rolls back the updates AND leaves the
+    trigger exactly as it was -- the table can never be left unguarded.
+
+    WHY THE ORIGINAL COLUMN SURVIVES
+
+    `contact_phone` is left in place, untouched, holding the value the
+    spreadsheet delivered. Nothing reads it any more (it is out of every
+    repository's column tuple), it costs nothing where it sits, and it is the
+    only remaining copy of the original if any of the splitting above ever
+    needs to be reviewed.
+
+    Idempotent by construction: it only reads rows whose contact_phones is
+    still empty, so a second run selects nothing. init_db additionally gates
+    it behind an app_settings flag, so the steady state costs one primary-key
+    lookup rather than four queries."""
+    from sqlalchemy import text
+
+    from Model import phone_numbers
+
+    rewritten = 0
+    unreadable: List[str] = []
+    with engine.begin() as connection:
+        connection.execute(text("ALTER TABLE properties DISABLE TRIGGER trg_properties_set_updated_at"))
+        try:
+            for table in _CONTACT_PHONE_TABLES:
+                rows = connection.execute(
+                    text(
+                        f"SELECT id, contact_phone FROM {table} "
+                        "WHERE contact_phone IS NOT NULL AND contact_phone <> '' "
+                        "AND contact_phones::text IN ('[]', 'null')"
+                    )
+                ).all()
+                pending: List[dict] = []
+                for row_id, raw in rows:
+                    numbers = phone_numbers.split_phone_numbers(raw)
+                    if not numbers:
+                        continue
+                    if len(numbers) == 1 and not phone_numbers.is_canonical(numbers[0]):
+                        # Kept exactly as written rather than guessed at --
+                        # see phone_numbers._numbers_in_run. Reported below
+                        # so these can be corrected by hand in the dialog.
+                        unreadable.append(f"{table}#{row_id}: {raw!r}")
+                    pending.append((row_id, json.dumps(numbers)))
+                for start in range(0, len(pending), _CONTACT_PHONE_BATCH):
+                    batch = pending[start : start + _CONTACT_PHONE_BATCH]
+                    values = ", ".join(f"(:id{index}, :phones{index})" for index in range(len(batch)))
+                    parameters: dict = {}
+                    for index, (row_id, phones) in enumerate(batch):
+                        parameters[f"id{index}"] = row_id
+                        parameters[f"phones{index}"] = phones
+                    connection.execute(
+                        text(
+                            f"UPDATE {table} AS t SET contact_phones = v.phones::json "
+                            f"FROM (VALUES {values}) AS v(id, phones) "
+                            "WHERE t.id = v.id::integer"
+                        ),
+                        parameters,
+                    )
+                    rewritten += len(batch)
+        finally:
+            connection.execute(text("ALTER TABLE properties ENABLE TRIGGER trg_properties_set_updated_at"))
+
+    if unreadable:
+        from Middleware import step_logger
+
+        step_logger.warn(
+            f"{len(unreadable)} stored contact number(s) could not be read as an Indian number and were kept "
+            "exactly as written rather than guessed at (too few digits, a foreign number, or a typo). They "
+            "still show and still save; edit the listing to correct one. " + "; ".join(unreadable[:20])
+        )
+    return rewritten
+
+
+def _normalize_client_additional_phones(engine) -> int:
+    """The same canonical shape for the extra, unverified numbers staff keep
+    on a client record (ClientRow.additional_phones) -- and nothing else on
+    that table.
+
+    `clients.phone` is deliberately not touched. It is the primary key, it is
+    referenced by client_property_matches and manual_properties, and it is
+    already written through Service/WhatsAppInquiryHandlingService/
+    phone_utils.normalize_phone -- so it is both already canonical and the
+    one column here that could not be rewritten without breaking those
+    references.
+
+    Raw SQL again, so nothing bumps `clients.updated_at` -- same reasoning as
+    _migrate_contact_phones above."""
+    from sqlalchemy import text
+
+    from Model import phone_numbers
+
+    changed = 0
+    with engine.begin() as connection:
+        rows = connection.execute(
+            text("SELECT phone, additional_phones FROM clients WHERE additional_phones IS NOT NULL")
+        ).all()
+        for client_phone, stored in rows:
+            if not isinstance(stored, list) or not stored:
+                continue
+            normalized = phone_numbers.normalize_phone_list(stored)
+            if normalized == stored:
+                continue
+            connection.execute(
+                text("UPDATE clients SET additional_phones = CAST(:phones AS json) WHERE phone = :phone"),
+                {"phones": json.dumps(normalized), "phone": client_phone},
+            )
+            changed += 1
+    return changed
 
 
 def init_db() -> None:
@@ -879,6 +1035,25 @@ def init_db() -> None:
     # unused nullable column left behind costs nothing and SQLAlchemy ignores
     # it entirely, while a DROP run against the wrong database cannot be
     # undone.
+    # Every contact number a listing carries, as a JSON array of canonical
+    # "+91" + 10-digit strings -- see Model/phone_numbers.py and
+    # PropertyRow.contact_phones. NOT NULL DEFAULT '[]' rather than nullable,
+    # because the pydantic side declares a plain list and a NULL would fail
+    # validation on the first read of a pre-existing row; on Postgres 11+ a
+    # DEFAULT on ADD COLUMN is catalog-only, so this is instant and rewrites
+    # no table. The single-value `contact_phone` column each of these tables
+    # already has is deliberately left in place and simply stops being read
+    # -- see _migrate_contact_phones, which is what fills the new column from
+    # it exactly once.
+    with engine.begin() as connection:
+        for table in _CONTACT_PHONE_TABLES:
+            connection.execute(
+                text(
+                    f"ALTER TABLE {table} ADD COLUMN IF NOT EXISTS "
+                    "contact_phones JSON NOT NULL DEFAULT '[]'::json"
+                )
+            )
+
     new_content_columns = (
         "unit_no VARCHAR",
         "area_sqft FLOAT",
@@ -982,6 +1157,30 @@ def init_db() -> None:
             step_logger.info(
                 f"Normalized type/BHK/furnishing on {normalized_requirements} stored broker requirement(s) — they "
                 "now filter and match the same way new ones do."
+            )
+
+    # One-time split-and-canonicalise of every stored contact number -- see
+    # _migrate_contact_phones for what it repairs and for the two things it
+    # is careful NOT to do (bump updated_at, drop the original column).
+    #
+    # Gated by an app_settings flag for the same reason the requirement
+    # clean-up above is: without one, every startup would re-read four tables
+    # to prove there is nothing left to do, while the flag costs a single
+    # primary-key lookup. The flag is written only after the work committed,
+    # so a run that failed part-way is simply retried on the next start (and
+    # the migration itself only looks at rows it has not already filled, so
+    # the retry is not a re-do).
+    contact_phone_key = "contact_phone_array_migration_v1"
+    if not settings_repository.get_value(contact_phone_key):
+        rewritten_numbers = _migrate_contact_phones(engine)
+        normalized_client_numbers = _normalize_client_additional_phones(engine)
+        settings_repository.set_value(contact_phone_key, {"done": True})
+        if rewritten_numbers or normalized_client_numbers:
+            step_logger.info(
+                f"Canonicalised the contact numbers on {rewritten_numbers} listing(s) and "
+                f"{normalized_client_numbers} client record(s) -- every number is now stored as "
+                "\"+91\" plus 10 digits, and numbers that had been run together into one box are "
+                "now separate, dialable numbers."
             )
 
     # Same reasoning again for landing-page leads: phone_e164 is produced by

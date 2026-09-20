@@ -241,7 +241,7 @@ export default function LeadForm({
           <span className="field__hint">Confirmed on WhatsApp — we'll use this number for everything.</span>
         ) : phoneInvalid ? (
           <span className="field__error" id="lead-phone-error">
-            That doesn't look complete — please include all 10 digits.
+            That doesn't look like a phone number — digits only, please (a country code is fine).
           </span>
         ) : confirmHint ? (
           <span className="field__error">

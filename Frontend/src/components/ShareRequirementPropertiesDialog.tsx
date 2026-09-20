@@ -2,6 +2,7 @@ import { useEffect, useRef, useState } from "react";
 import { propertyShareApi } from "../api/propertyShareApi";
 import type { BrokerRequirementRecord, ShareTarget } from "../api/types";
 import { friendlyError } from "../lib/apiError";
+import { formatPhone } from "../lib/phone";
 import { buildRequirementShareMessage, type SharePropertyLike } from "../lib/propertyShareTemplate";
 import SendPropertiesDialog from "./SendPropertiesDialog";
 import { useToast } from "./ui/Toast";
@@ -93,7 +94,7 @@ export default function ShareRequirementPropertiesDialog({
           title: "Property details sent",
           message: `${properties.length} propert${properties.length === 1 ? "y" : "ies"} sent to ${
             target?.to_name || result.to_phone
-          }${result.from_number ? ` from ${result.from_number}` : ""}.`,
+          }${result.from_number ? ` from ${formatPhone(result.from_number)}` : ""}.`,
         });
       } else {
         toast.push({

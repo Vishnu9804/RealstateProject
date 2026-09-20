@@ -84,6 +84,18 @@ const FURNISHING_OPTIONS = ["Fully furnished", "Semi furnished", "Unfurnished"];
 const PHONE_REQUIRED_MESSAGE =
   "Please enter your WhatsApp number first, so we can send you the properties matched to your requirements.";
 
+/** "you haven't typed one" and "that isn't one" are different problems and
+ *  used to get the same sentence, which reads as though the box had been
+ *  ignored. isPlausiblePhone is deliberately generous (see lib/format.ts)
+ *  — any country, any grouping — so anything it turns down really is not a
+ *  phone number. */
+const PHONE_INVALID_MESSAGE =
+  "That doesn't look like a phone number — digits only, please (a country code is fine).";
+
+function phoneProblem(value: string): string {
+  return value.trim().length === 0 ? PHONE_REQUIRED_MESSAGE : PHONE_INVALID_MESSAGE;
+}
+
 const CONFIRM_REQUIRED_MESSAGE =
   "Almost there — tap Confirm and enter the 4-digit code we'll send to this number on WhatsApp.";
 
@@ -409,7 +421,7 @@ export default function RequirementsForm({
    *  after the first code, because it never reaches the server. */
   function beginConfirm() {
     if (!isPlausiblePhone(phone)) {
-      setPhoneError(PHONE_REQUIRED_MESSAGE);
+      setPhoneError(phoneProblem(phone));
       phoneRef.current?.focus();
       return;
     }
@@ -474,7 +486,7 @@ export default function RequirementsForm({
       setConfirmPulse(true);
       return;
     }
-    setPhoneError(PHONE_REQUIRED_MESSAGE);
+    setPhoneError(phoneProblem(phone));
     if (phone.trim().length === 0) phoneRef.current?.focus();
   }
 
@@ -485,7 +497,7 @@ export default function RequirementsForm({
     if (!phoneSettled) {
       setFormError(null);
       if (!isPlausiblePhone(phone)) {
-        setPhoneError(PHONE_REQUIRED_MESSAGE);
+        setPhoneError(phoneProblem(phone));
         phoneRef.current?.focus();
         return;
       }

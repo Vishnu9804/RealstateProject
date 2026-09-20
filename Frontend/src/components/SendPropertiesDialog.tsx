@@ -1,5 +1,6 @@
 import { useEffect, type ReactNode } from "react";
 import { createPortal } from "react-dom";
+import { formatPhone } from "../lib/phone";
 import { Avatar, Badge, Button, Note } from "./ui/Primitives";
 import { IconAlert, IconInfo, IconSend, IconX } from "./ui/Icons";
 
@@ -103,7 +104,7 @@ export default function SendPropertiesDialog({
     return () => document.removeEventListener("keydown", onKeyDown);
   }, [onClose, sending]);
 
-  const recipient = toName || toPhone;
+  const recipient = toName || formatPhone(toPhone);
   const canSend = !loading && !sending && canSendExtra && (messageOptional || message.trim().length > 0);
 
   return createPortal(
@@ -125,7 +126,7 @@ export default function SendPropertiesDialog({
                 {propertyCount} propert{propertyCount === 1 ? "y" : "ies"}
               </Badge>
               {fromNumber ? (
-                <Badge tone="ok">Sending from {fromNumber}</Badge>
+                <Badge tone="ok">Sending from {formatPhone(fromNumber)}</Badge>
               ) : (
                 <Badge tone="warn">No number connected</Badge>
               )}
@@ -141,7 +142,7 @@ export default function SendPropertiesDialog({
             <Avatar name={recipient} size={34} />
             <div style={{ minWidth: 0 }}>
               <div className="cell-strong cell-truncate">To {recipient}</div>
-              <div className="faint small">{toPhone}</div>
+              <div className="faint small">{formatPhone(toPhone)}</div>
             </div>
           </div>
 

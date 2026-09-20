@@ -33,7 +33,6 @@ class MatchedProperty(MatchScore):
     # on the match row. That is what makes adding it free: the match tables
     # hold hundreds of thousands of rows and gain no byte from this.
     contact_phones: List[str] = Field(default_factory=list)
-    contact_phone: Optional[str] = None
     description: Optional[str] = None
     review_status: str
     needs_review: bool

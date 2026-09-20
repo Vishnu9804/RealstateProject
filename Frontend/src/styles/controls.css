@@ -117,6 +117,81 @@
 .field { display: flex; flex-direction: column; gap: 7px; }
 .field__hint { font-size: 12.5px; color: var(--ink-4); }
 
+/* A hint that is a RULE rather than a nicety.
+   ----------------------------------------------------------------------
+   Most hints are help: ignoring one costs nothing. A handful are not —
+   they describe the only spelling a box's value is stored in, and typing
+   something else there does not fail, it SAVES, wrongly and silently. "65
+   lakh" typed into the rupee box is the one that prompted this: the box
+   takes digits, "65 lakh" leaves it empty, and the property then has no
+   price for any filter, sort or match to read.
+
+   It is drawn as a line of amber text with a small glyph, NOT as a filled
+   callout box. A callout was tried first and was wrong twice over: four of
+   them stacked down a three-column grid made every row a different height
+   and the form read as a wall of warnings, and at that size nobody reads
+   the words anyway. Colour plus a glyph is already the loudest thing on a
+   panel of grey 12.5px hints — it does not also need a border, a fill and
+   three lines of prose. The text is kept to one short sentence so this
+   stays one line at normal widths and the grid keeps its rhythm. */
+.field__hint--key {
+  display: flex;
+  align-items: flex-start;
+  gap: 5px;
+  color: var(--warn);
+  font-weight: 560;
+}
+.field__hint--key > svg {
+  flex: none;
+  margin-top: 1.5px;
+  opacity: 0.85;
+}
+
+/* A field a save was refused over.
+   ----------------------------------------------------------------------
+   The label turns red and the control it belongs to gets the same red edge
+   a directly-marked input gets, so the summary at the foot of the dialog
+   and the box it is about are visibly the same problem. Applied to the
+   WRAPPER rather than to each control, because a "field" is sometimes
+   several controls (a row of phone boxes, a per-type size row) and marking
+   only the first of them would point at the wrong one. */
+.field--bad > .field__hint:first-child { color: var(--bad); }
+.field--bad .input,
+.field--bad .textarea,
+.field--bad .select {
+  border-color: color-mix(in oklab, var(--bad) 55%, transparent);
+}
+
+/* Every reason one Save was refused, together, pinned between a dialog's
+   scrolling body and its footer.
+   ----------------------------------------------------------------------
+   It used to live at the BOTTOM OF THE BODY and scroll itself into view,
+   which meant pressing Save on a long form threw the page down to a
+   message that then sat above the fold the field it was about was on --
+   the reader lost their place to be told they had lost their place. Here
+   it cannot be scrolled away from: it is a sibling of the footer, always
+   in view, right where the button that was just pressed is. The body
+   scrolls to the first offending FIELD instead, which is the thing that
+   actually needs looking at.
+   Capped and scrollable so a form with a dozen problems still leaves room
+   for the form itself. */
+.form-issues {
+  display: flex;
+  align-items: flex-start;
+  gap: 9px;
+  padding: 11px 22px;
+  border-top: 1px solid color-mix(in oklab, var(--bad) 30%, transparent);
+  background: color-mix(in oklab, var(--bad) 10%, var(--plane-1));
+  color: var(--ink);
+  font-size: 12.5px;
+  line-height: 1.5;
+  max-height: 140px;
+  overflow-y: auto;
+}
+.form-issues > svg { flex: none; margin-top: 2px; color: var(--bad); }
+.form-issues__list { margin: 0; padding-left: 17px; display: grid; gap: 3px; }
+.form-issues__count { font-weight: 640; color: var(--bad); display: block; margin-bottom: 3px; }
+
 /* Inputs sit *below* the surface (inset shadow) — a well, not a slab. It is
    the one place the depth deliberately reverses, which is how a real control
    panel separates "put something in here" from "press this". */

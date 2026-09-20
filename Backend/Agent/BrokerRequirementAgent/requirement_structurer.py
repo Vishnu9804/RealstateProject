@@ -213,7 +213,7 @@ _MESSAGE_MODEL_FIELDS = {
     "budget_max_inr",
     "listing_type",
     "contact_name",
-    "contact_phone",
+    "contact_phones",
     "description",
 }
 
@@ -729,6 +729,9 @@ def _to_structured_requirement(
         budget_max_inr=item.budget_max_inr,
         listing_type=item.listing_type,
         contact_name=item.contact_name,
+        # StructuredRequirement's inbound-only alias for one free-text phone
+        # string -- split into contact_phones there, never stored or returned
+        # under this name. Same as the property side.
         contact_phone=item.contact_phone,
         description=item.description.strip() if item.description and item.description.strip() else None,
         group_name=message.chat_name,

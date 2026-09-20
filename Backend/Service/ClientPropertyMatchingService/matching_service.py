@@ -543,7 +543,6 @@ def _display_fields(prop: EmbeddedProperty) -> dict:
         # is what lets a match card show a corrected number without the
         # match itself being re-scored.
         "contact_phones": list(prop.contact_phones),
-        "contact_phone": prop.contact_phone,
         "description": prop.description,
         "review_status": prop.review_status,
         "needs_review": prop.needs_review,

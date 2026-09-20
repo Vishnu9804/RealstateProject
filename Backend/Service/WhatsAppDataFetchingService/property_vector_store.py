@@ -484,18 +484,13 @@ def update_property(
                 for key, value in content_updates.items():
                     if key in property_repository.EDITABLE_CONTENT_FIELDS:
                         setattr(prop, key, value)
-                if "contact_phones" in content_updates:
-                    # setattr writes the field and nothing else -- it cannot
-                    # run StructuredProperty's own reconciliation (that is a
-                    # validator, and validate_assignment is off). Without
-                    # this line the derived primary would keep pointing at
-                    # the number the edit just replaced, and anything reading
-                    # `contact_phone` directly (the embedding text, a share
-                    # message) would use it. The database path needs no
-                    # equivalent: it re-reads the row.
-                    from Model import phone_numbers
-
-                    prop.contact_phone = phone_numbers.primary_phone(prop.contact_phones)
+                # contact_phones needs no fix-up after the setattr above.
+                # It used to: there was a derived `contact_phone` scalar
+                # beside it that setattr could not refresh (reconciliation
+                # is a validator, and validate_assignment is off), so the
+                # primary went on pointing at the number the edit had just
+                # replaced. That scalar no longer exists anywhere -- the
+                # list IS the value -- so there is nothing left to drift.
                 if prop.instagram_reel_url and prop.instagram_reel_url != previous_reel_url:
                     _note_reel_link(prop.record_id)
             if embedding is not None:

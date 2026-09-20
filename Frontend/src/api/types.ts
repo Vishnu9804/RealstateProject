@@ -418,13 +418,10 @@ export interface MatchedProperty {
   contact_name: string | null;
   /** Every contact number on this matched listing, each stored as "+91" plus 10
    *  digits — see lib/phone.ts. Use phoneList() rather than reading this
-   *  directly: it falls back to `contact_phone` for a response fetched
-   *  before this field existed. */
+   *  directly, so every caller handles "no numbers" the same way. THE ONLY
+   *  contact-number field: the derived `contact_phone` scalar that used to
+   *  sit beside it is gone from the API, the models and the database. */
   contact_phones: string[];
-  /** The PRIMARY number — contact_phones[0], sent alongside the list so a
-   *  one-line display does not have to index into it. Derived server-side
-   *  and never stored on its own (Backend/Model/phone_numbers.py). */
-  contact_phone: string | null;
   description: string | null;
   review_status: "accepted" | "outsider";
   needs_review: boolean;
@@ -594,13 +591,10 @@ export interface PropertyRecord {
   contact_name: string | null;
   /** Every contact number on this property, each stored as "+91" plus 10
    *  digits — see lib/phone.ts. Use phoneList() rather than reading this
-   *  directly: it falls back to `contact_phone` for a response fetched
-   *  before this field existed. */
+   *  directly, so every caller handles "no numbers" the same way. THE ONLY
+   *  contact-number field: the derived `contact_phone` scalar that used to
+   *  sit beside it is gone from the API, the models and the database. */
   contact_phones: string[];
-  /** The PRIMARY number — contact_phones[0], sent alongside the list so a
-   *  one-line display does not have to index into it. Derived server-side
-   *  and never stored on its own (Backend/Model/phone_numbers.py). */
-  contact_phone: string | null;
   description: string | null;
   instagram_reel_url: string | null;
   /** Empty on the list endpoint (GET /properties) — that endpoint
@@ -717,13 +711,10 @@ export interface BuilderProjectRecord {
   contact_name: string | null;
   /** Every contact number on this builder project, each stored as "+91" plus 10
    *  digits — see lib/phone.ts. Use phoneList() rather than reading this
-   *  directly: it falls back to `contact_phone` for a response fetched
-   *  before this field existed. */
+   *  directly, so every caller handles "no numbers" the same way. THE ONLY
+   *  contact-number field: the derived `contact_phone` scalar that used to
+   *  sit beside it is gone from the API, the models and the database. */
   contact_phones: string[];
-  /** The PRIMARY number — contact_phones[0], sent alongside the list so a
-   *  one-line display does not have to index into it. Derived server-side
-   *  and never stored on its own (Backend/Model/phone_numbers.py). */
-  contact_phone: string | null;
   description: string | null;
   instagram_reel_url: string | null;
   /** Always [] from the API — photos come from
@@ -818,13 +809,10 @@ export interface BrokerRequirementRecord {
   contact_name: string | null;
   /** Every contact number on this requirement, each stored as "+91" plus 10
    *  digits — see lib/phone.ts. Use phoneList() rather than reading this
-   *  directly: it falls back to `contact_phone` for a response fetched
-   *  before this field existed. */
+   *  directly, so every caller handles "no numbers" the same way. THE ONLY
+   *  contact-number field: the derived `contact_phone` scalar that used to
+   *  sit beside it is gone from the API, the models and the database. */
   contact_phones: string[];
-  /** The PRIMARY number — contact_phones[0], sent alongside the list so a
-   *  one-line display does not have to index into it. Derived server-side
-   *  and never stored on its own (Backend/Model/phone_numbers.py). */
-  contact_phone: string | null;
   /** A short summary plus every other stated detail that has no field of
    *  its own — furnishing, size, location detail, who it is for, food,
    *  possession, urgency, token ready, "vaya". */

@@ -49,11 +49,10 @@ class BuilderProject(BaseModel):
     # digits — the same field, the same rule and the same producer as
     # StructuredProperty.contact_phones (Model/phone_numbers.py). See that
     # model for the full reasoning.
+    # THE ONLY contact-number field here, exactly as on StructuredProperty:
+    # the derived `contact_phone` scalar that used to sit beside it is gone
+    # from the model, from every API response and from the database.
     contact_phones: List[str] = Field(default_factory=list)
-    # The PRIMARY number, derived from contact_phones[0] on every
-    # construction and never stored as a column of its own — again exactly
-    # as on StructuredProperty.
-    contact_phone: Optional[str] = None
     description: Optional[str] = None
     instagram_reel_url: Optional[str] = None
     # Data URLs, in display order; the first is the cover — the same
@@ -77,19 +76,21 @@ class BuilderProject(BaseModel):
     @model_validator(mode="before")
     @classmethod
     def _reconcile_contact_phones(cls, data):
-        """contact_phones is the truth, contact_phone is its first entry --
-        the identical rule StructuredProperty._reconcile_contact_phones
+        """contact_phones is the truth; contact_phone is an inbound-only
+        alias for one free-text string, read here and never emitted -- the
+        identical rule StructuredProperty._reconcile_contact_phones
         documents in full (including why it has to run "before"), applied
-        here so a listing and a property behave the same wherever one stands
-        in for the other."""
+        here so a requirement and a property behave the same wherever one
+        stands in for the other."""
         if not isinstance(data, dict):
             return data
-        supplied = data.get("contact_phones")
+        merged = {key: value for key, value in data.items() if key != "contact_phone"}
+        supplied = merged.get("contact_phones")
         if supplied is not None:
-            numbers = phone_numbers.normalize_phone_list(supplied)
+            merged["contact_phones"] = phone_numbers.normalize_phone_list(supplied)
         else:
-            numbers = phone_numbers.split_phone_numbers(data.get("contact_phone"))
-        return {**data, "contact_phones": numbers, "contact_phone": phone_numbers.primary_phone(numbers)}
+            merged["contact_phones"] = phone_numbers.split_phone_numbers(data.get("contact_phone"))
+        return merged
 
 
 class BuilderProjectRecord(BuilderProject):

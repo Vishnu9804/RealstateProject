@@ -24,8 +24,8 @@ export interface RequirementContentFields {
   listing_type?: "Sale" | "Rent";
   contact_name?: string | null;
   /** Every contact number on this requirement, each one "+91" plus 10
-   *  digits. The retired single `contact_phone` is still accepted by
-   *  the API but is no longer sent by this client. */
+   *  digits. The only contact-number field there is — the derived
+   *  `contact_phone` scalar has been removed from the API. */
   contact_phones?: string[];
   description?: string | null;
 }

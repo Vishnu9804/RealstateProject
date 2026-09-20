@@ -37,6 +37,7 @@ import {
   type AgentAssignment,
   type HandoffPropertyLike,
 } from "../lib/handoffTemplate";
+import { formatPhone } from "../lib/phone";
 import { sourceDetail, sourceLabel } from "../lib/propertyFilters";
 import {
   getCachedPropertyList,
@@ -346,7 +347,6 @@ function snapshotProperty(
     area_vaar: null,
     contact_name: null,
     contact_phones: [],
-    contact_phone: null,
   };
 }
 
@@ -1063,7 +1063,7 @@ export default function ClientMatchesDialog({
     [activeVisits, revisitNumberFor],
   );
 
-  const displayName = client?.name || clientName || phone;
+  const displayName = client?.name || clientName || formatPhone(phone);
 
   function clearSelection() {
     setSelectedIds(new Set());
@@ -2211,13 +2211,14 @@ function summariseRequirements(
   client: InquiryClientRecord | null,
   phone: string,
 ): string {
-  if (!client) return phone;
+  const shown = formatPhone(phone);
+  if (!client) return shown;
   const parts = [
     [client.bhk, client.property_type].filter(Boolean).join(" ") || null,
     client.purpose ? `to ${client.purpose}` : null,
     client.preferred_areas,
   ].filter(Boolean);
-  return parts.length > 0 ? `${phone} · ${parts.join(" · ")}` : phone;
+  return parts.length > 0 ? `${shown} · ${parts.join(" · ")}` : shown;
 }
 
 function formatCompletedDate(iso: string | null): string | null {

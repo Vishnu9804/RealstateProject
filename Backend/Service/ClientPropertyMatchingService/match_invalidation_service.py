@@ -68,10 +68,12 @@ MATCH_NEUTRAL_FIELDS = frozenset(
         "location_url",
         "video_available",
         "unit_no",
-        # The list is what an edit actually moves now; the scalar is kept
-        # beside it because an old browser's PATCH still names it.
+        # The list is what an edit moves. The old scalar is not named here
+        # any more: it is not a field, not a column and not in any request
+        # body by the time this runs (the controller's
+        # bridge_contact_phones folds a stale browser's copy into the list
+        # and removes the key).
         "contact_phones",
-        "contact_phone",
     }
 )
 

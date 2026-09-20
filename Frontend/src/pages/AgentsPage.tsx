@@ -7,6 +7,7 @@ import { usePolling } from "../hooks/usePolling";
 import { useAuth } from "../state/AuthProvider";
 import { friendlyError } from "../lib/apiError";
 import { relativeTime } from "../lib/formatters";
+import { formatPhone } from "../lib/phone";
 import { getCachedAgents, setCachedAgents } from "../lib/agentListCache";
 import AgentFormDialog from "../components/AgentFormDialog";
 import AgentVisitsDialog from "../components/AgentVisitsDialog";
@@ -302,7 +303,7 @@ function AgentCard({
         <Avatar name={agent.name} size={44} />
         <div style={{ minWidth: 0, flex: 1 }}>
           <div className="pcard__title cell-truncate">{agent.name}</div>
-          <div className="pcard__sub cell-truncate">{agent.phone}</div>
+          <div className="pcard__sub cell-truncate">{formatPhone(agent.phone)}</div>
         </div>
         <div className="row-flex" style={{ gap: 4 }} onClick={(event) => event.stopPropagation()}>
           <Button size="sm" variant="ghost" iconOnly icon={<IconEdit size={14} />} onClick={onEdit} aria-label="Edit agent" />

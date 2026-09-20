@@ -10,35 +10,19 @@
  * would have accepted.
  */
 
-/** One real, single WhatsApp number — an agent's. Deliberately narrower
- *  than a free-text contact box: this is a number the backend normalizes to
- *  E.164 and actually sends to. Kept loose enough to accept every spelling
- *  the backend's own phonenumbers parse does (with or without +91, spaces,
- *  dashes, brackets), so the dialog can never refuse what the API allows. */
-const DIALLABLE = /^[+()\-.\s\d]+$/;
-
 const URL_RE = /^https?:\/\/[^\s/?#]+\.[^\s/?#]+([/?#]\S*)?$/i;
 const REEL_RE = /instagram\.com\/(reel|reels|p|tv)\/[A-Za-z0-9_-]+/i;
 
-function digitCount(value: string): number {
-  return (value.match(/\d/g) ?? []).length;
-}
+/* NO phone number is checked here, and none is typed as free text any more.
+   Every phone box in the application — a listing's contact numbers, a
+   client's WhatsApp number and their other numbers, an agent's WhatsApp
+   number — is the same ten-digit box with its "+91" printed beside it
+   (components/ContactPhonesField's PhoneInput), and the one rule they all
+   answer to is lib/phone.ts's phoneFieldError.
 
-/* A listing's contact numbers are NOT checked here. They are a list now,
-   not a box of free text, and both the per-number rule and the "+91" + 10
-   digits shape they are stored in live in lib/phone.ts beside the field
-   that collects them (components/ContactPhonesField.tsx). */
-
-/** The agent's own WhatsApp number — required, and a single number. */
-export function whatsappNumberError(value: string): string | null {
-  const trimmed = value.trim();
-  if (!trimmed) return null;
-  const digits = digitCount(trimmed);
-  if (!DIALLABLE.test(trimmed) || digits < 10 || digits > 15) {
-    return "That doesn't look like a valid phone number.";
-  }
-  return null;
-}
+   This file used to hold a second, looser rule of its own for an agent's
+   number (10-15 digits, brackets and dashes allowed). Two rules is how the
+   same number came to be stored two ways, so there is now one. */
 
 export function urlError(value: string): string | null {
   const trimmed = value.trim();
@@ -80,3 +64,56 @@ export function amountError(value: string, label: string, max: number): string |
 /** Backend/Model/field_validation.py's own ceilings, so the two agree. */
 export const MAX_INR = 1e12;
 export const MAX_AREA = 1e7;
+
+/* ---- a size preference: one number, or a range ------------------------ */
+
+/** A number, then optionally a separator and a second number, then
+ *  optionally the unit written out. Spaces anywhere between the parts.
+ *
+ *  Deliberately permissive about the shapes people actually write — "1200",
+ *  "1200-3000", "1200 – 3000", "1200 to 3000", "200 vaar" — and closed
+ *  about everything else, which is the whole point: the box is read by the
+ *  matcher (Backend/Service/ClientPropertyMatchingService/normalization.py's
+ *  parse_size_requirement), not by a person, and it reads numbers and unit
+ *  words. Anything else it silently ignores, which is how "567-12 sqftwwr"
+ *  came to be stored as a size. */
+const SIZE_RE =
+  /^(?:about|approx\.?|around|~|min\.?|minimum|max\.?|maximum|at\s?least|up\s?to|upto)?\s*(\d+(?:\.\d+)?)\s*(?:(?:-|–|—|to)\s*(\d+(?:\.\d+)?))?\s*(?:sq\.?\s?ft|sqft|sq\.?\s?feet|feet|ft|sq\.?\s?yd|sqyd|sq\.?\s?yards?|vaar|var|gaj|yards?)?\s*\+?$/i;
+
+/**
+ * What is wrong with a size box, in words the person who typed it can act
+ * on — or null when it is fine, including when it is empty (a size is
+ * optional).
+ *
+ * The four things it catches, all of which used to save happily:
+ *  - a negative ("-1233"), which the matcher reads as 1233;
+ *  - a reversed range ("567-12"), which the matcher silently turns the
+ *    right way round, so what is stored is not what was typed;
+ *  - a zero, which is not a size;
+ *  - trailing or embedded text ("567-12 sqftwwr"), which the matcher drops.
+ *
+ * `unit` only appears in the example in the message, so each box suggests
+ * the unit it is actually asked in.
+ */
+export function sizeRangeError(value: string, unit: "vaar" | "sq ft"): string | null {
+  const trimmed = value.trim();
+  if (!trimmed) return null;
+  if (/^[-–—]/.test(trimmed)) return "A size can't be negative — enter a positive number.";
+
+  const match = SIZE_RE.exec(trimmed);
+  if (!match) {
+    const example = unit === "vaar" ? "200 or 150-250" : "1200 or 1000-1500";
+    return `Sizes are numbers, so "${trimmed}" can't be stored — write a number or a range, like ${example}.`;
+  }
+
+  const low = Number(match[1]);
+  const high = match[2] === undefined ? null : Number(match[2]);
+  if (low <= 0 || (high !== null && high <= 0)) return "A size has to be more than 0.";
+  if (high !== null && low > high) {
+    return `"${trimmed}" reads as ${low} down to ${high} — put the smaller number first, like ${high}-${low}.`;
+  }
+  if (low > MAX_AREA || (high !== null && high > MAX_AREA)) {
+    return "That size is larger than any real property — check the figure.";
+  }
+  return null;
+}

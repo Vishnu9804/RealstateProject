@@ -42,10 +42,11 @@ export interface SharePropertyLike {
   furnishing: string | null;
   contact_name: string | null;
   /** Every number on the listing, so a share message carries all of them —
-   *  see lib/phone.ts. `contact_phone` stays beside it for a record read
-   *  out of a cache filled before the list existed. */
+   *  see lib/phone.ts. The only contact-number field there is: the derived
+   *  `contact_phone` scalar was removed from the API. (The `{contact_phone}`
+   *  TEMPLATE TOKEN below is a different thing entirely — it is the
+   *  recipient broker's own WhatsApp number, taken from sender_phone.) */
   contact_phones?: string[] | null;
-  contact_phone: string | null;
   /** Known for a full PropertyRecord; absent on a bare MatchedProperty. */
   image_count?: number;
   /* No `location_url`, deliberately. This message is sent to a client or a

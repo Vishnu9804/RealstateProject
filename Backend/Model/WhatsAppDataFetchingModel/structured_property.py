@@ -107,22 +107,18 @@ class StructuredProperty(BaseModel):
     # said "98765 43210 / 98765 43211" was stored as that whole string, and
     # the client's spreadsheet had gone further still and run two numbers
     # together into one unusable 20-digit run.
+    #
+    # THE ONLY contact-number field on this model. There used to be a
+    # derived `contact_phone` scalar beside it holding contact_phones[0];
+    # it is gone, from the model, from every API response and from the
+    # database. One number has one home. The two readers that genuinely
+    # want a single string ask for it explicitly now --
+    # phone_numbers.primary_phone(prop.contact_phones) -- which is what the
+    # scalar always was, so the embedding text those readers build is
+    # byte-for-byte what it was before and stays comparable with every
+    # vector already stored (see Service/WhatsAppDataFetchingService/
+    # embedding_service.py's EMBEDDING_TEXT_FIELDS).
     contact_phones: List[str] = Field(default_factory=list)
-    # The PRIMARY number — contact_phones[0], kept as its own field rather
-    # than left to every caller to index.
-    #
-    # It is derived, never independently set: _reconcile_contact_phones
-    # below overwrites whatever is passed with contact_phones[0] on every
-    # construction. It exists because this one string is what a one-line
-    # display, a share message and the embedding text all actually want (see
-    # Service/WhatsAppDataFetchingService/embedding_service.py's
-    # EMBEDDING_TEXT_FIELDS, whose output must stay comparable with the
-    # vectors already stored), and because it lets anything built before
-    # multiple numbers existed keep reading exactly what it always read.
-    #
-    # NOT a column: Database/property_repository.py persists contact_phones
-    # and nothing else, so the two can never drift apart in storage.
-    contact_phone: Optional[str] = None
     description: Optional[str] = None
     # --- set by a human on the Properties page, never by the LLM ---
     # The Instagram reel this property was posted as, if any — how the
@@ -224,16 +220,17 @@ class StructuredProperty(BaseModel):
     @model_validator(mode="before")
     @classmethod
     def _reconcile_contact_phones(cls, data):
-        """Makes contact_phones the single truth and contact_phone its first
-        entry, whichever of the two the caller supplied.
+        """Makes contact_phones canonical, whichever shape the caller
+        supplied it in.
 
         Three kinds of caller reach this, and each needs a different half:
 
-        - The LLM structuring stage passes contact_phone only, as one free
-          text string straight out of the message ("98765 43210 / 98765
-          43211"). That is split here -- which is what turns a multi-number
-          message into a multi-number listing without the extraction schema
-          having to change shape.
+        - A caller with ONE free-text string straight out of a message
+          ("98765 43210 / 98765 43211") passes it as the inbound-only
+          `contact_phone` alias, which is split here into the numbers it
+          holds and then dropped. The alias is read but never emitted: it
+          is not a field on this model and never appears in a model_dump()
+          or an API response.
         - The Add/Edit dialog and the one-time migration pass
           contact_phones, already canonical. The all-canonical fast path in
           normalize_phone_list means that costs a handful of character
@@ -250,17 +247,18 @@ class StructuredProperty(BaseModel):
         distinction is the whole correctness of clearing a listing's
         numbers: a model rebuilt from its own model_dump() (which
         property_pipeline_service.update_property and _to_record both do)
-        still carries the PREVIOUS scalar, and an "after" validator would
-        read it back and resurrect the number that was just deleted.
+        would have read a stale scalar back and resurrected a number that
+        had just been deleted.
 
         So: a contact_phones key that is present and not None always wins,
-        even when it is empty. contact_phone is read only when there is no
-        list at all."""
+        even when it is empty. The `contact_phone` alias is read only when
+        there is no list at all."""
         if not isinstance(data, dict):
             return data
-        supplied = data.get("contact_phones")
+        merged = {key: value for key, value in data.items() if key != "contact_phone"}
+        supplied = merged.get("contact_phones")
         if supplied is not None:
-            numbers = phone_numbers.normalize_phone_list(supplied)
+            merged["contact_phones"] = phone_numbers.normalize_phone_list(supplied)
         else:
-            numbers = phone_numbers.split_phone_numbers(data.get("contact_phone"))
-        return {**data, "contact_phones": numbers, "contact_phone": phone_numbers.primary_phone(numbers)}
+            merged["contact_phones"] = phone_numbers.split_phone_numbers(data.get("contact_phone"))
+        return merged

@@ -19,10 +19,9 @@ export interface HandoffPropertyLike {
   area_vaar: number | null;
   contact_name: string | null;
   /** Every number on the listing, so a share message carries all of them —
-   *  see lib/phone.ts. `contact_phone` stays beside it for a record read
-   *  out of a cache filled before the list existed. */
+   *  see lib/phone.ts. The only contact-number field there is: the derived
+   *  `contact_phone` scalar was removed from the API. */
   contact_phones?: string[] | null;
-  contact_phone: string | null;
   /* No `location_url`, deliberately — this message is sent to a field agent
      over WhatsApp. See PropertyRecord.location_url. */
 }

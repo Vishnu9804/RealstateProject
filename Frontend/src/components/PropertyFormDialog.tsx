@@ -3,14 +3,9 @@ import { createPortal } from "react-dom";
 import { propertyApi, type PropertyContentFields } from "../api/propertyApi";
 import type { PropertyRecord } from "../api/types";
 import { friendlyError } from "../lib/apiError";
-import {
-  MAX_AREA,
-  MAX_INR,
-  amountError,
-  contactPhoneError,
-  instagramReelError,
-  urlError,
-} from "../lib/fieldChecks";
+import { MAX_AREA, MAX_INR, amountError, instagramReelError, urlError } from "../lib/fieldChecks";
+import { phoneList, toStoredNumber, toTypedNumber } from "../lib/phone";
+import ContactPhonesField, { phoneBoxesError, toPhoneBoxes } from "./ContactPhonesField";
 import { useToast } from "./ui/Toast";
 import { Button, Note, Segmented } from "./ui/Primitives";
 import { IconAlert, IconImage, IconInstagram, IconPin, IconX } from "./ui/Icons";
@@ -58,6 +53,7 @@ export type EditableContentRecord = Pick<
   | "price_amount_inr"
   | "listing_type"
   | "contact_name"
+  | "contact_phones"
   | "contact_phone"
   | "description"
   | "instagram_reel_url"
@@ -103,7 +99,9 @@ interface FormState {
   price_amount_inr: string;
   listing_type: "Sale" | "Rent";
   contact_name: string;
-  contact_phone: string;
+  // One box per number, each holding what is TYPED (the bare ten digits),
+  // never the stored "+91..." form — see ContactPhonesField.
+  contact_phone_boxes: string[];
   description: string;
   instagram_reel_url: string;
   image_urls: string[];
@@ -128,7 +126,7 @@ const BLANK_FORM: FormState = {
   price_amount_inr: "",
   listing_type: "Sale",
   contact_name: "",
-  contact_phone: "",
+  contact_phone_boxes: [""],
   description: "",
   instagram_reel_url: "",
   image_urls: [],
@@ -155,7 +153,7 @@ function toFormState(property: EditableContentRecord): FormState {
     price_amount_inr: property.price_amount_inr?.toString() ?? "",
     listing_type: property.listing_type,
     contact_name: property.contact_name ?? "",
-    contact_phone: property.contact_phone ?? "",
+    contact_phone_boxes: toPhoneBoxes(phoneList(property).map(toTypedNumber)),
     description: property.description ?? "",
     instagram_reel_url: property.instagram_reel_url ?? "",
     image_urls: property.image_urls ?? [],
@@ -196,7 +194,15 @@ function toPayload(form: FormState, includeImages: boolean): PropertyContentFiel
     price_amount_inr: num(form.price_amount_inr),
     listing_type: form.listing_type,
     contact_name: text(form.contact_name),
-    contact_phone: text(form.contact_phone),
+    // Blank boxes are dropped rather than sent as "": emptying every box is
+    // how a listing's numbers are cleared, and [] is what says that.
+    // toStoredNumber is what puts the "+91" back on; a box that is not a
+    // number at all (a legacy note this dialog loaded) is sent as written,
+    // exactly as the backend stores it.
+    contact_phones: form.contact_phone_boxes
+      .map((box) => box.trim())
+      .filter(Boolean)
+      .map((box) => toStoredNumber(box) ?? box),
     description: text(form.description),
     instagram_reel_url: text(form.instagram_reel_url),
     image_urls: form.image_urls,
@@ -228,7 +234,7 @@ function validationError(form: FormState): string | null {
     if (error) return error;
   }
   return (
-    contactPhoneError(form.contact_phone) ??
+    phoneBoxesError(form.contact_phone_boxes) ??
     urlError(form.location_url) ??
     instagramReelError(form.instagram_reel_url)
   );
@@ -493,8 +499,11 @@ export default function PropertyFormDialog<T extends EditableContentRecord = Pro
               <Field label="Contact name">
                 <input className="input" value={form.contact_name} onChange={(e) => set("contact_name", e.target.value)} placeholder="e.g. Ramesh Broker" />
               </Field>
-              <Field label="Contact phone">
-                <input className="input" value={form.contact_phone} onChange={(e) => set("contact_phone", e.target.value)} placeholder="Digits, with country code" />
+              <Field label="Contact numbers" hint="Just the 10 digits — the +91 is added for you.">
+                <ContactPhonesField
+                  boxes={form.contact_phone_boxes}
+                  onChange={(boxes) => set("contact_phone_boxes", boxes)}
+                />
               </Field>
 
               <Field label="Availability" hint={`Is this ${noun} still on the market?`}>

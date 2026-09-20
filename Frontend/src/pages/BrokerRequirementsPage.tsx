@@ -27,6 +27,8 @@ import FilterPopover, { type SortControl } from "../components/ui/FilterPopover"
 import RequirementFormDialog from "../components/RequirementFormDialog";
 import RequirementMatchesDialog from "../components/RequirementMatchesDialog";
 import { FilterTrigger, Pager, compareNullable } from "./DashboardPage";
+import { ContactPhoneDetails, ContactPhoneSummary } from "../components/ui/ContactPhones";
+import { phoneList, phoneSearchText } from "../lib/phone";
 import {
   Badge,
   Button,
@@ -374,7 +376,7 @@ export default function BrokerRequirementsPage() {
         areasLabel(requirement),
         requirement.budget_text,
         requirement.contact_name,
-        requirement.contact_phone,
+        phoneSearchText(requirement),
         // Carries every stated detail without a field of its own, so
         // searching "furnished" or "veg" still finds those requirements.
         requirement.description,
@@ -983,9 +985,9 @@ function RequirementTable({
                 </td>
                 <td className="cell-truncate">
                   <Highlight text={requirement.contact_name ?? "—"} query={query} />
-                  {requirement.contact_phone && (
+                  {phoneList(requirement).length > 0 && (
                     <div className="cell-muted">
-                      <Copyable text={requirement.contact_phone} />
+                      <ContactPhoneSummary record={requirement} />
                     </div>
                   )}
                 </td>
@@ -1083,14 +1085,12 @@ function RequirementCards({
             <MatchesCell count={countFor(requirement.record_id)} onOpen={() => onMatch(requirement)} />
           </div>
 
-          {requirement.contact_phone && (
+          {phoneList(requirement).length > 0 && (
             <div className="fact" style={{ alignSelf: "flex-start" }}>
               <IconPhone size={12} />
-              <Copyable text={requirement.contact_phone}>
-                {requirement.contact_name
-                  ? `${requirement.contact_name} · ${requirement.contact_phone}`
-                  : requirement.contact_phone}
-              </Copyable>
+              <ContactPhoneSummary record={requirement}>
+                {(primary) => (requirement.contact_name ? `${requirement.contact_name} · ${primary}` : primary)}
+              </ContactPhoneSummary>
             </div>
           )}
 
@@ -1207,11 +1207,7 @@ function RequirementDetailDialog({
             <div className="detail__block">
               <div className="detail__k">Contact</div>
               <div className="detail__v">{requirement.contact_name ?? "—"}</div>
-              {requirement.contact_phone && (
-                <div className="detail__v" style={{ marginTop: 4 }}>
-                  <Copyable text={requirement.contact_phone} />
-                </div>
-              )}
+              <ContactPhoneDetails record={requirement} />
             </div>
 
             <div className="detail__block">

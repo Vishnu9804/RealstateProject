@@ -33,8 +33,10 @@ import RowRail from "../components/ui/RowRail";
 import ConfirmDialog from "../components/ui/ConfirmDialog";
 import PropertyFormDialog from "../components/PropertyFormDialog";
 import { COLUMNS, FilterTrigger, Pager, PropertyDetailDialog } from "./DashboardPage";
-import { Badge, Button, Copyable, EmptyState, Note, Panel, Segmented, SkeletonRows } from "../components/ui/Primitives";
+import { Badge, Button, EmptyState, Note, Panel, Segmented, SkeletonRows } from "../components/ui/Primitives";
 import { IconAlert, IconCheck, IconImage, IconInbox, IconInstagram, IconRefresh } from "../components/ui/Icons";
+import { ContactPhoneSummary } from "../components/ui/ContactPhones";
+import { phoneList } from "../lib/phone";
 
 /**
  * Controls which properties are published to the public landing page (a
@@ -602,9 +604,9 @@ export default function LandingPagePage() {
                         </td>
                         <td className="cell-truncate">
                           {property.contact_name ?? "—"}
-                          {property.contact_phone && (
+                          {phoneList(property).length > 0 && (
                             <div className="cell-muted">
-                              <Copyable text={property.contact_phone} />
+                              <ContactPhoneSummary record={property} />
                             </div>
                           )}
                         </td>

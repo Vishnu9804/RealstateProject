@@ -52,6 +52,7 @@ import VisitPlannerDialog from "./VisitPlannerDialog";
 import ConfirmDialog from "./ui/ConfirmDialog";
 import SourceTag from "./ui/SourceTag";
 import { useToast } from "./ui/Toast";
+import { ContactPhoneDetails } from "./ui/ContactPhones";
 import {
   Badge,
   Button,
@@ -344,6 +345,7 @@ function snapshotProperty(
     area_sqft: null,
     area_vaar: null,
     contact_name: null,
+    contact_phones: [],
     contact_phone: null,
   };
 }
@@ -2955,11 +2957,7 @@ export function PropertyMatchDetailDialog({
             <div className="detail__block">
               <div className="detail__k">Contact</div>
               <div className="detail__v">{source.contact_name ?? "—"}</div>
-              {source.contact_phone && (
-                <div className="detail__v" style={{ marginTop: 4 }}>
-                  <Copyable text={source.contact_phone} />
-                </div>
-              )}
+              <ContactPhoneDetails record={source} />
             </div>
 
             {property && (

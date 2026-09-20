@@ -1,6 +1,7 @@
 import type { BrokerRequirementRecord, InquiryClientRecord, MatchedProperty, PropertyRecord } from "../api/types";
 import { formatArea, formatCompactInr } from "./formatters";
 import { BUSINESS_NAME, renderTemplate } from "./handoffTemplate";
+import { formatPhoneList } from "./phone";
 
 /**
  * Fills in the two "here are the properties" message templates (see
@@ -40,6 +41,10 @@ export interface SharePropertyLike {
   area_vaar: number | null;
   furnishing: string | null;
   contact_name: string | null;
+  /** Every number on the listing, so a share message carries all of them —
+   *  see lib/phone.ts. `contact_phone` stays beside it for a record read
+   *  out of a cache filled before the list existed. */
+  contact_phones?: string[] | null;
   contact_phone: string | null;
   /** Known for a full PropertyRecord; absent on a bare MatchedProperty. */
   image_count?: number;
@@ -90,8 +95,9 @@ function describeProperty(property: SharePropertyLike, index: number): string[] 
   const price = priceLine(property);
   if (price) lines.push(`   ${price} (${property.listing_type === "Rent" ? "Rent" : "Sale"})`);
   if (property.address && property.address !== location) lines.push(`   ${property.address}`);
-  if (property.contact_name || property.contact_phone) {
-    lines.push(`   Contact: ${[property.contact_name, property.contact_phone].filter(Boolean).join(" ")}`);
+  const numbers = formatPhoneList(property);
+  if (property.contact_name || numbers) {
+    lines.push(`   Contact: ${[property.contact_name, numbers].filter(Boolean).join(" ")}`);
   }
   return lines;
 }

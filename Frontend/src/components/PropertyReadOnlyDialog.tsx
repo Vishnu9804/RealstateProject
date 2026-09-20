@@ -5,6 +5,7 @@ import { ApiError } from "../api/client";
 import { propertyApi } from "../api/propertyApi";
 import type { BuilderProjectRecord, PropertyRecord, PropertySource } from "../api/types";
 import { friendlyError } from "../lib/apiError";
+import { ContactPhoneDetails } from "./ui/ContactPhones";
 import { getCachedBuilderProjectList } from "../lib/builderProjectListCache";
 import { formatArea, formatPrice } from "../lib/formatters";
 import { getCachedPropertyDetail, setCachedPropertyDetail } from "../lib/propertyDetailCache";
@@ -427,11 +428,7 @@ function PropertyReadOnlyBody({
           <div className="detail__block">
             <div className="detail__k">Contact</div>
             <div className="detail__v">{property.contact_name ?? "—"}</div>
-            {property.contact_phone && (
-              <div className="detail__v" style={{ marginTop: 4 }}>
-                <Copyable text={property.contact_phone} />
-              </div>
-            )}
+            <ContactPhoneDetails record={property} />
           </div>
 
           <div className="detail__block">
@@ -599,11 +596,7 @@ function BuilderProjectReadOnlyBody({
           <div className="detail__block">
             <div className="detail__k">Contact</div>
             <div className="detail__v">{project.contact_name ?? "—"}</div>
-            {project.contact_phone && (
-              <div className="detail__v" style={{ marginTop: 4 }}>
-                <Copyable text={project.contact_phone} />
-              </div>
-            )}
+            <ContactPhoneDetails record={project} />
           </div>
 
           <div className="detail__block">

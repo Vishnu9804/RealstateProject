@@ -39,6 +39,8 @@ import ConfirmDialog from "../components/ui/ConfirmDialog";
 import RowRail from "../components/ui/RowRail";
 import PropertyFormDialog from "../components/PropertyFormDialog";
 import MoveMenu from "../components/ui/MoveMenu";
+import { ContactPhoneDetails, ContactPhoneSummary } from "../components/ui/ContactPhones";
+import { formatPhoneList, phoneList, phoneSearchText } from "../lib/phone";
 import {
   Badge,
   Button,
@@ -452,7 +454,9 @@ export default function DashboardPage() {
         property.area_name,
         property.address,
         property.contact_name,
-        property.contact_phone,
+        // Every number, as stored, as displayed and as bare digits — so
+        // searching "9824750171" finds a property shown as "+91 9824750171".
+        phoneSearchText(property),
         property.description,
         sourceLabel(property),
         property.sender_name,
@@ -1208,7 +1212,7 @@ function PropertySummary({ property }: { property: PropertyRecord }) {
       </p>
       <p className="faint small">
         {formatPrice(property.price_text, property.price_amount_inr)}
-        {property.contact_phone ? ` · ${property.contact_phone}` : ""}
+        {formatPhoneList(property) ? ` · ${formatPhoneList(property)}` : ""}
       </p>
     </>
   );
@@ -1483,9 +1487,9 @@ function PropertyTable({
                     </td>
                     <td className="cell-truncate">
                       <Highlight text={property.contact_name ?? "—"} query={query} />
-                      {property.contact_phone && (
+                      {phoneList(property).length > 0 && (
                         <div className="cell-muted">
-                          <Copyable text={property.contact_phone} />
+                          <ContactPhoneSummary record={property} />
                         </div>
                       )}
                     </td>
@@ -1604,12 +1608,12 @@ function PropertyCards({
               )}
             </div>
 
-            {property.contact_phone && (
+            {phoneList(property).length > 0 && (
               <div className="fact" style={{ alignSelf: "flex-start" }}>
                 <IconPhone size={12} />
-                <Copyable text={property.contact_phone}>
-                  {property.contact_name ? `${property.contact_name} · ${property.contact_phone}` : property.contact_phone}
-                </Copyable>
+                <ContactPhoneSummary record={property}>
+                  {(primary) => (property.contact_name ? `${property.contact_name} · ${primary}` : primary)}
+                </ContactPhoneSummary>
               </div>
             )}
 
@@ -2000,11 +2004,7 @@ export function PropertyDetailDialog({
             <div className="detail__block">
               <div className="detail__k">Contact</div>
               <div className="detail__v">{property.contact_name ?? "—"}</div>
-              {property.contact_phone && (
-                <div className="detail__v" style={{ marginTop: 4 }}>
-                  <Copyable text={property.contact_phone} />
-                </div>
-              )}
+              <ContactPhoneDetails record={property} />
             </div>
 
             <div className="detail__block">

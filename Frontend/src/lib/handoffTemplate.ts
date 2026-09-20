@@ -1,5 +1,6 @@
 import type { AgentSummary, InquiryClientRecord } from "../api/types";
 import { formatArea, formatCompactInr, formatVisitTime } from "./formatters";
+import { formatPhoneList } from "./phone";
 
 export const BUSINESS_NAME = "Estate Signal";
 
@@ -17,6 +18,10 @@ export interface HandoffPropertyLike {
   area_sqft: number | null;
   area_vaar: number | null;
   contact_name: string | null;
+  /** Every number on the listing, so a share message carries all of them —
+   *  see lib/phone.ts. `contact_phone` stays beside it for a record read
+   *  out of a cache filled before the list existed. */
+  contact_phones?: string[] | null;
   contact_phone: string | null;
   /* No `location_url`, deliberately — this message is sent to a field agent
      over WhatsApp. See PropertyRecord.location_url. */
@@ -83,8 +88,9 @@ function describeProperty(property: HandoffPropertyLike, index: number, meta: Vi
     .join(" · ");
   const lines = [`${index + 1}) ${propertyLabel(property)}${location ? `, ${location}` : ""}`];
   if (details) lines.push(`   ${details}`);
-  if (property.contact_name || property.contact_phone) {
-    lines.push(`   Listed by: ${[property.contact_name, property.contact_phone].filter(Boolean).join(" ")}`);
+  const numbers = formatPhoneList(property);
+  if (property.contact_name || numbers) {
+    lines.push(`   Listed by: ${[property.contact_name, numbers].filter(Boolean).join(" ")}`);
   }
   // Carried inside {matches} rather than as tokens of their own, so a
   // template customized on the Settings page before these existed still

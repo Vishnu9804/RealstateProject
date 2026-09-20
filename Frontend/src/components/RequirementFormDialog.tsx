@@ -3,7 +3,9 @@ import { createPortal } from "react-dom";
 import { requirementApi, type RequirementContentFields } from "../api/requirementApi";
 import type { BrokerRequirementRecord } from "../api/types";
 import { friendlyError } from "../lib/apiError";
-import { MAX_INR, amountError, contactPhoneError } from "../lib/fieldChecks";
+import { MAX_INR, amountError } from "../lib/fieldChecks";
+import { phoneList, toStoredNumber, toTypedNumber } from "../lib/phone";
+import ContactPhonesField, { phoneBoxesError, toPhoneBoxes } from "./ContactPhonesField";
 import { REQUIREMENT_TYPE_OPTIONS } from "../lib/requirementFilters";
 import { FURNISHING_OPTIONS } from "./PropertyFormDialog";
 import { useToast } from "./ui/Toast";
@@ -47,7 +49,9 @@ interface FormState {
   budget_max_inr: string;
   listing_type: "Sale" | "Rent";
   contact_name: string;
-  contact_phone: string;
+  // One box per number, holding what is TYPED (the bare ten digits) —
+  // see ContactPhonesField.
+  contact_phone_boxes: string[];
   description: string;
 }
 
@@ -69,7 +73,7 @@ function toFormState(requirement?: BrokerRequirementRecord): FormState {
     budget_max_inr: requirement?.budget_max_inr?.toString() ?? "",
     listing_type: requirement?.listing_type ?? "Sale",
     contact_name: requirement?.contact_name ?? "",
-    contact_phone: requirement?.contact_phone ?? "",
+    contact_phone_boxes: toPhoneBoxes(phoneList(requirement).map(toTypedNumber)),
     description: requirement?.description ?? "",
   };
 }
@@ -98,7 +102,10 @@ function toPayload(form: FormState): RequirementContentFields {
     budget_max_inr: num(form.budget_max_inr),
     listing_type: form.listing_type,
     contact_name: text(form.contact_name),
-    contact_phone: text(form.contact_phone),
+    contact_phones: form.contact_phone_boxes
+      .map((box) => box.trim())
+      .filter(Boolean)
+      .map((box) => toStoredNumber(box) ?? box),
     description: text(form.description),
   };
 }
@@ -134,7 +141,7 @@ function validationError(form: FormState): string | null {
   const max = form.budget_max_inr.trim() ? Number(form.budget_max_inr) : null;
   if (min !== null && max !== null && min > max) return "The minimum budget is above the maximum.";
 
-  const phoneError = contactPhoneError(form.contact_phone);
+  const phoneError = phoneBoxesError(form.contact_phone_boxes);
   if (phoneError) return phoneError;
 
   const statesSomething =
@@ -402,12 +409,10 @@ export default function RequirementFormDialog({
                   placeholder="e.g. Ramesh Broker"
                 />
               </Field>
-              <Field label="Contact phone">
-                <input
-                  className="input"
-                  value={form.contact_phone}
-                  onChange={(e) => set("contact_phone", e.target.value)}
-                  placeholder="Digits, with country code"
+              <Field label="Contact numbers" hint="Just the 10 digits — the +91 is added for you.">
+                <ContactPhonesField
+                  boxes={form.contact_phone_boxes}
+                  onChange={(boxes) => set("contact_phone_boxes", boxes)}
                 />
               </Field>
             </div>

@@ -28,8 +28,10 @@ import PropertyReadOnlyDialog from "../components/PropertyReadOnlyDialog";
 import { useToast } from "../components/ui/Toast";
 import FilterPopover from "../components/ui/FilterPopover";
 import RowRail from "../components/ui/RowRail";
-import { Badge, Button, Copyable, EmptyState, Highlight, Note, Panel, SearchInput, Segmented, SkeletonRows, Stat } from "../components/ui/Primitives";
+import { Badge, Button, EmptyState, Highlight, Note, Panel, SearchInput, Segmented, SkeletonRows, Stat } from "../components/ui/Primitives";
 import { IconAlert, IconArrowRight, IconBuilding, IconCheck, IconChevron, IconInbox, IconSearch } from "../components/ui/Icons";
+import { ContactPhoneSummary } from "../components/ui/ContactPhones";
+import { phoneList, phoneSearchText } from "../lib/phone";
 
 const REFRESH_INTERVAL_MS = 8000;
 const FETCH_LIMIT = PROPERTY_FETCH_LIMIT;
@@ -210,7 +212,11 @@ export default function SelectPropertyPage() {
     const needle = query.trim().toLowerCase();
     if (!needle) return reviewFiltered;
     return reviewFiltered.filter((p) =>
-      [p.society_name, p.area_name, p.address, p.contact_name, p.contact_phone].filter(Boolean).join(" ").toLowerCase().includes(needle),
+      [p.society_name, p.area_name, p.address, p.contact_name, phoneSearchText(p)]
+        .filter(Boolean)
+        .join(" ")
+        .toLowerCase()
+        .includes(needle),
     );
   }, [reviewFiltered, query]);
   const visibleProperties = useMemo(() => {
@@ -537,9 +543,9 @@ export default function SelectPropertyPage() {
                           </td>
                           <td className="cell-truncate">
                             <Highlight text={property.contact_name ?? "—"} query={query} />
-                            {property.contact_phone && (
+                            {phoneList(property).length > 0 && (
                               <div className="cell-muted" onClick={(event) => event.stopPropagation()}>
-                                <Copyable text={property.contact_phone} />
+                                <ContactPhoneSummary record={property} />
                               </div>
                             )}
                           </td>

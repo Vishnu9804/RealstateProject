@@ -21,6 +21,8 @@ import ConfirmDialog from "../components/ui/ConfirmDialog";
 import FilterPopover, { type SortControl } from "../components/ui/FilterPopover";
 import RowRail from "../components/ui/RowRail";
 import PropertyFormDialog, { type ContentFormApi } from "../components/PropertyFormDialog";
+import { ContactPhoneDetails, ContactPhoneSummary } from "../components/ui/ContactPhones";
+import { phoneList, phoneSearchText } from "../lib/phone";
 import {
   FilterTrigger,
   Pager,
@@ -33,7 +35,6 @@ import {
 import {
   Badge,
   Button,
-  Copyable,
   EmptyState,
   Highlight,
   Note,
@@ -290,7 +291,7 @@ export default function BuilderProjectsPage() {
         project.area_name,
         project.address,
         project.contact_name,
-        project.contact_phone,
+        phoneSearchText(project),
         project.description,
         project.bhk,
         project.property_type,
@@ -869,9 +870,9 @@ function BuilderProjectTable({
                   </td>
                   <td className="cell-truncate">
                     <Highlight text={project.contact_name ?? "—"} query={query} />
-                    {project.contact_phone && (
+                    {phoneList(project).length > 0 && (
                       <div className="cell-muted">
-                        <Copyable text={project.contact_phone} />
+                        <ContactPhoneSummary record={project} />
                       </div>
                     )}
                   </td>
@@ -960,12 +961,12 @@ function BuilderProjectCards({ projects, query, freshIds, onOpenDetail, onEdit, 
             )}
           </div>
 
-          {project.contact_phone && (
+          {phoneList(project).length > 0 && (
             <div className="fact" style={{ alignSelf: "flex-start" }}>
               <IconPhone size={12} />
-              <Copyable text={project.contact_phone}>
-                {project.contact_name ? `${project.contact_name} · ${project.contact_phone}` : project.contact_phone}
-              </Copyable>
+              <ContactPhoneSummary record={project}>
+                {(primary) => (project.contact_name ? `${project.contact_name} · ${primary}` : primary)}
+              </ContactPhoneSummary>
             </div>
           )}
 
@@ -1146,11 +1147,7 @@ function BuilderProjectDetailDialog({
               <div className="detail__block">
                 <div className="detail__k">Contact</div>
                 <div className="detail__v">{project.contact_name ?? "—"}</div>
-                {project.contact_phone && (
-                  <div className="detail__v" style={{ marginTop: 4 }}>
-                    <Copyable text={project.contact_phone} />
-                  </div>
-                )}
+                <ContactPhoneDetails record={project} />
               </div>
 
               <div className="detail__block">

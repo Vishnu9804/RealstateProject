@@ -10,13 +10,6 @@
  * would have accepted.
  */
 
-/** At least this many digits before a free-text contact box counts as
- *  holding a phone number at all. A digit count, not a phone parse, because
- *  these boxes legitimately hold "98765 43210 / 98765 43211" or a number
- *  with an extension — mirrors _MIN_CONTACT_DIGITS on the backend. */
-const MIN_CONTACT_DIGITS = 7;
-const MAX_CONTACT_DIGITS = 40;
-
 /** One real, single WhatsApp number — an agent's. Deliberately narrower
  *  than a free-text contact box: this is a number the backend normalizes to
  *  E.164 and actually sends to. Kept loose enough to accept every spelling
@@ -31,17 +24,10 @@ function digitCount(value: string): number {
   return (value.match(/\d/g) ?? []).length;
 }
 
-/** null when it's fine (including when it's blank — these boxes are all
- *  optional), otherwise the sentence to show. */
-export function contactPhoneError(value: string): string | null {
-  const trimmed = value.trim();
-  if (!trimmed) return null;
-  const digits = digitCount(trimmed);
-  if (digits < MIN_CONTACT_DIGITS || digits > MAX_CONTACT_DIGITS) {
-    return "That doesn't look like a valid phone number.";
-  }
-  return null;
-}
+/* A listing's contact numbers are NOT checked here. They are a list now,
+   not a box of free text, and both the per-number rule and the "+91" + 10
+   digits shape they are stored in live in lib/phone.ts beside the field
+   that collects them (components/ContactPhonesField.tsx). */
 
 /** The agent's own WhatsApp number — required, and a single number. */
 export function whatsappNumberError(value: string): string | null {

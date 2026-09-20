@@ -23,7 +23,10 @@ export interface RequirementContentFields {
   budget_max_inr?: number | null;
   listing_type?: "Sale" | "Rent";
   contact_name?: string | null;
-  contact_phone?: string | null;
+  /** Every contact number on this requirement, each one "+91" plus 10
+   *  digits. The retired single `contact_phone` is still accepted by
+   *  the API but is no longer sent by this client. */
+  contact_phones?: string[];
   description?: string | null;
 }
 

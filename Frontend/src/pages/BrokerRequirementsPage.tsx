@@ -24,6 +24,7 @@ import {
 import { useToast } from "../components/ui/Toast";
 import ConfirmDialog from "../components/ui/ConfirmDialog";
 import FilterPopover, { type SortControl } from "../components/ui/FilterPopover";
+import StickyTableHead from "../components/ui/StickyTableHead";
 import RequirementFormDialog from "../components/RequirementFormDialog";
 import RequirementMatchesDialog from "../components/RequirementMatchesDialog";
 import { FilterTrigger, Pager, compareNullable } from "./DashboardPage";
@@ -902,43 +903,48 @@ function RequirementTable({
   openFilterKey: string | null;
   onOpenFilter: (key: string, anchor: HTMLElement) => void;
 }) {
+  const scrollRef = useRef<HTMLDivElement>(null);
+  // One definition, rendered both in the table and in the copy pinned under
+  // the top bar — see components/ui/StickyTableHead.tsx.
+  const headerRow = (
+    <tr>
+      {COLUMNS.map((column) => {
+        const sorted = column.sort && column.sort === sortKey;
+        return (
+          <th
+            key={column.key}
+            aria-sort={sorted ? (sortDir === "asc" ? "ascending" : "descending") : undefined}
+            style={column.numeric ? { textAlign: "right" } : undefined}
+          >
+            {column.filterKey ? (
+              // Filterable columns open their dialog on click; the
+              // sort lives inside it, same as the Properties page.
+              <FilterTrigger
+                label={column.label}
+                filter={filters[column.filterKey]}
+                expanded={openFilterKey === column.filterKey}
+                onOpen={(anchor) => onOpenFilter(column.filterKey!, anchor)}
+              />
+            ) : column.sort ? (
+              <button type="button" onClick={() => toggleSort(column.sort!)} title={`Sort by ${column.label}`}>
+                {column.label}
+                <IconChevron size={12} className="sort-caret" />
+              </button>
+            ) : (
+              column.label
+            )}
+          </th>
+        );
+      })}
+      <th style={{ textAlign: "right" }}>Actions</th>
+    </tr>
+  );
   return (
     <div className="table-frame anim-rise">
-      <div className="table-scroll">
+      <StickyTableHead scrollRef={scrollRef}>{headerRow}</StickyTableHead>
+      <div className="table-scroll" ref={scrollRef}>
         <table className="table">
-          <thead>
-            <tr>
-              {COLUMNS.map((column) => {
-                const sorted = column.sort && column.sort === sortKey;
-                return (
-                  <th
-                    key={column.key}
-                    aria-sort={sorted ? (sortDir === "asc" ? "ascending" : "descending") : undefined}
-                    style={column.numeric ? { textAlign: "right" } : undefined}
-                  >
-                    {column.filterKey ? (
-                      // Filterable columns open their dialog on click; the
-                      // sort lives inside it, same as the Properties page.
-                      <FilterTrigger
-                        label={column.label}
-                        filter={filters[column.filterKey]}
-                        expanded={openFilterKey === column.filterKey}
-                        onOpen={(anchor) => onOpenFilter(column.filterKey!, anchor)}
-                      />
-                    ) : column.sort ? (
-                      <button type="button" onClick={() => toggleSort(column.sort!)} title={`Sort by ${column.label}`}>
-                        {column.label}
-                        <IconChevron size={12} className="sort-caret" />
-                      </button>
-                    ) : (
-                      column.label
-                    )}
-                  </th>
-                );
-              })}
-              <th style={{ textAlign: "right" }}>Actions</th>
-            </tr>
-          </thead>
+          <thead>{headerRow}</thead>
           <tbody>
             {requirements.map((requirement) => (
               <tr

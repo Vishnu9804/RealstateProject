@@ -2,6 +2,7 @@ import { useEffect, useMemo, useRef, useState } from "react";
 import { createPortal } from "react-dom";
 import type { AgentSummary } from "../api/types";
 import { formatVisitTime } from "../lib/formatters";
+import { formatPhone } from "../lib/phone";
 import { Avatar, Button } from "./ui/Primitives";
 import { IconCheck, IconChevron, IconTag, IconX } from "./ui/Icons";
 
@@ -74,6 +75,20 @@ function toTimeValue(iso: string | null): TimeValue {
     minute: rounded.getMinutes() as Minute,
     meridiem: hours24 >= 12 ? "PM" : "AM",
   };
+}
+
+/** The single line under an agent's name in this dialog: their mobile
+ *  number first, then how loaded they already are. Kept to one line (see
+ *  .agent-mini__meta) so a long number never wraps and pushes the rows
+ *  below it down while someone is aiming at one. */
+function agentMeta(agent: AgentSummary): string {
+  return [
+    agent.phone ? formatPhone(agent.phone) : null,
+    `Active ${agent.active_clients.length}`,
+    `Visits/mo ${agent.visits_this_month}`,
+  ]
+    .filter(Boolean)
+    .join(" · ");
 }
 
 function toIso(value: TimeValue): string | null {
@@ -230,8 +245,12 @@ export default function VisitPlannerDialog({
                     <Avatar name={agent.name} size={30} />
                     <span className="agent-mini__main">
                       <span className="agent-mini__name">{agent.name}</span>
-                      <span className="agent-mini__meta">
-                        Active {agent.active_clients.length} · Visits/mo {agent.visits_this_month}
+                      {/* One short line, phone first: the number is what
+                          whoever picks actually needs in order to reach the
+                          agent, and holding it to a single ellipsised line
+                          keeps every row the same height. */}
+                      <span className="agent-mini__meta" title={agentMeta(agent)}>
+                        {agentMeta(agent)}
                       </span>
                     </span>
                     {covers && (
@@ -251,8 +270,8 @@ export default function VisitPlannerDialog({
                   <span className="agent-mini__name">
                     <IconCheck size={12} strokeWidth={2.6} /> {chosen.name} selected
                   </span>
-                  <span className="agent-mini__meta">
-                    Active {chosen.active_clients.length} · Visits/mo {chosen.visits_this_month}
+                  <span className="agent-mini__meta" title={agentMeta(chosen)}>
+                    {agentMeta(chosen)}
                   </span>
                 </span>
                 {mode !== "reschedule" && (

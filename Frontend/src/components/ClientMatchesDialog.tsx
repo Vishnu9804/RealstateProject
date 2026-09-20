@@ -1,4 +1,4 @@
-import { useCallback, useEffect, useMemo, useState } from "react";
+import { useCallback, useEffect, useMemo, useRef, useState } from "react";
 import { PROPERTY_FETCH_LIMIT } from "../lib/fetchLimits";
 import { createPortal } from "react-dom";
 import { useNavigate } from "react-router-dom";
@@ -1070,11 +1070,13 @@ export default function ClientMatchesDialog({
     setPlans({});
   }
 
-  /** Ticking a card selects it AND opens the small visit planner for it
-   *  (agent, then an optional time). Closing the planner without choosing
-   *  keeps the card ticked with no agent — it can still go out through
-   *  "Send details on WhatsApp", and "Assign & send" asks for the agent
-   *  when it gets to it. Unticking drops whatever was planned for it. */
+  /** Ticking a card ONLY selects it. It deliberately does not open the
+   *  visit planner any more: the whole point of the ticks is to go down
+   *  the list and pick every property first, and a dialog springing open
+   *  on the first tick interrupted that every single time. The agent is
+   *  asked for later — either from the card's own "Choose agent" button,
+   *  or by "Assign & send", which walks the ticked cards that still have
+   *  no agent. Unticking drops whatever was planned for that card. */
   function handleToggleSelect(recordId: string) {
     if (selectedIds.has(recordId)) {
       setSelectedIds((previous) => {
@@ -1091,17 +1093,28 @@ export default function ClientMatchesDialog({
       return;
     }
     setSelectedIds((previous) => new Set(previous).add(recordId));
-    setPlanner({ kind: "assign", recordId });
   }
+
+  /** True while "Assign & send" is walking the ticked cards that still have
+   *  no agent, so each planner it opens leads straight into the next one
+   *  instead of dropping the operator back on the grid to press the button
+   *  again. Cleared the moment a planner is closed without confirming. */
+  const assignWalk = useRef(false);
 
   /** Straight to the hand-off messages — the agents (and times) were
    *  already picked card by card. If any ticked card still lacks a usable
    *  plan (no agent, an agent since removed, or a time that has passed),
-   *  its planner opens instead, one card at a time. */
-  function handleAssignAndSend() {
+   *  its planner opens instead, one card at a time, and confirming one
+   *  opens the next until every ticked card has an agent.
+   *
+   *  `plansNow` exists because the walk calls this again from inside a
+   *  planner's onConfirm, where the `plans` state has not re-rendered yet:
+   *  the caller passes the map it just built so the card it has only this
+   *  instant planned is not offered a second time. */
+  function handleAssignAndSend(plansNow: typeof plans = plans) {
     const now = Date.now();
     for (const item of assignableItems) {
-      const plan = plans[item.recordId];
+      const plan = plansNow[item.recordId];
       const problem =
         !plan || !agentsById.has(plan.agentId)
           ? "doesn't have an agent yet"
@@ -1109,19 +1122,25 @@ export default function ClientMatchesDialog({
             ? "has a visit time that has already passed"
             : null;
       if (problem) {
-        toast.push({
-          tone: "info",
-          title: "One more pick first",
-          message: `${propertyLabel(item.handoff)} ${problem}.`,
-        });
+        // Said once, when the walk starts — repeating it for every card
+        // that simply has not been planned yet is noise, not news.
+        if (!assignWalk.current) {
+          toast.push({
+            tone: "info",
+            title: "One more pick first",
+            message: `${propertyLabel(item.handoff)} ${problem}.`,
+          });
+        }
+        assignWalk.current = true;
         setPlanner({ kind: "assign", recordId: item.recordId });
         return;
       }
     }
+    assignWalk.current = false;
 
     const byAgent = new Map<string, AgentAssignment>();
     for (const item of assignableItems) {
-      const plan = plans[item.recordId];
+      const plan = plansNow[item.recordId];
       const agent = agentsById.get(plan.agentId)!;
       let entry = byAgent.get(agent.agent_id);
       if (!entry) {
@@ -1952,7 +1971,7 @@ export default function ClientMatchesDialog({
               <Button
                 variant="primary"
                 icon={<IconUserCheck size={15} />}
-                onClick={handleAssignAndSend}
+                onClick={() => handleAssignAndSend()}
                 disabled={!client || assignableItems.length === 0}
               >
                 Assign &amp; send ({assignableItems.length})
@@ -2053,13 +2072,20 @@ export default function ClientMatchesDialog({
           initialScheduledAt={plans[plannerItem.recordId]?.scheduledAt ?? null}
           revisitNumber={null}
           onConfirm={(agentId, scheduledAt) => {
-            setPlans((previous) => ({
-              ...previous,
+            const nextPlans = {
+              ...plans,
               [plannerItem.recordId]: { agentId, scheduledAt },
-            }));
+            };
+            setPlans(nextPlans);
+            setPlanner(null);
+            // Mid-walk: straight on to the next ticked card that still has
+            // no agent, or into the hand-off when that was the last one.
+            if (assignWalk.current) handleAssignAndSend(nextPlans);
+          }}
+          onClose={() => {
+            assignWalk.current = false;
             setPlanner(null);
           }}
-          onClose={() => setPlanner(null)}
         />
       )}
 
@@ -2397,9 +2423,20 @@ function PropertyMatchCard({
       </div>
 
       {/* The visit planner's pick, right on the ticked card — "Agent X
-          selected" plus the time, or a prompt to choose one. */}
-      {selected && !assigned && (
-        <div className="match-card__plan">
+          selected" plus the time, or a prompt to choose one.
+
+          Rendered on EVERY unassigned card, not only the ticked one, and
+          merely made invisible until it is ticked. That row used to appear
+          on selection, which grew the card, grew its whole grid row, and
+          pushed every property below it down — so the next tick landed on
+          a different card than the one the cursor was aimed at. Reserving
+          its space up front means ticking changes nothing but the colour
+          of the row. The hidden state is `visibility: hidden` rather than
+          opacity, which takes the button out of the tab order and out of
+          the accessibility tree for free, so it is never a phantom
+          control. */}
+      {!assigned && (
+        <div className={`match-card__plan${selected ? "" : " match-card__plan--ghost"}`}>
           <span className="match-card__plan-text">
             <IconUserCheck size={12} />
             {plan ? (

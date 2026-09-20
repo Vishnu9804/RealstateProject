@@ -108,7 +108,7 @@ def get_all_properties(limit: int = 100) -> List[EmbeddedProperty]:
     """The property list WITHOUT photos, served from the in-memory snapshot.
 
     Photos used to travel with every row here, on every call, to callers
-    that never looked at them — match scoring, the Instagram poller, the
+    that never looked at them — match scoring, the Instagram matcher, the
     dashboard's match display. That is the single largest source of
     database egress this application had. The one caller that genuinely
     needs a property's photos asks for them by id (get_property_images).
@@ -289,8 +289,14 @@ def get_instagram_media_pk(record_id: str) -> Optional[str]:
 def set_instagram_media_pk(record_id: str, media_pk: str) -> None:
     if is_database_configured():
         property_repository.set_instagram_media_pk(record_id, media_pk)
-        # Kept in memory too, so the poller never asks for this id again —
-        # not even once per restart per property.
+        # Kept in memory too, so nothing asks for this id again — not even
+        # once per restart per property.
+        #
+        # No longer reached: the official Instagram API resolves a media id
+        # to a permalink itself, and the old private-API ids this column
+        # holds are from a different id space. Left in place because it is
+        # harmless and the column is still read (never acted on) alongside
+        # the reel list — see Database/models.py's instagram_media_pk.
         property_snapshot.note_media_pk(record_id, media_pk)
         return
     _instagram_media_pks[record_id] = media_pk
@@ -315,12 +321,13 @@ def get_recent_instagram_reel_properties(limit: int) -> List[Tuple[EmbeddedPrope
     """The `limit` most recently reel-linked properties, newest link first,
     each paired with its resolved instagram_media_pk (None if never
     resolved) — see Database/property_repository.py's version for why the
-    Instagram poller reads its working set this way instead of through
+    Instagram matcher reads its working set this way instead of through
     get_all_properties.
 
-    Computed from the snapshot rather than queried: the poller asks this
-    every few seconds forever, and the snapshot already carries both the
-    reel-link time and the resolved media id for every property it holds.
+    Computed from the snapshot rather than queried, so matching an incoming
+    comment or shared reel to a property costs no database traffic at all:
+    the snapshot already carries the reel-link time for every property it
+    holds.
     """
     if is_database_configured():
         linked_entries = [entry for entry in property_snapshot.get_all() if entry.prop.instagram_reel_url]

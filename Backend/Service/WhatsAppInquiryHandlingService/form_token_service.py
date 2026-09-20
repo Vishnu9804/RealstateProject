@@ -1,7 +1,7 @@
 """Mints and resolves the single-use-ish, identity-scoped tokens used in
 the registration/update form link — sent over WhatsApp (see
 inquiry_pipeline_service.py) or DMed on Instagram (see
-Service/InstagramInquiryHandlingService/instagram_polling_service.py). A
+Service/InstagramInquiryHandlingService/instagram_event_service.py). A
 token exists purely to bind "whoever opens this link" back to the one
 identity it was issued for — the form endpoint must trust ONLY the
 identity a token was minted for, never anything typed into the page

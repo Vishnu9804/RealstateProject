@@ -122,6 +122,65 @@ class Settings(BaseSettings):
     # with no number in it whenever this is unset.
     business_contact_phone: str = ""
 
+    # --- Instagram (Meta's OFFICIAL Instagram Platform API) --------------
+    #
+    # Everything below belongs to ONE Meta app, configured once in the Meta
+    # App Dashboard under the "Instagram" product -> "API setup with
+    # Instagram business login". This replaced the previous unofficial
+    # username/password login: Instagram flags automated access on a normal
+    # account ("we detected automated behaviour"), whereas the official API
+    # is the sanctioned path and pushes events to us instead of us asking
+    # "anything new?" on a timer.
+    #
+    # instagram_app_id / instagram_app_secret are the *Instagram* app ID and
+    # secret shown on that same API-setup screen (NOT the Facebook app ID at
+    # the top of the dashboard). The secret does two separate jobs: it signs
+    # nothing of ours, but Meta signs every webhook delivery with it
+    # (X-Hub-Signature-256), and it is required to swap an OAuth code for a
+    # token.
+    instagram_app_id: str = ""
+    instagram_app_secret: str = ""
+    # Optional second secret checked only if the signature does not match
+    # the one above. Meta has two secrets on a combined app (the Facebook
+    # "App secret" under App settings -> Basic, and the Instagram one), and
+    # which of them signs a delivery has changed between app types. Setting
+    # this costs nothing and removes an entire class of "every webhook is
+    # rejected as unsigned" confusion.
+    facebook_app_secret: str = ""
+    # The string typed into the dashboard's "Verify token" box. Meta echoes
+    # it back once, on the GET handshake that activates the callback URL —
+    # it is not a credential Meta issues, it is a shared secret WE invent so
+    # that nobody else can point Meta's webhook config at this server. Any
+    # long random string works, as long as the same value is in both places.
+    instagram_webhook_verify_token: str = ""
+    # Where Instagram sends the browser back after the business-login
+    # consent screen. Must match one of the "OAuth redirect URIs" configured
+    # in the dashboard EXACTLY (scheme, host, path, no trailing slash
+    # difference). Leave blank to use the token-paste connection path
+    # instead, which needs no redirect URI at all.
+    instagram_redirect_uri: str = ""
+    # The PUBLIC address Meta reaches this server on, e.g.
+    # "https://your-tunnel.ngrok-free.dev" (no trailing slash). Used only to
+    # print the exact callback URL and OAuth redirect URI on the Connection
+    # page. Leave blank to derive them from whatever address the browser
+    # reached this API on — which is right once the app is hosted, but NOT
+    # while developing, where the browser reaches the backend on localhost
+    # while Meta reaches it through a tunnel. Set it to the tunnel URL in
+    # that case and the page prints what actually needs pasting.
+    instagram_public_base_url: str = ""
+    # Pinned rather than "latest": a Graph version is a contract, and a
+    # silent bump can change payload shapes underneath a running deployment.
+    instagram_graph_version: str = "v23.0"
+    # Ceiling on one Instagram HTTP call. Every call this app makes is
+    # small; a hung socket must not hold a webhook worker thread forever.
+    instagram_api_timeout_seconds: int = Field(default=20, gt=0)
+
+    # Origin the internal tool (Frontend/) is served from, used ONLY to send
+    # the browser back to the Connection page after the Instagram OAuth
+    # round-trip. Left blank and auto-filled from the detected LAN IP (see
+    # _fill_lan_defaults) exactly like frontend_lan_origin.
+    frontend_base_url: str = ""
+
     # --- AuthManagement (login accounts, Service/AuthManagementService/) ---
     #
     # Signs/verifies every login JWT (Service/AuthManagementService/
@@ -200,6 +259,13 @@ class Settings(BaseSettings):
                 self.inquiry_form_base_url = f"http://{lan_ip}:5174/enquire"
             if not self.frontend_lan_origin and lan_ip != "127.0.0.1":
                 self.frontend_lan_origin = f"http://{lan_ip}:5173"
+        # The Instagram OAuth callback has to redirect a real browser back
+        # to the internal tool, so it needs an absolute origin. Prefers an
+        # explicit setting, then the LAN origin already resolved above, and
+        # finally plain localhost — which is correct for the common case of
+        # the operator running the frontend on this same machine.
+        if not self.frontend_base_url:
+            self.frontend_base_url = self.frontend_lan_origin or "http://localhost:5173"
         return self
 
 

@@ -1,8 +1,8 @@
 """Every fixed message this feature sends — no LLM call anywhere in this
 flow, by design (the trigger is a deterministic reel-link match, not
 something that needs language understanding). Kept in one file, separate
-from instagram_polling_service.py's control flow, so the actual wording is
-easy to find and edit without touching the polling/matching logic.
+from instagram_event_service.py's control flow, so the actual wording is
+easy to find and edit without touching the event-handling/matching logic.
 
 build_property_info_message deliberately excludes society_name, address,
 contact_name and contact_phone — the whole point of routing an interested

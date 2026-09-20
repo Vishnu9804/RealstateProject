@@ -30,12 +30,15 @@ _processed_events: Set[str] = set()
 # --- the processed-event guard's in-memory index (database mode) ----------
 #
 # A bounded, insertion-ordered set of event keys already known to be
-# recorded. It answers is_event_processed without a query, which matters
-# because that question is asked about every comment and every DM message
-# Instagram returns, on every poll cycle, for the life of the process —
-# Instagram keeps returning the same recent items long after they have been
-# answered, so almost every one of those questions used to be a database
-# round trip re-confirming a "yes" from hours or days earlier.
+# recorded. It answers is_event_processed without a query.
+#
+# That mattered enormously under the old polling design, where Instagram
+# handed back the same recent comments and messages every few seconds
+# forever. It still matters under webhooks, for a narrower but real reason:
+# Meta RE-DELIVERS any notification it did not receive a prompt 200 for, so
+# the same comment id can legitimately arrive several times, and each repeat
+# would otherwise be a database round trip re-confirming a "yes" from
+# minutes earlier.
 #
 # Two properties make this safe to trust, and both are load-bearing:
 #
@@ -159,11 +162,15 @@ def mark_event_ignored(event_key: str) -> None:
 
     Used for exactly one thing: an event dropped because its author has used
     up their daily allowance (see Middleware/daily_quota.py). Those need the
-    same never-reconsidered treatment a handled event gets — Instagram keeps
-    returning the same recent comments and messages on every 8-second cycle,
-    so an unmarked drop would be re-examined, and re-queried, forever — but
-    they must not cost a database write, because "this costs us nothing"
-    is the entire point of dropping them.
+    same never-reconsidered treatment a handled event gets — Meta re-delivers
+    a notification it did not get a prompt 200 for, and an unmarked drop
+    would be re-examined, and re-queried, every time — but they must not cost
+    a database write, because "this costs us nothing" is the entire point of
+    dropping them.
+
+    It is also what makes a comment on a post that is not linked to any
+    property free: every such comment is marked here, in memory, and never
+    reaches the database at all.
 
     Memory-only is also what makes the 6 AM reset behave the way it should:
     a flood that was ignored yesterday stays ignored today, so the new
@@ -188,7 +195,7 @@ def mark_event_processed(event_key: str) -> None:
         return
     instagram_contact_repository.mark_event_processed(event_key)
     # Recorded in memory only after the write succeeded — a failed write that
-    # was cached anyway would make the poller skip an event it never actually
+    # was cached anyway would make the handler skip an event it never actually
     # recorded, which is exactly the duplicate-reply hole this guard exists
     # to close.
     _remember_processed(event_key)

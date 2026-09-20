@@ -1,6 +1,6 @@
 """Handles a registration/update form submission — the backend side of the
 link sent by inquiry_pipeline_service.py's WhatsApp messages, or by
-Service/InstagramInquiryHandlingService/instagram_polling_service.py's DM
+Service/InstagramInquiryHandlingService/instagram_event_service.py's DM
 sequence. Turns a submitted set of fields into a durable record and sends
 the confirmation message on whichever channel is now the right one for
 this person.
@@ -521,7 +521,7 @@ def _submit_instagram(ig_user_id: str, submission: FormSubmissionRequest) -> For
         # Converts to a real WhatsApp client — unified into the same
         # Inquiries dashboard as any WhatsApp-originated one, and every
         # future message to this person goes to WhatsApp, never Instagram
-        # DM again (instagram_polling_service checks linked_phone).
+        # DM again (instagram_event_service checks linked_phone).
         client_record = ClientRecord(
             phone=normalized_phone,
             status="registered",

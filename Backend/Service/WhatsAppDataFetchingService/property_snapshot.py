@@ -13,7 +13,7 @@ application actually needs about a property EXCEPT its photos:
   - the photo COUNT (the list views show a count, never the pixels);
   - created_at / updated_at, which is what lets the daily rescore ask
     "what changed since I last looked?" instead of re-scoring everything;
-  - the Instagram media id and reel-link time, so the comment/DM poller
+  - the Instagram media id and reel-link time, so the comment/DM matcher
     reads its watched reels from here rather than keeping a second,
     parallel cache of the same rows.
 
@@ -257,7 +257,7 @@ def note_removed(record_id: str) -> None:
 def note_media_pk(record_id: str, media_pk: str) -> None:
     """Records the Instagram media id resolved for a property. A pure
     in-memory update: the database write is the caller's own, and this
-    keeps the poller from ever asking for the id again."""
+    keeps anything from asking for the id again."""
     with _lock:
         entry = _by_id.get(record_id)
         if entry is not None:

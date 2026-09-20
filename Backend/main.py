@@ -95,6 +95,7 @@ from Controller.WhatsAppInquiryHandlingController.inquiry_form_controller import
 from Controller.WhatsAppInquiryHandlingController.phone_verification_controller import router as phone_verification_router
 from Controller.WhatsAppInquiryHandlingController.whatsapp_inquiry_controller import router as whatsapp_inquiry_router
 from Controller.InstagramInquiryHandlingController.instagram_controller import router as instagram_router
+from Controller.InstagramInquiryHandlingController.instagram_webhook_controller import router as instagram_webhook_router
 from Controller.LLMUsageController.llm_usage_controller import router as llm_usage_router
 from Controller.NeonUsageController.neon_usage_controller import router as neon_usage_router
 from Controller.BackendUsageController.backend_usage_controller import router as backend_usage_router
@@ -114,7 +115,7 @@ from Service.PropertySharingService import property_share_template_service
 from Service.ClientPropertyMatchingService import scheduled_recompute_service
 from Service.WhatsAppDataFetchingService import area_filter_service, area_knowledge_service, display_settings_service, pending_batch_store, whatsapp_service
 from Service.WhatsAppInquiryHandlingService import inquiry_connection_store, whatsapp_inquiry_service
-from Service.InstagramInquiryHandlingService import instagram_connection_service, instagram_polling_service
+from Service.InstagramInquiryHandlingService import instagram_connection_service
 from Service.BackendUsageService import cpu_usage_service
 from Service.LLMUsageService import llm_usage_service, message_model_service
 from Service.NeonUsageService import neon_usage_service
@@ -255,14 +256,19 @@ async def lifespan(_app: FastAPI):
     whatsapp_service.start_agent_in_background()
     whatsapp_inquiry_service.start_agent_in_background()
     # No stagger needed here, unlike the WhatsApp connections above — the
-    # Instagram connection is a plain HTTPS keepalive check, not a
-    # neonize/whatsmeow Go client, so it shares none of that library's
+    # Instagram connection is a plain HTTPS call against Meta's Graph API,
+    # not a neonize/whatsmeow Go client, so it shares none of that library's
     # concurrent-construction crash risk.
-    instagram_connection_service.start_background_keepalive()
-    # Also inert until Instagram is connected (see its own module
-    # docstring) — safe to start unconditionally alongside the keepalive
-    # loop, no stagger needed for the same reason as above.
-    instagram_polling_service.start_background_polling()
+    #
+    # This is the ONLY recurring Instagram work left. The old comment/DM
+    # poller that ran every 8 seconds is gone: Instagram now PUSHES events to
+    # POST /api/instagram/webhook (see instagram_webhook_router below and
+    # Service/InstagramInquiryHandlingService/instagram_event_service.py), so
+    # an account with nothing happening costs no CPU, no database traffic and
+    # no API calls at all. What remains wakes every six hours to keep the
+    # access token fresh and re-assert the webhook subscription, and does
+    # nothing whatsoever while nothing is connected.
+    instagram_connection_service.start_background_maintenance()
     # Client-Property Matching feature: daily 6 AM IST re-run of the full
     # matching pipeline for every existing client, so properties added since
     # a client last had their requirements changed still get matched against
@@ -446,6 +452,14 @@ app.include_router(phone_verification_router, prefix="/api")
 app.include_router(matching_router, prefix="/api", dependencies=[Depends(get_current_user)])
 app.include_router(requirement_matching_router, prefix="/api", dependencies=[Depends(get_current_user)])
 app.include_router(instagram_router, prefix="/api", dependencies=[Depends(get_current_user)])
+# NOT gated by get_current_user, and that is deliberate: these are the two
+# routes Meta's own servers call (the webhook handshake and the event
+# deliveries) plus the OAuth redirect the browser returns on from
+# instagram.com. None of them can carry a login token. Each authenticates
+# the caller in its own way instead — a shared verify token, an HMAC-SHA256
+# body signature, and a one-time OAuth state respectively. See
+# Controller/InstagramInquiryHandlingController/instagram_webhook_controller.py.
+app.include_router(instagram_webhook_router, prefix="/api")
 # The Dashboard's usage endpoints: open by default, gated by DASHBOARD_KEY
 # once one is set (see Middleware/dashboard_access.py) — the Message to Model
 # feed carries raw WhatsApp text, so set it before hosting. area_knowledge_router

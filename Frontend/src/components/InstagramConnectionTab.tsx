@@ -1,44 +1,54 @@
 import { useState } from "react";
-import { instagramApi, type InstagramStatusResponse } from "../api/instagramApi";
+import { instagramApi, type InstagramSetupResponse, type InstagramStatusResponse } from "../api/instagramApi";
 import { usePolling } from "../hooks/usePolling";
 import { friendlyError } from "../lib/apiError";
 import { relativeTime } from "../lib/formatters";
 import { useToast } from "./ui/Toast";
 import ConfirmDialog from "./ui/ConfirmDialog";
-import { Badge, Button, Note, Panel, SkeletonRows } from "./ui/Primitives";
-import { IconAlert, IconCheck, IconClock, IconInstagram, IconPower, IconUsers } from "./ui/Icons";
-
-const STATUS_POLL_INTERVAL_MS = 3000;
-
-const CHOICE_LABEL: Record<string, string> = {
-  email: "emailed",
-  sms: "texted",
-};
-
+import { Badge, Button, Copyable, Note, Panel, SkeletonRows, Stat } from "./ui/Primitives";
+import { IconAlert, IconCheck, IconClock, IconInstagram, IconLink, IconPower, IconRefresh, IconUsers } from "./ui/Icons";
 import { useAuth } from "../state/AuthProvider";
+
+/**
+ * The Instagram tab of the Connection page.
+ *
+ * This connects through Meta's OFFICIAL Instagram Platform API. The previous
+ * version asked for the account's username and password and drove the
+ * private mobile API, which is what made Instagram start warning about
+ * automated activity on the very account the business depends on. Nothing
+ * here touches a password any more, and nothing polls Instagram: Meta pushes
+ * each comment and DM to this backend as it happens.
+ *
+ * Polled slowly on purpose. The old version refreshed every 3 seconds
+ * because a login could move through 2FA and challenge stages while the
+ * operator watched. There are no stages left — connecting either succeeds or
+ * fails, in one request — so anything faster than this would be the frontend
+ * spending hosting CPU on a value that changes about twice a year.
+ */
+const STATUS_POLL_INTERVAL_MS = 20000;
 
 export default function InstagramConnectionTab() {
   const { isAdmin } = useAuth();
   const toast = useToast();
   const [status, setStatus] = useState<InstagramStatusResponse | null>(null);
+  const [setup, setSetup] = useState<InstagramSetupResponse | null>(null);
   const [error, setError] = useState<string | null>(null);
   const [confirmDisconnect, setConfirmDisconnect] = useState(false);
   const [disconnecting, setDisconnecting] = useState(false);
 
-  const [username, setUsername] = useState("");
-  const [password, setPassword] = useState("");
-  const [code, setCode] = useState("");
+  const [token, setToken] = useState("");
   const [submitting, setSubmitting] = useState(false);
 
   usePolling(async () => {
     try {
-      const data = await instagramApi.getStatus();
+      const [statusData, setupData] = await Promise.all([instagramApi.getStatus(), instagramApi.getSetup()]);
+      setSetup(setupData);
       setStatus((prev) => {
-        // A connect/verify submission already knows the freshest stage from
-        // its own response — a poll landing a moment later must not stomp
-        // that back to something stale while the next tick catches up.
+        // A connect submission already knows the freshest stage from its own
+        // response — a poll landing a moment later must not stomp that back
+        // to something stale while the next tick catches up.
         if (submitting) return prev;
-        return data;
+        return statusData;
       });
       setError(null);
     } catch (err) {
@@ -46,55 +56,56 @@ export default function InstagramConnectionTab() {
     }
   }, STATUS_POLL_INTERVAL_MS);
 
-  async function handleConnect() {
-    if (!username.trim() || !password) return;
+  async function handleConnectToken() {
+    if (!token.trim()) return;
     setSubmitting(true);
     try {
-      const data = await instagramApi.connect(username.trim(), password);
+      const data = await instagramApi.connectToken(token.trim());
       setStatus(data);
-      setPassword("");
+      if (data.stage === "connected") {
+        setToken("");
+        toast.push({
+          tone: "ok",
+          title: `Connected as @${data.username}`,
+          message: "Reel comments and shared reels will now be answered automatically.",
+        });
+      } else {
+        toast.push({ tone: "bad", title: "Instagram didn't accept that token", message: data.error_message ?? "" });
+      }
     } catch (err) {
-      toast.push({ tone: "bad", title: "Couldn't start connecting", message: friendlyError(err) });
+      toast.push({ tone: "bad", title: "Couldn't connect", message: friendlyError(err) });
     } finally {
       setSubmitting(false);
     }
   }
 
-  async function handleSubmitCode() {
-    if (!code.trim()) return;
+  async function handleOAuth() {
     setSubmitting(true);
     try {
-      const data = await instagramApi.submitCode(code.trim());
-      setStatus(data);
-      setCode("");
+      const { url } = await instagramApi.getOAuthUrl();
+      // A full navigation, not a popup: Instagram's consent screen refuses to
+      // render inside a frame, and the flow ends by redirecting the browser
+      // back to this page with ?instagram=connected (handled in
+      // ConnectionPage.tsx).
+      window.location.href = url;
     } catch (err) {
-      toast.push({ tone: "bad", title: "Couldn't submit the code", message: friendlyError(err) });
-    } finally {
+      toast.push({ tone: "bad", title: "Instagram login isn't configured yet", message: friendlyError(err) });
       setSubmitting(false);
     }
   }
 
-  async function handleRetryApproval() {
+  async function handleResubscribe() {
     setSubmitting(true);
     try {
-      const data = await instagramApi.retryApproval();
+      const data = await instagramApi.resubscribe();
       setStatus(data);
+      toast.push(
+        data.webhook_subscribed
+          ? { tone: "ok", title: "Webhooks re-checked", message: "Meta is pushing this account's comments and DMs here." }
+          : { tone: "bad", title: "Webhooks are not active", message: data.error_message ?? "See the backend terminal for the reason." },
+      );
     } catch (err) {
-      toast.push({ tone: "bad", title: "Couldn't retry", message: friendlyError(err) });
-    } finally {
-      setSubmitting(false);
-    }
-  }
-
-  async function handleStartOver() {
-    setSubmitting(true);
-    try {
-      const data = await instagramApi.startOver();
-      setStatus(data);
-      setPassword("");
-      setCode("");
-    } catch (err) {
-      toast.push({ tone: "bad", title: "Couldn't reset", message: friendlyError(err) });
+      toast.push({ tone: "bad", title: "Couldn't re-check webhooks", message: friendlyError(err) });
     } finally {
       setSubmitting(false);
     }
@@ -124,8 +135,9 @@ export default function InstagramConnectionTab() {
           <div className="section-head__eyebrow">Step 1 — Connection</div>
           <h1 className="page-title">Instagram connection</h1>
           <p className="section-head__sub">
-            Connect your client's Instagram account once — reel comments and shared reels get matched to your
-            properties and answered automatically from then on, for as long as this stays connected.
+            Connect your client's Instagram professional account once — from then on Meta sends every reel
+            comment and every shared reel straight to this server, and each one is matched to a property and
+            answered automatically.
           </p>
         </div>
       </header>
@@ -161,68 +173,49 @@ export default function InstagramConnectionTab() {
             {status.last_verified_at && (
               <Stat label="Last checked" value={relativeTime(new Date(status.last_verified_at))} icon={<IconClock size={13} />} />
             )}
+            {status.token_expires_at && (
+              <Stat
+                label="Access valid for"
+                value={daysUntil(status.token_expires_at)}
+                icon={<IconRefresh size={13} />}
+                hint="Renewed automatically well before it runs out — nobody ever has to reconnect because of this."
+              />
+            )}
+            <Stat
+              label="Live events"
+              value={status.webhook_subscribed ? "on" : "not active"}
+              tone={status.webhook_subscribed ? "ok" : "warn"}
+              icon={<IconLink size={13} />}
+              hint={`Meta pushes: ${status.webhook_fields.join(", ")}`}
+            />
           </div>
 
-          <Note tone="ok" icon={<IconCheck size={16} />}>
-            This stays connected on its own — no need to log in again unless you disconnect it here or the client
-            signs it out from Instagram's own app.
-          </Note>
+          {status.webhook_subscribed ? (
+            <Note tone="ok" icon={<IconCheck size={16} />}>
+              Comments and shared reels arrive here the moment they happen — nothing is polled, and this stays
+              connected on its own. You only need to come back here if the client removes this app from their
+              Instagram settings.
+            </Note>
+          ) : (
+            <Note tone="warn" icon={<IconAlert size={16} />}>
+              The account is connected, but Meta is not pushing its events here yet. Check that the callback URL
+              below is saved in the app's <strong>Configure webhooks</strong> panel with{" "}
+              <code>comments</code> and <code>messages</code> ticked, then press Re-check.
+            </Note>
+          )}
 
-          {isAdmin && (
-            <div className="row-flex">
+          <div className="row-flex">
+            <Button icon={<IconRefresh size={15} />} onClick={handleResubscribe} busy={submitting}>
+              Re-check live events
+            </Button>
+            {isAdmin && (
               <Button className="btn--danger" icon={<IconPower size={15} />} onClick={() => setConfirmDisconnect(true)}>
                 Disconnect
               </Button>
-            </div>
-          )}
-        </Panel>
-      ) : stage === "awaiting_code" && status ? (
-        <Panel raised className="stack stack-4" style={{ alignItems: "flex-start", maxWidth: 420 }}>
-          <div className="section-head__eyebrow">Verification needed</div>
-          <p className="section-head__sub" style={{ margin: 0 }}>
-            Instagram {status.code_kind === "2fa" ? "wants the 2FA code for" : "doesn't recognize this login and"}{" "}
-            {status.code_kind === "2fa"
-              ? "this account."
-              : `${CHOICE_LABEL[status.code_choice ?? ""] ?? "sent"} a verification code to the client — ask them for it.`}
-          </p>
-          <div className="field" style={{ width: "100%" }}>
-            <label className="field__hint" style={{ fontWeight: 560, color: "var(--ink-2)" }}>
-              Verification code
-            </label>
-            <input
-              className="input"
-              inputMode="numeric"
-              autoFocus
-              value={code}
-              onChange={(e) => setCode(e.target.value)}
-              onKeyDown={(e) => e.key === "Enter" && handleSubmitCode()}
-              placeholder="6-digit code"
-            />
+            )}
           </div>
-          <Button variant="primary" onClick={handleSubmitCode} busy={submitting} disabled={!code.trim()}>
-            Submit code
-          </Button>
-        </Panel>
-      ) : stage === "manual_verification_required" && status ? (
-        <Panel raised className="stack stack-4" style={{ alignItems: "flex-start", maxWidth: 460 }}>
-          <div className="section-head__eyebrow">Approval needed in the Instagram app</div>
-          <Note tone="warn" icon={<IconAlert size={16} />}>
-            {status.error_message ??
-              "Instagram wants this login approved from inside the real Instagram app before it will let it through."}
-          </Note>
-          <p className="section-head__sub" style={{ margin: 0 }}>
-            Open Instagram (the app, or instagram.com) and log in normally as <strong>@{status.username}</strong> —
-            on the client's own phone if possible. Approve or dismiss whatever "was this you?" prompt it shows, then
-            come back here and click Retry.
-          </p>
-          <div className="row-flex">
-            <Button variant="primary" onClick={handleRetryApproval} busy={submitting}>
-              I've approved it — Retry
-            </Button>
-            <Button variant="ghost" onClick={handleStartOver} disabled={submitting}>
-              Start over
-            </Button>
-          </div>
+
+          <SetupDetails setup={setup} />
         </Panel>
       ) : stage === "connecting" ? (
         <Panel className="stack stack-3">
@@ -231,7 +224,7 @@ export default function InstagramConnectionTab() {
           </div>
         </Panel>
       ) : (
-        <Panel raised className="stack stack-4" style={{ alignItems: "flex-start", maxWidth: 420 }}>
+        <Panel raised className="stack stack-4" style={{ alignItems: "flex-start", maxWidth: 560 }}>
           <div className="section-head__eyebrow">Not connected</div>
 
           {stage === "error" && status?.error_message && (
@@ -240,44 +233,51 @@ export default function InstagramConnectionTab() {
             </Note>
           )}
 
-          <Note tone="warn" icon={<IconAlert size={16} />}>
-            This logs in the same way the official Instagram app would, using the client's own username and
-            password — it isn't Instagram's official developer API. That's what makes "just enter ID and password"
-            possible with no separate setup, but it also means Instagram may occasionally ask for a one-time
-            verification code (handled right here) on the first login, and there's a small standing risk of the
-            account being challenged again later. Use an account the client is comfortable connecting this way.
+          <Note tone="info" icon={<IconInstagram size={16} />}>
+            This uses Meta's official Instagram API, so there is no password to hand over and no risk of the
+            account being flagged for automated activity. The account must be a <strong>professional</strong>{" "}
+            (Business or Creator) Instagram account.
           </Note>
+
+          {status?.oauth_available && (
+            <>
+              <Button variant="primary" icon={<IconInstagram size={16} />} onClick={handleOAuth} busy={submitting}>
+                Connect with Instagram
+              </Button>
+              <div className="faint small">or paste an access token generated in the Meta App Dashboard:</div>
+            </>
+          )}
 
           <div className="field" style={{ width: "100%" }}>
             <label className="field__hint" style={{ fontWeight: 560, color: "var(--ink-2)" }}>
-              Instagram username
-            </label>
-            <input className="input" value={username} onChange={(e) => setUsername(e.target.value)} placeholder="clientbusiness" autoComplete="username" />
-          </div>
-          <div className="field" style={{ width: "100%" }}>
-            <label className="field__hint" style={{ fontWeight: 560, color: "var(--ink-2)" }}>
-              Instagram password
+              Instagram access token
             </label>
             <input
               className="input"
-              type="password"
-              value={password}
-              onChange={(e) => setPassword(e.target.value)}
-              onKeyDown={(e) => e.key === "Enter" && handleConnect()}
-              placeholder="••••••••"
-              autoComplete="current-password"
+              value={token}
+              onChange={(e) => setToken(e.target.value)}
+              onKeyDown={(e) => e.key === "Enter" && handleConnectToken()}
+              placeholder="IGAA…"
+              autoComplete="off"
+              spellCheck={false}
             />
+            <div className="field__hint">
+              Meta App Dashboard → your app → Instagram → API setup with Instagram business login → step 2,
+              “Generate token” next to the connected account.
+            </div>
           </div>
 
           <Button
             variant="primary"
             icon={<IconInstagram size={16} />}
-            onClick={handleConnect}
+            onClick={handleConnectToken}
             busy={submitting}
-            disabled={!username.trim() || !password}
+            disabled={!token.trim()}
           >
-            Connect Instagram
+            Connect with this token
           </Button>
+
+          <SetupDetails setup={setup} />
         </Panel>
       )}
 
@@ -301,14 +301,54 @@ export default function InstagramConnectionTab() {
   );
 }
 
-function Stat({ label, value, icon }: { label: string; value: string; icon?: React.ReactNode }) {
+/** How much of the access token's life is left, in whole days.
+ *
+ *  Deliberately not relativeTime(): that formatter clamps a future instant to
+ *  "just now", which for a token that is good for another two months would
+ *  read as the exact opposite of the truth. */
+function daysUntil(iso: string): string {
+  const days = Math.round((new Date(iso).getTime() - Date.now()) / 86_400_000);
+  if (days <= 0) return "renewing";
+  return days === 1 ? "1 day" : `${days} days`;
+}
+
+/**
+ * The two values that have to be typed into the Meta App Dashboard, printed
+ * from the address the browser actually reached this API on.
+ *
+ * Worth its own block rather than documentation somewhere else: pasting the
+ * bare tunnel domain without the /api/instagram/webhook path is by far the
+ * most common way this setup fails, and it fails silently — Meta accepts the
+ * URL and simply never delivers anything.
+ */
+function SetupDetails({ setup }: { setup: InstagramSetupResponse | null }) {
+  if (!setup) return null;
   return (
-    <div className="stat anim-rise">
-      <div className="stat__label">
-        {icon}
-        {label}
+    <details className="stack stack-3" style={{ width: "100%" }}>
+      <summary className="faint small" style={{ cursor: "pointer" }}>
+        Meta App Dashboard settings
+      </summary>
+      <div className="stack stack-3" style={{ marginTop: 10 }}>
+        <div className="field">
+          <label className="field__hint" style={{ fontWeight: 560, color: "var(--ink-2)" }}>
+            Callback URL (Configure webhooks)
+          </label>
+          <Copyable text={setup.callback_url} />
+        </div>
+        <div className="field">
+          <label className="field__hint" style={{ fontWeight: 560, color: "var(--ink-2)" }}>
+            OAuth redirect URI (Business login settings)
+          </label>
+          <Copyable text={setup.oauth_redirect_uri} />
+        </div>
+        <div className="faint small">
+          Verify token: {setup.verify_token_configured ? "set in Backend/.env" : "NOT SET — add INSTAGRAM_WEBHOOK_VERIFY_TOKEN"}
+          {" · "}
+          App secret: {setup.app_secret_configured ? "set" : "NOT SET — webhook deliveries cannot be verified"}
+          {" · "}
+          Subscribed fields: {setup.subscribed_fields.join(", ")}
+        </div>
       </div>
-      <div className="stat__value">{value}</div>
-    </div>
+    </details>
   );
 }

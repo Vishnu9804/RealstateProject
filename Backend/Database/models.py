@@ -158,28 +158,38 @@ class PropertyRow(Base):
     # of them was.
     is_available: Mapped[bool] = mapped_column(Boolean, nullable=False, default=True, server_default="true")
     # Derived cache, not content: instagram_reel_url resolved to Instagram's
-    # own numeric media id once (Service/InstagramInquiryHandlingService/
-    # instagram_reel_matcher.py), so the comment/DM poller can match against
-    # it without re-resolving the URL on every poll. Deliberately absent
-    # from StructuredProperty/EmbeddedProperty/PropertyRecord — it's never
-    # LLM/user content and has no business being in the public API or the
-    # Add/Edit dialog; read/written directly via property_repository's own
-    # get/set_instagram_media_pk.
+    # own numeric media id.
+    #
+    # NO LONGER WRITTEN. It was filled by the old private-API integration,
+    # whose media ids come from a different id space than the ones Meta's
+    # official Graph API uses — so the values already in this column must not
+    # be compared against anything the official API reports. The official
+    # matcher (Service/InstagramInquiryHandlingService/instagram_reel_matcher.py)
+    # therefore ignores this column entirely and resolves a media id to a
+    # permalink through the API once per reel, caching it in memory. The
+    # column is kept rather than dropped because dropping it would rewrite
+    # every row for no benefit, and because it is harmless: nothing reads it
+    # to make a decision.
+    #
+    # Deliberately absent from StructuredProperty/EmbeddedProperty/
+    # PropertyRecord — it's never LLM/user content and has no business being
+    # in the public API or the Add/Edit dialog.
     instagram_media_pk: Mapped[Optional[str]] = mapped_column(String, nullable=True)
     # When instagram_reel_url was last SET or CHANGED to a new non-empty
     # value — deliberately not "when this row last changed" (updated_at,
     # which any edit bumps) and not "when it gained a photo or a reel"
-    # (qualified_at, which photos bump too). It exists so the Instagram
-    # poller can track the N most recently linked reels: a property captured
-    # months ago whose reel link is added today is the newest reel there is,
-    # which neither of the other two timestamps expresses on its own.
+    # (qualified_at, which photos bump too). It orders the reel-linked
+    # properties newest-link-first for the Instagram matcher: a property
+    # captured months ago whose reel link is added today is the newest reel
+    # there is, which neither of the other two timestamps expresses on its
+    # own.
     #
     # Same "derived metadata, not content" status as instagram_media_pk
     # above: absent from StructuredProperty/EmbeddedProperty/PropertyRecord
     # and from property_repository._COLUMNS, written only by this module's
     # own add_property/update_property, and read into the in-memory
     # property snapshot (Service/WhatsAppDataFetchingService/property_snapshot.py),
-    # which is what orders the Instagram poller's watched reels.
+    # which is what orders the Instagram matcher's in-memory reel list.
     instagram_reel_url_updated_at: Mapped[Optional[datetime]] = mapped_column(
         DateTime(timezone=True), nullable=True
     )

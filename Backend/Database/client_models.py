@@ -279,7 +279,7 @@ class InstagramContactRow(ClientBase):
 
     # Set only once this contact submits the form with a WhatsApp number —
     # from that point on, Service/InstagramInquiryHandlingService/
-    # instagram_polling_service.py skips this ig_user_id entirely.
+    # instagram_event_service.py skips this ig_user_id entirely.
     linked_phone: Mapped[Optional[str]] = mapped_column(String, nullable=True)
 
     # --- client info ---
@@ -311,10 +311,10 @@ class InstagramContactRow(ClientBase):
 
 class InstagramProcessedEventRow(ClientBase):
     """Pure idempotency guard for Service/InstagramInquiryHandlingService/
-    instagram_polling_service.py — every comment reply and every DM sequence
+    instagram_event_service.py — every comment reply and every DM sequence
     it sends is recorded here first (by a unique event_key describing what
     was done, e.g. "comment:{comment_pk}" or "dm:{property_record_id}:
-    {ig_user_id}") so a restart or two overlapping poll cycles can never
+    {ig_user_id}") so a restart or two overlapping webhook deliveries can never
     reply to the same comment twice or DM the same person about the same
     property twice — persisted rather than in-memory (unlike WhatsApp's
     invitation_tracker.py) because a duplicate DM is far more visibly bad on

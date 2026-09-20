@@ -16,8 +16,8 @@ still happens exactly as before, synchronously inside upsert_client the
 moment their requirements are first saved.
 
 Runs on its own daemon thread with a plain time.sleep loop, mirroring
-Service/InstagramInquiryHandlingService/instagram_polling_service.py's
-start_background_polling pattern — not asyncio, so a slow recompute cycle
+Service/InstagramInquiryHandlingService/instagram_connection_service.py's
+start_background_maintenance pattern — not asyncio, so a slow recompute cycle
 (embedding + scoring calls for every client) can never stall the FastAPI
 event loop or the WhatsApp/Instagram background clients.
 """
@@ -360,7 +360,7 @@ def _recompute_all_clients() -> None:
             succeeded += 1
         except Exception as exc:  # noqa: BLE001
             # Isolated per client, same reasoning as every other per-item
-            # loop in this codebase (e.g. instagram_polling_service._guarded)
+            # loop in this codebase (e.g. instagram_event_service._guarded)
             # — one client's failure must never skip the rest. Deliberately
             # NOT stamped: a client whose rescore failed must be picked up
             # again by the next run, from the same point, rather than having

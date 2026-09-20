@@ -176,9 +176,19 @@ _GROUPS: Tuple[Tuple[str, str, Tuple[Dict[str, Any], ...]], ...] = (
                 "id": "instagram_events",
                 "label": "Instagram events already handled",
                 "module": "Service.InstagramInquiryHandlingService.instagram_contact_store",
-                "attrs": ("_processed_events",),
+                "attrs": ("_processed_events", "_processed_cache"),
                 "unit": "events",
-                "detail": "Comment/DM ids already answered, so a poll never replies twice.",
+                "detail": "Comment/DM ids already answered, so a webhook Meta re-delivers is recognised from "
+                "memory instead of costing a Neon lookup.",
+            },
+            {
+                "id": "instagram_media",
+                "label": "Instagram reel ↔ media-id index",
+                "module": "Service.InstagramInquiryHandlingService.instagram_reel_matcher",
+                "attrs": ("_media_code", "_media_unresolvable"),
+                "unit": "media",
+                "detail": "Which Instagram post each media id is, so a reel's permalink is looked up once ever "
+                "— and comments on posts that are not properties cost nothing at all.",
             },
             {
                 "id": "client_fallback",

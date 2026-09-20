@@ -2,7 +2,7 @@
 backend behind Service/InstagramInquiryHandlingService/instagram_contact_store.py
 once DATABASE_URL is set. Mirrors Database/client_repository.py's
 shape exactly (get_by_id, upsert, get_all, count), plus a small,
-independent set of functions for InstagramProcessedEventRow — the polling
+independent set of functions for InstagramProcessedEventRow — the webhook
 service's idempotency guard, unrelated to any one contact.
 """
 
@@ -110,14 +110,15 @@ def get_recent_processed_event_keys(limit: int) -> List[str]:
     query that fills the in-memory guard in Service/
     InstagramInquiryHandlingService/instagram_contact_store.py.
 
-    The poller asks "have I already handled this?" about every comment and
-    every DM message Instagram hands back, on every cycle — and Instagram
-    keeps handing back the same recent ones long after they were answered.
-    Asked one key at a time that was hundreds of round trips per cycle,
-    forever, essentially all of them re-confirming an answer that cannot
-    change (nothing in this application ever deletes a processed-event row).
-    Fetching the recent keys once, as a single column of short strings, turns
-    the entire steady state into a memory lookup.
+The webhook handler asks "have I already handled this?" about every
+    comment and every DM Meta delivers — and Meta re-delivers anything it did
+    not receive a prompt 200 for, so the same id genuinely arrives more than
+    once. Asked one key at a time, every repeat is a round trip re-confirming
+    an answer that cannot change (nothing in this application ever deletes a
+    processed-event row). Fetching the recent keys once, as a single column of
+    short strings, turns the steady state into a memory lookup — including
+    straight after a restart, which is exactly when a re-delivery of
+    something answered moments earlier is most likely.
     """
     stmt = (
         select(InstagramProcessedEventRow.event_key)

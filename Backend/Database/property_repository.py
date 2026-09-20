@@ -410,19 +410,20 @@ def get_property(record_id: str) -> Optional[EmbeddedProperty]:
         return _to_pydantic(row) if row is not None else None
 
 
-# --- the Instagram poller's reads -----------------------------------------
+# --- the Instagram matcher's reads ----------------------------------------
 #
-# Three deliberately narrow queries, all of them serving one goal: the
-# comment/DM poller (Service/InstagramInquiryHandlingService/) runs every few
-# seconds forever, so anything it reads per cycle is read ~10,000 times a day.
-# It used to call get_all_properties(limit=1000) once per cycle — every column
-# of every property, including `image_urls` (megabytes of base64 photo data
-# per row) and `embedding` — plus one get_instagram_media_pk query per tracked
-# property per cycle, none of which it needed and none of which changed
-# between cycles. These three exist so that data is fetched by shape and by
-# occasion instead: the tracked set once per actual property change, and the
-# lookup queries only when an incoming share matches nothing the poller
-# already holds in memory.
+# Three deliberately narrow queries, serving one goal: matching an incoming
+# Instagram comment or shared reel to a property without reading property
+# CONTENT to do it.
+#
+# They were written when a poller re-read the whole property table every few
+# seconds; that poller is gone (Instagram pushes events now — see
+# Service/InstagramInquiryHandlingService/instagram_event_service.py), which
+# makes these narrower still: the reel-linked set is served from the in-memory
+# property snapshot, so these queries now run ONLY when a real incoming event
+# names a reel old enough to have fallen outside that snapshot. Waking a
+# serverless database for a real customer is exactly what it should be woken
+# for; waking it on a timer was not.
 #
 # Both defer image_urls for the same reason get_all_properties_summary does
 # — see its docstring.
@@ -433,9 +434,9 @@ def get_reel_link_index() -> List[Tuple[str, Optional[str], Optional[str]]]:
     reel-linked property — three short strings per row, no property content
     at all.
 
-    This is the "is it one of the OLDER reels?" lookup, run only when a
-    shared reel matches nothing in the poller's in-memory set, never on a
-    routine cycle. Returning the index rather than filtering in SQL is
+    This is the "is it one of the OLDER reels?" lookup, run only when a real
+    incoming comment or share matches nothing in the in-memory reel list,
+    never on a routine schedule. Returning the index rather than filtering in SQL is
     deliberate: which URL matches a shared reel is decided by
     instagram_reel_matcher.extract_reel_code, and re-expressing that regex as
     a SQL LIKE pattern would be a second, subtly different implementation of
@@ -456,8 +457,8 @@ def get_reel_link_index() -> List[Tuple[str, Optional[str], Optional[str]]]:
 
 def get_instagram_reel_property(record_id: str) -> Optional[Tuple[EmbeddedProperty, Optional[str]]]:
     """One property plus its media pk, without its photos or embedding —
-    what the poller loads after get_reel_link_index tells it which older
-    property a shared reel belongs to."""
+    what the matcher loads after get_reel_link_index tells it which older
+    property an incoming comment or shared reel belongs to."""
     stmt = select(PropertyRow).options(defer(PropertyRow.image_urls), defer(PropertyRow.embedding))
     if record_id.startswith("legacy-"):
         try:
@@ -506,7 +507,7 @@ def update_property(
             # timestamp must reflect a real change of link, so a save that
             # re-submits the same URL (the Edit dialog posts every field,
             # changed or not) must NOT bubble this property back to the top
-            # of the poller's most-recently-linked list.
+            # of the most-recently-linked list.
             previous_reel_url = row.instagram_reel_url
             for key, value in content_updates.items():
                 if key in EDITABLE_CONTENT_FIELDS:

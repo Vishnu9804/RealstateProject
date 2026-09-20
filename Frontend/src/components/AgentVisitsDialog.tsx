@@ -6,6 +6,7 @@ import { propertyApi } from "../api/propertyApi";
 import type { AgentSummary, AssignedClientSummary, PropertySource, VisitRecord } from "../api/types";
 import { friendlyError } from "../lib/apiError";
 import { formatCompactInr, formatVisitTime, relativeTime } from "../lib/formatters";
+import { formatPhone } from "../lib/phone";
 import { setCachedPropertyList } from "../lib/propertyListCache";
 import PropertyReadOnlyDialog from "./PropertyReadOnlyDialog";
 import SourceTag from "./ui/SourceTag";
@@ -142,7 +143,7 @@ export default function AgentVisitsDialog({
               <div style={{ minWidth: 0 }}>
                 <div className="detail-modal__eyebrow">Site visits</div>
                 <h2 className="detail-modal__title cell-truncate">{agent.name}</h2>
-                <div className="detail-modal__sub cell-truncate">{agent.phone}</div>
+                <div className="detail-modal__sub cell-truncate">{formatPhone(agent.phone)}</div>
                 <div className="detail-modal__badges">
                   <Badge tone={agent.active_clients.length > 0 ? "ok" : "info"}>
                     {agent.active_clients.length} active
@@ -261,7 +262,7 @@ function ActiveVisitRow({
             <strong className="cell-truncate">{client.property_label}</strong>
           </div>
           <div className="faint small row-flex" style={{ gap: 10, flexWrap: "wrap" }}>
-            <span>{client.name || client.phone}</span>
+            <span>{client.name || formatPhone(client.phone)}</span>
             {budget && <span>{budget}</span>}
             {client.assigned_at && (
               <span className="row-flex" style={{ gap: 4 }}>
@@ -331,7 +332,7 @@ function CompletedVisitRow({
             <strong className="cell-truncate">{visit.property_label ?? "Property"}</strong>
           </div>
           <div className="faint small row-flex" style={{ gap: 10, flexWrap: "wrap" }}>
-            <span>{visit.client_name || visit.client_phone}</span>
+            <span>{visit.client_name || formatPhone(visit.client_phone)}</span>
             {budget && <span>{budget}</span>}
           </div>
           {visit.notes && (

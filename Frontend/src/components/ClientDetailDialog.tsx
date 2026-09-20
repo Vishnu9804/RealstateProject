@@ -2,6 +2,7 @@ import { useEffect } from "react";
 import { createPortal } from "react-dom";
 import type { InquiryClientRecord } from "../api/types";
 import { formatCompactInr, formatIst, relativeTime } from "../lib/formatters";
+import { formatPhone } from "../lib/phone";
 import ClientAvatar from "./ClientAvatar";
 import { Button, Copyable } from "./ui/Primitives";
 import { IconEdit, IconPin, IconTag, IconX } from "./ui/Icons";
@@ -42,8 +43,8 @@ export default function ClientDetailDialog({
             <ClientAvatar client={client} size={64} />
             <div style={{ minWidth: 0 }}>
               <div className="detail-modal__eyebrow">Client</div>
-              <h2 className="detail-modal__title cell-truncate">{client.name ?? client.phone}</h2>
-              <div className="detail-modal__sub cell-truncate">{client.phone}</div>
+              <h2 className="detail-modal__title cell-truncate">{client.name ?? formatPhone(client.phone)}</h2>
+              <div className="detail-modal__sub cell-truncate">{formatPhone(client.phone)}</div>
             </div>
           </div>
           <button type="button" className="toast__close" onClick={onClose} aria-label="Close">
@@ -79,7 +80,11 @@ function ClientDetail({ client }: { client: InquiryClientRecord }) {
           <div className="detail__k">Contact</div>
           <div className="detail__v">{client.name ?? "—"}</div>
           <div className="detail__v" style={{ marginTop: 4 }}>
-            <Copyable text={client.phone} />
+            {/* Shown spaced, copied as stored — what lands in the
+                clipboard is pasted into WhatsApp or a dialler, where the
+                space is at best noise. The same split ui/ContactPhones
+                makes for a listing's numbers. */}
+            <Copyable text={client.phone}>{formatPhone(client.phone)}</Copyable>
           </div>
           {client.email && (
             <div className="faint small" style={{ marginTop: 4 }}>
@@ -92,7 +97,7 @@ function ClientDetail({ client }: { client: InquiryClientRecord }) {
             <div className="faint small" style={{ marginTop: 4 }}>
               {client.additional_phones.map((phone, index) => (
                 <div key={index}>
-                  <Copyable text={phone} />
+                  <Copyable text={phone}>{formatPhone(phone)}</Copyable>
                 </div>
               ))}
             </div>

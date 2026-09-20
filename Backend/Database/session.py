@@ -264,6 +264,81 @@ _CONTACT_PHONE_TABLES = ("properties", "soldout_properties", "builder_projects",
 _CONTACT_PHONE_BATCH = 500
 
 
+def _tables_with_legacy_contact_phone(connection) -> List[str]:
+    """Which of _CONTACT_PHONE_TABLES still carry the retired single-value
+    `contact_phone` column, in this module's own order.
+
+    One catalog query rather than four try/excepts: a missing column is a
+    hard error in Postgres (not an empty result), so both the migration that
+    READS that column and the statement that DROPS it have to know first.
+    The catalog is in shared buffers on any live database, so this costs
+    nothing measurable on Neon -- and it is asked at most once per startup,
+    behind the same app_settings flag everything else here is behind."""
+    from sqlalchemy import text
+
+    # One named parameter per table rather than an array bind: the list is a
+    # module constant of four fixed names, and spelling the IN out keeps the
+    # statement free of any driver-specific array adaptation.
+    placeholders = ", ".join(f":t{index}" for index in range(len(_CONTACT_PHONE_TABLES)))
+    parameters = {f"t{index}": table for index, table in enumerate(_CONTACT_PHONE_TABLES)}
+    rows = connection.execute(
+        text(
+            "SELECT table_name FROM information_schema.columns "
+            "WHERE table_schema = current_schema() AND column_name = 'contact_phone' "
+            f"AND table_name IN ({placeholders})"
+        ),
+        parameters,
+    ).all()
+    present = {row[0] for row in rows}
+    return [table for table in _CONTACT_PHONE_TABLES if table in present]
+
+
+def _drop_legacy_contact_phone_columns(engine) -> List[str]:
+    """Removes the retired single-value `contact_phone` column from every
+    table that still has one, and returns the tables it dropped it from.
+
+    WHY THIS IS SAFE TO RUN
+
+    It is called from exactly one place -- init_db, on the line after
+    _migrate_contact_phones has RETURNED, inside the same flag-gated block.
+    That migration commits its own transaction before returning, so by the
+    time this runs every value the column held has already been read, split
+    into dialable numbers and written to `contact_phones`. Nothing else in
+    the project reads the column: it is absent from every repository's
+    column tuple, from every ORM model (see Database/models.py's PropertyRow
+    and its three counterparts) and from every raw statement but the one in
+    the migration above.
+
+    WHY IT IS A DROP AND NOT A "LEAVE IT, IT COSTS NOTHING"
+
+    It did cost something. Two columns for one listing's contact number is
+    two places a number can be written and two places it can be read from,
+    and that is the shape the whole phone-number pass exists to end: one
+    number, one column, one spelling, everywhere. A column that nothing
+    reads is also a column the next person to touch this code will read.
+
+    WHY IT CANNOT DESTROY A NUMBER
+
+    `contact_phones` is filled from this column before it goes, and a value
+    the splitter could not read at all is kept verbatim rather than dropped
+    (see Model/phone_numbers.split_phone_numbers) -- so every string the
+    column held survives in the new one, either as dialable numbers or as
+    itself.
+
+    Catalog-only in Postgres: DROP COLUMN marks the attribute dropped and
+    rewrites no table, so this is instant and costs no Neon compute however
+    many rows the table has. IF EXISTS so a re-run, or a database that never
+    had the column, is a no-op rather than an error."""
+    from sqlalchemy import text
+
+    dropped: List[str] = []
+    with engine.begin() as connection:
+        for table in _tables_with_legacy_contact_phone(connection):
+            connection.execute(text(f"ALTER TABLE {table} DROP COLUMN IF EXISTS contact_phone"))
+            dropped.append(table)
+    return dropped
+
+
 def _migrate_contact_phones(engine) -> int:
     """Rewrites every stored contact number into `contact_phones` -- a list
     of "+91" + 10-digit strings -- and returns how many rows were rewritten.
@@ -297,18 +372,20 @@ def _migrate_contact_phones(engine) -> int:
     transaction, so a failure anywhere rolls back the updates AND leaves the
     trigger exactly as it was -- the table can never be left unguarded.
 
-    WHY THE ORIGINAL COLUMN SURVIVES
+    WHAT HAPPENS TO THE ORIGINAL COLUMN
 
-    `contact_phone` is left in place, untouched, holding the value the
-    spreadsheet delivered. Nothing reads it any more (it is out of every
-    repository's column tuple), it costs nothing where it sits, and it is the
-    only remaining copy of the original if any of the splitting above ever
-    needs to be reviewed.
+    `contact_phone` is read here and nowhere else, and once this has
+    committed it is dropped -- see _drop_legacy_contact_phone_columns, which
+    init_db runs immediately after this and only ever after this. Two
+    columns holding one listing's contact number is what let a number be
+    written to one and read from the other; one column is the point of the
+    whole exercise.
 
     Idempotent by construction: it only reads rows whose contact_phones is
-    still empty, so a second run selects nothing. init_db additionally gates
-    it behind an app_settings flag, so the steady state costs one primary-key
-    lookup rather than four queries."""
+    still empty, so a second run selects nothing, and a table whose legacy
+    column has already been dropped is skipped outright. init_db
+    additionally gates it behind an app_settings flag, so the steady state
+    costs one primary-key lookup rather than four queries."""
     from sqlalchemy import text
 
     from Model import phone_numbers
@@ -316,9 +393,18 @@ def _migrate_contact_phones(engine) -> int:
     rewritten = 0
     unreadable: List[str] = []
     with engine.begin() as connection:
+        # Which tables still HAVE the legacy column. On a database created
+        # after it stopped being part of the models there is none, and on a
+        # retried run there may be some and not others -- either way,
+        # selecting a column that is not there is an error, not an empty
+        # result, so the question is asked once up front rather than caught
+        # four times.
+        legacy = _tables_with_legacy_contact_phone(connection)
+        if not legacy:
+            return 0
         connection.execute(text("ALTER TABLE properties DISABLE TRIGGER trg_properties_set_updated_at"))
         try:
-            for table in _CONTACT_PHONE_TABLES:
+            for table in legacy:
                 rows = connection.execute(
                     text(
                         f"SELECT id, contact_phone FROM {table} "
@@ -1041,10 +1127,12 @@ def init_db() -> None:
     # because the pydantic side declares a plain list and a NULL would fail
     # validation on the first read of a pre-existing row; on Postgres 11+ a
     # DEFAULT on ADD COLUMN is catalog-only, so this is instant and rewrites
-    # no table. The single-value `contact_phone` column each of these tables
-    # already has is deliberately left in place and simply stops being read
-    # -- see _migrate_contact_phones, which is what fills the new column from
-    # it exactly once.
+    # no table.
+    #
+    # The single-value `contact_phone` column each of these tables used to
+    # have is read into this one exactly once (_migrate_contact_phones) and
+    # then dropped (_drop_legacy_contact_phone_columns), so a listing's
+    # contact number has exactly one home rather than two that can disagree.
     with engine.begin() as connection:
         for table in _CONTACT_PHONE_TABLES:
             connection.execute(
@@ -1170,10 +1258,23 @@ def init_db() -> None:
     # so a run that failed part-way is simply retried on the next start (and
     # the migration itself only looks at rows it has not already filled, so
     # the retry is not a re-do).
-    contact_phone_key = "contact_phone_array_migration_v1"
+    contact_phone_key = "contact_phone_array_migration_v2"
     if not settings_repository.get_value(contact_phone_key):
         rewritten_numbers = _migrate_contact_phones(engine)
         normalized_client_numbers = _normalize_client_additional_phones(engine)
+        # ONLY after the line above has returned, which is only after its
+        # own transaction committed: every value the legacy column held is
+        # in `contact_phones` by then. See _drop_legacy_contact_phone_columns
+        # for why the column goes rather than being left where it sits.
+        #
+        # The flag is "...v2" rather than "...v1" on purpose: a database
+        # that ran the v1 pass already has its numbers copied but still has
+        # the column, and a key it has already answered "done" to would skip
+        # this drop forever. The migration itself is idempotent (it reads
+        # only rows whose contact_phones is still empty, and skips a table
+        # whose legacy column is already gone), so re-running it under the
+        # new key costs one bounded pass and changes nothing.
+        dropped_columns = _drop_legacy_contact_phone_columns(engine)
         settings_repository.set_value(contact_phone_key, {"done": True})
         if rewritten_numbers or normalized_client_numbers:
             step_logger.info(
@@ -1181,6 +1282,12 @@ def init_db() -> None:
                 f"{normalized_client_numbers} client record(s) -- every number is now stored as "
                 "\"+91\" plus 10 digits, and numbers that had been run together into one box are "
                 "now separate, dialable numbers."
+            )
+        if dropped_columns:
+            step_logger.info(
+                "Dropped the retired single-value contact_phone column from "
+                f"{', '.join(dropped_columns)} -- every contact number now lives in contact_phones "
+                "and nowhere else."
             )
 
     # Same reasoning again for landing-page leads: phone_e164 is produced by

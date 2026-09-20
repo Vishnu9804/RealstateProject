@@ -74,7 +74,28 @@ def build_embedding_text(prop: StructuredProperty) -> str:
     score (Service/ClientPropertyMatchingService/scoring.py), where it acts
     as a low-weight sanity signal on top of the explicit budget/location/
     BHK scoring."""
-    return _join_parts(getattr(prop, name) for name in EMBEDDING_TEXT_FIELDS)
+    return _join_parts(_property_value(prop, name) for name in EMBEDDING_TEXT_FIELDS)
+
+
+def _property_value(prop: StructuredProperty, name: str) -> Any:
+    """One EMBEDDING_TEXT_FIELDS entry off a StructuredProperty.
+
+    "contact_phone" is not an attribute on that model any more -- the
+    derived scalar was removed so a listing's number has exactly one home
+    (contact_phones). It stays an EMBEDDING FIELD NAME deliberately, and is
+    resolved to the same string the scalar always held, because the text
+    built here has to stay byte-for-byte what it was: every vector already
+    in Postgres was built from text with the primary number in this exact
+    position, and dropping it would quietly make new vectors incomparable
+    with old ones -- a matching-quality regression with no error to notice,
+    repairable only by re-embedding every listing (hours of Railway CPU).
+
+    Same resolution as _field_value below, which does this for the plain
+    column values a builder project arrives as, so the two sides still
+    produce identical text for identical details."""
+    if name == "contact_phone":
+        return phone_numbers.primary_phone(prop.contact_phones)
+    return getattr(prop, name)
 
 
 def build_embedding_text_from_fields(fields: Mapping[str, Any]) -> str:
@@ -84,12 +105,11 @@ def build_embedding_text_from_fields(fields: Mapping[str, Any]) -> str:
     order, same separator, so a builder project and a property with the same
     details produce byte-for-byte the same text and the same vector.
 
-    contact_phone is the one name that is no longer a stored column on
-    either side (see Model/phone_numbers.py): a StructuredProperty still
-    exposes it as the first of its contact_phones, and a row of plain column
-    values has to be given the same treatment here, or two listings with the
-    same number would embed differently depending on which side they came
-    from."""
+    contact_phone is the one name that is not a field on either side any
+    more (see Model/phone_numbers.py): both are resolved to the first of
+    their contact_phones, here and in _property_value above, or two listings
+    with the same number would embed differently depending on which side
+    they came from."""
     return _join_parts(_field_value(fields, name) for name in EMBEDDING_TEXT_FIELDS)
 
 

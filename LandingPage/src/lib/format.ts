@@ -180,9 +180,29 @@ export function normalizeWhatsApp(raw: string): string {
   return trimmed.startsWith("+") ? `+${digits}` : digits;
 }
 
-/** Ten digits is a plain Indian mobile; more is fine (country code), less
- *  is a typo. Kept this loose on purpose — a public form that argues with
- *  someone about their own phone number just loses the lead. */
+/** The characters a phone number is written with, anywhere in the world:
+ *  digits, a leading +, and the spaces, dashes, dots and brackets people
+ *  group them with. Deliberately NOT a country-specific pattern — this box
+ *  is on a public site and has to take "+971 50 123 4567" and
+ *  "(044) 7700 900123" as readily as "98765 43210". */
+const PHONE_CHARS = /^[+\d][\d\s\-.()]*$/;
+
+/** Whether this could be somebody's phone number.
+ *
+ *  Loose on purpose about SHAPE — a public form that argues with a visitor
+ *  about their own number just loses the lead, and the backend canonicalises
+ *  whatever arrives anyway (Service/WhatsAppInquiryHandlingService/
+ *  phone_utils.normalize_phone). International numbers, with or without a
+ *  country code, are all fine.
+ *
+ *  Strict about one thing only: it has to be a NUMBER. "asdcwjfw" used to
+ *  pass straight through to the backend, which is not a lead, not something
+ *  anyone can be called on, and not what the visitor meant to type. So:
+ *  phone characters only, and between 7 and 15 digits — 7 being the
+ *  shortest real subscriber number anywhere and 15 the E.164 ceiling. */
 export function isPlausiblePhone(raw: string): boolean {
-  return raw.replace(/\D/g, "").length >= 10;
+  const trimmed = raw.trim();
+  if (!PHONE_CHARS.test(trimmed)) return false;
+  const digits = trimmed.replace(/\D/g, "").length;
+  return digits >= 7 && digits <= 15;
 }

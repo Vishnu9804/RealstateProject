@@ -15,6 +15,7 @@ import { getCachedAgents, setCachedAgents } from "../lib/agentListCache";
 import { friendlyError } from "../lib/apiError";
 import { formatVisitTime, relativeTime, toIstFields } from "../lib/formatters";
 import { getCachedClients, setCachedClients } from "../lib/inquiryListCache";
+import { formatPhone } from "../lib/phone";
 import { setCachedPropertyList } from "../lib/propertyListCache";
 import ClientDetailDialog, { formatBudgetRange } from "../components/ClientDetailDialog";
 import ClientFormDialog from "../components/ClientFormDialog";
@@ -814,7 +815,7 @@ function VisitTableRow({
       </td>
 
       <td onClick={(event) => event.stopPropagation()}>
-        {child ? <span className="faint small">—</span> : <Copyable text={entry.clientPhone} />}
+        {child ? <span className="faint small">—</span> : <Copyable text={entry.clientPhone}>{formatPhone(entry.clientPhone)}</Copyable>}
       </td>
 
       <td>
@@ -830,7 +831,7 @@ function VisitTableRow({
         <div className="cell-truncate" style={{ maxWidth: 170 }} title={agentNames.join(", ")}>
           {agentNames.length > 1 ? `${entry.agentName} +${agentNames.length - 1}` : entry.agentName}
         </div>
-        {entry.agentPhone && <div className="faint small">{entry.agentPhone}</div>}
+        {entry.agentPhone && <div className="faint small">{formatPhone(entry.agentPhone)}</div>}
       </td>
 
       <td className="cell-num">
@@ -960,7 +961,7 @@ function VisitDetailDialog({
             <div className="detail-modal__eyebrow">{completed ? "Completed visit" : "Assigned visit"}</div>
             <h2 className="detail-modal__title cell-truncate">{entry.propertyLabel}</h2>
             <div className="detail-modal__sub cell-truncate">
-              {clientName} · {entry.clientPhone}
+              {clientName} · {formatPhone(entry.clientPhone)}
             </div>
             <div className="detail-modal__badges">
               <SourceTag source={entry.propertySource} />
@@ -1001,7 +1002,7 @@ function VisitDetailDialog({
                   </button>
                 </div>
                 <div className="detail__v" style={{ marginTop: 4 }}>
-                  <Copyable text={entry.clientPhone} />
+                  <Copyable text={entry.clientPhone}>{formatPhone(entry.clientPhone)}</Copyable>
                 </div>
                 {budget !== "—" && (
                   <div className="faint small" style={{ marginTop: 4 }}>
@@ -1017,7 +1018,7 @@ function VisitDetailDialog({
                 <div className="detail__v">{entry.agentName}</div>
                 {entry.agentPhone && (
                   <div className="detail__v" style={{ marginTop: 4 }}>
-                    <Copyable text={entry.agentPhone} />
+                    <Copyable text={entry.agentPhone}>{formatPhone(entry.agentPhone)}</Copyable>
                   </div>
                 )}
               </div>

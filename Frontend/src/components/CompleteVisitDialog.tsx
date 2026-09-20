@@ -3,6 +3,7 @@ import { createPortal } from "react-dom";
 import { agentApi } from "../api/agentApi";
 import type { AssignedClientSummary, VisitRecord } from "../api/types";
 import { friendlyError } from "../lib/apiError";
+import { formatPhone } from "../lib/phone";
 import SourceTag from "./ui/SourceTag";
 import { useToast } from "./ui/Toast";
 import { IconX } from "./ui/Icons";
@@ -50,7 +51,7 @@ export default function CompleteVisitDialog({
         property_record_id: client.property_record_id,
         notes: notes.trim() || null,
       });
-      toast.push({ tone: "ok", title: "Visit marked complete", message: `${client.name ?? client.phone} — ${client.property_label}` });
+      toast.push({ tone: "ok", title: "Visit marked complete", message: `${client.name ?? formatPhone(client.phone)} — ${client.property_label}` });
       onCompleted(visit);
     } catch (err) {
       toast.push({ tone: "bad", title: "Could not mark this visit complete", message: friendlyError(err) });
@@ -72,7 +73,7 @@ export default function CompleteVisitDialog({
         <div className="modal__body stack stack-3">
           <SourceTag source={client.property_source} />
           <p className="faint small">
-            {client.property_label} for {client.name ?? client.phone} moves out of {agentName}'s active visits and into their completed visits.
+            {client.property_label} for {client.name ?? formatPhone(client.phone)} moves out of {agentName}'s active visits and into their completed visits.
           </p>
           <div className="field">
             <label className="field__hint" style={{ fontWeight: 560, color: "var(--ink-2)" }}>

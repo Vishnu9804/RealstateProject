@@ -6,6 +6,7 @@ import type { ConnectionRole, WhatsAppConnection, WhatsAppGroup } from "../api/t
 import { usePolling } from "../hooks/usePolling";
 import { useDebounced, usePersistentState, useUnsavedGuard } from "../hooks/useUi";
 import { friendlyError } from "../lib/apiError";
+import { formatPhone } from "../lib/phone";
 import { useToast } from "../components/ui/Toast";
 import { useAppStatus } from "../state/StatusProvider";
 import { useAuth } from "../state/AuthProvider";
@@ -103,7 +104,7 @@ const CONNECTIONS_POLL_INTERVAL_MS = 5000;
 const VALID_NUMBER = /^\d{8,15}$/;
 
 function displayNumber(connection: WhatsAppConnection): string {
-  return connection.phone_number ? `+${connection.phone_number}` : `Connecting… (${connection.connection_id.slice(0, 6)})`;
+  return connection.phone_number ? formatPhone(`+${connection.phone_number}`) : `Connecting… (${connection.connection_id.slice(0, 6)})`;
 }
 
 function statusBadgeTone(status: string): "ok" | "warn" | "bad" | "info" {

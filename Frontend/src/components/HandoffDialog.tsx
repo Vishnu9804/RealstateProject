@@ -4,6 +4,7 @@ import type { HandoffTemplates, InquiryClientRecord } from "../api/types";
 import { agentApi } from "../api/agentApi";
 import { inquiryClientApi } from "../api/inquiryClientApi";
 import { friendlyError } from "../lib/apiError";
+import { formatPhone } from "../lib/phone";
 import { buildAgentTokens, buildClientMessage, propertyLabel, renderTemplate, type AgentAssignment } from "../lib/handoffTemplate";
 import { useToast } from "./ui/Toast";
 import { Avatar, Button, SkeletonRows } from "./ui/Primitives";
@@ -217,7 +218,7 @@ export default function HandoffDialog({
               ))}
               <MessagePreview
                 label="To your client"
-                name={client.name || client.phone}
+                name={client.name || formatPhone(client.phone)}
                 message={clientMessage}
                 edited={clientMessage !== renderedClientMessage}
                 disabled={sending}

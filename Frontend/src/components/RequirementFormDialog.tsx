@@ -9,7 +9,8 @@ import ContactPhonesField, { phoneBoxesError, toPhoneBoxes } from "./ContactPhon
 import { REQUIREMENT_TYPE_OPTIONS } from "../lib/requirementFilters";
 import { FURNISHING_OPTIONS } from "./PropertyFormDialog";
 import { useToast } from "./ui/Toast";
-import { Button, Note, Segmented } from "./ui/Primitives";
+import { Button, Segmented } from "./ui/Primitives";
+import { FormIssues, hasIssue, useFocusFirstIssue, type FieldIssue } from "./ui/FormIssues";
 import { IconAlert, IconX } from "./ui/Icons";
 
 /**
@@ -21,7 +22,7 @@ import { IconAlert, IconX } from "./ui/Icons";
  *
  * Almost every field is optional, but a requirement has to ask for
  * SOMETHING — at least a property type, an area or a budget — or there is
- * nothing to compare stored properties against (see validationError below,
+ * nothing to compare stored properties against (see validationIssues below,
  * and the matching identical rule in Backend/Controller/
  * BrokerRequirementController/broker_requirement_controller.py). Cancel and
  * the header's X both discard the in-progress edit without calling the
@@ -127,22 +128,32 @@ function toPayload(form: FormState): RequirementContentFields {
  *    compare properties against. Saving one used to produce a card reading
  *    "— / —" with a hundred meaningless "Low" matches behind it.
  *
- * Returns null when the form is good to send.
+ * Returns EVERY problem it finds rather than only the first, so a form
+ * with two mistakes in it takes one Save to discover both. Each entry names
+ * the box it belongs to, which marks that box red and is where the body
+ * scrolls. [] when the form is good to send.
  */
-function validationError(form: FormState): string | null {
+function validationIssues(form: FormState): FieldIssue[] {
+  const issues: FieldIssue[] = [];
+  const add = (field: string, message: string | null) => {
+    if (message) issues.push({ field, message });
+  };
   for (const [key, label] of [
     ["budget_min_inr", "Budget from"],
     ["budget_max_inr", "Budget to"],
   ] as const) {
-    const error = amountError(form[key], label, MAX_INR);
-    if (error) return error;
+    add(key, amountError(form[key], label, MAX_INR));
   }
   const min = form.budget_min_inr.trim() ? Number(form.budget_min_inr) : null;
   const max = form.budget_max_inr.trim() ? Number(form.budget_max_inr) : null;
-  if (min !== null && max !== null && min > max) return "The minimum budget is above the maximum.";
-
-  const phoneError = phoneBoxesError(form.contact_phone_boxes);
-  if (phoneError) return phoneError;
+  // Raised against the MAXIMUM box: with two boxes and one relationship
+  // between them, the second is the one the reader was last in and the one
+  // they will change. Only when neither box is separately wrong, so a
+  // reversed pair does not also complain about being reversed.
+  if (issues.length === 0 && min !== null && max !== null && min > max) {
+    add("budget_max_inr", "The minimum budget is above the maximum.");
+  }
+  add("contact_phone_boxes", phoneBoxesError(form.contact_phone_boxes));
 
   const statesSomething =
     form.requirement_type.trim() ||
@@ -151,9 +162,11 @@ function validationError(form: FormState): string | null {
     form.budget_min_inr.trim() ||
     form.budget_max_inr.trim();
   if (!statesSomething) {
-    return "Fill in at least one of Property type, Preferred areas or Budget — a requirement with none of them has nothing to match properties against.";
+    // No single box to point at -- it is a rule about the form as a whole,
+    // so it carries no field and nothing is scrolled to or marked red.
+    add("", "Fill in at least one of Property type, Preferred areas or Budget — a requirement with none of them has nothing to match properties against.");
   }
-  return null;
+  return issues;
 }
 
 const GRID_STYLE: React.CSSProperties = {
@@ -162,24 +175,50 @@ const GRID_STYLE: React.CSSProperties = {
   gap: 14,
 };
 
+/** Same two kinds of hint PropertyFormDialog's Field draws, for the same
+ *  reason and with the same styling — see that component's comment.
+ *  `keyHint` marks a box whose value is read by machinery (the rupee
+ *  figures filtering and matching compare, the numbers that get dialled),
+ *  where a value typed the wrong way is stored wrongly without failing. */
 function Field({
   label,
   hint,
+  keyHint,
   span,
+  field,
+  invalid,
   children,
 }: {
   label: string;
   hint?: string;
+  keyHint?: boolean;
   span?: boolean;
+  /** The key this box raises its issues under -- written out as
+   *  `data-field` so focusFirstIssue can find it. */
+  field?: string;
+  /** A save was just refused over this box. */
+  invalid?: boolean;
   children: React.ReactNode;
 }) {
   return (
-    <div className="field" style={span ? { gridColumn: "1 / -1" } : undefined}>
-      <label className="field__hint" style={{ fontWeight: 560, color: "var(--ink-2)" }}>
+    <div
+      className={`field${invalid ? " field--bad" : ""}`}
+      data-field={field}
+      style={span ? { gridColumn: "1 / -1" } : undefined}
+    >
+      <label className="field__hint" style={{ fontWeight: 560, color: invalid ? undefined : "var(--ink-2)" }}>
         {label}
       </label>
       {children}
-      {hint && <span className="field__hint">{hint}</span>}
+      {hint &&
+        (keyHint ? (
+          <span className="field__hint field__hint--key">
+            <IconAlert size={14} />
+            <span>{hint}</span>
+          </span>
+        ) : (
+          <span className="field__hint">{hint}</span>
+        ))}
     </div>
   );
 }
@@ -203,11 +242,11 @@ export default function RequirementFormDialog({
   // than only as a toast — the toast fades while this modal is still open.
   // Same treatment the Agents dialog and the client dialog already give it.
   const [formError, setFormError] = useState<string | null>(null);
-  const errorRef = useRef<HTMLDivElement>(null);
-
-  useEffect(() => {
-    if (formError) errorRef.current?.scrollIntoView({ block: "nearest", behavior: "smooth" });
-  }, [formError]);
+  // Everything the LAST Save attempt refused, shown together in the pinned
+  // bar above the footer -- see components/ui/FormIssues.
+  const [issues, setIssues] = useState<FieldIssue[]>([]);
+  const bodyRef = useRef<HTMLDivElement>(null);
+  useFocusFirstIssue(bodyRef, issues);
 
   useEffect(() => {
     const onKeyDown = (event: KeyboardEvent) => {
@@ -226,9 +265,10 @@ export default function RequirementFormDialog({
 
   async function handleSave() {
     if (saving) return;
-    const invalid = validationError(form);
-    if (invalid) {
-      setFormError(invalid);
+    const found = validationIssues(form);
+    setIssues(found);
+    if (found.length > 0) {
+      setFormError(null);
       return;
     }
     setSaving(true);
@@ -281,7 +321,7 @@ export default function RequirementFormDialog({
           </button>
         </div>
 
-        <div className="detail-modal__body">
+        <div className="detail-modal__body" ref={bodyRef}>
           <div className="stack stack-4">
             <div style={GRID_STYLE}>
               <Field label="Property type wanted" hint="Several accepted? Separate them with commas, main one first.">
@@ -369,7 +409,8 @@ export default function RequirementFormDialog({
                   someone typed reads as a bug. */}
               <Field
                 label="Budget (as written)"
-                hint="e.g. 45L, 80L-1cr, 15k/month. Read as the budget only when both boxes below are empty."
+                hint="Wording only — read as the budget just when both ₹ boxes are empty."
+                keyHint
               >
                 <input
                   className="input"
@@ -378,7 +419,13 @@ export default function RequirementFormDialog({
                   placeholder="e.g. 80L-1cr"
                 />
               </Field>
-              <Field label="Budget from (₹)">
+              <Field
+                field="budget_min_inr"
+                invalid={hasIssue(issues, "budget_min_inr")}
+                label="Budget from (₹)"
+                hint="Digits only — 8000000, not &quot;80L&quot;."
+                keyHint
+              >
                 <input
                   className="input"
                   type="number"
@@ -389,7 +436,13 @@ export default function RequirementFormDialog({
                   placeholder="e.g. 8000000"
                 />
               </Field>
-              <Field label="Budget to (₹)">
+              <Field
+                field="budget_max_inr"
+                invalid={hasIssue(issues, "budget_max_inr")}
+                label="Budget to (₹)"
+                hint="Digits only — 10000000, not &quot;1cr&quot;."
+                keyHint
+              >
                 <input
                   className="input"
                   type="number"
@@ -409,7 +462,13 @@ export default function RequirementFormDialog({
                   placeholder="e.g. Ramesh Broker"
                 />
               </Field>
-              <Field label="Contact numbers" hint="Just the 10 digits — the +91 is added for you.">
+              <Field
+                field="contact_phone_boxes"
+                invalid={hasIssue(issues, "contact_phone_boxes")}
+                label="Contact numbers"
+                hint="10 digits per box — the +91 is added for you."
+                keyHint
+              >
                 <ContactPhonesField
                   boxes={form.contact_phone_boxes}
                   onChange={(boxes) => set("contact_phone_boxes", boxes)}
@@ -430,15 +489,10 @@ export default function RequirementFormDialog({
               />
             </Field>
 
-            {formError && (
-              <div ref={errorRef}>
-                <Note tone="bad" icon={<IconAlert size={16} />}>
-                  {formError}
-                </Note>
-              </div>
-            )}
           </div>
         </div>
+
+        <FormIssues issues={issues} error={formError} />
 
         <div className="detail-modal__foot">
           <Button variant="ghost" onClick={onClose} disabled={saving}>

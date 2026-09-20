@@ -123,7 +123,7 @@ class PropertyRow(Base):
     # land on "Sale", never NULL.
     listing_type: Mapped[str] = mapped_column(String, nullable=False, default="Sale", server_default="Sale")
     contact_name: Mapped[Optional[str]] = mapped_column(String, nullable=True)
-    contact_phone: Mapped[Optional[str]] = mapped_column(String, nullable=True)
+
     # EVERY contact number on this property — a JSON array of canonical
     # "+91" + 10-digit strings, in the order they were written, produced by
     # and only by Model/phone_numbers.py.
@@ -133,12 +133,13 @@ class PropertyRow(Base):
     # side declares a plain list). On Postgres 11+ a DEFAULT on ADD COLUMN
     # is catalog-only, so retrofitting this costs no table rewrite.
     #
-    # The older single-value `contact_phone` column is deliberately NOT
-    # dropped and is no longer read or written by anything: it is the
-    # untouched original of every value the one-time migration in
-    # Database/session.py rewrote, kept exactly as the client's spreadsheet
-    # delivered it. Dropping a column destroys what it holds, and an
-    # unused nullable column costs nothing.
+    # The ONLY place a contact number is stored. The single-value
+    # `contact_phone` column this table used to carry is gone -- its
+    # content was copied here by the one-time migration in
+    # Database/session.py (_migrate_contact_phones) and the column itself
+    # dropped once that had committed (_drop_legacy_contact_phone_columns),
+    # so there is no second place a number can be written to, read from, or
+    # disagree with this one.
     contact_phones: Mapped[list] = mapped_column(JSON, nullable=False, default=list, server_default="[]")
     description: Mapped[Optional[str]] = mapped_column(Text, nullable=True)
     # Set by a human on the Properties page, never by the LLM — see

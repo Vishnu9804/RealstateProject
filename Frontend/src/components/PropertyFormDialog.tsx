@@ -7,7 +7,8 @@ import { MAX_AREA, MAX_INR, amountError, instagramReelError, urlError } from "..
 import { phoneList, toStoredNumber, toTypedNumber } from "../lib/phone";
 import ContactPhonesField, { phoneBoxesError, toPhoneBoxes } from "./ContactPhonesField";
 import { useToast } from "./ui/Toast";
-import { Button, Note, Segmented } from "./ui/Primitives";
+import { Button, Segmented } from "./ui/Primitives";
+import { FormIssues, hasIssue, useFocusFirstIssue, type FieldIssue } from "./ui/FormIssues";
 import { IconAlert, IconImage, IconInstagram, IconPin, IconX } from "./ui/Icons";
 import PropertyImagesField from "./PropertyImagesField";
 
@@ -29,7 +30,7 @@ import PropertyImagesField from "./PropertyImagesField";
  *
  * "Optional" does not mean "anything goes": a measurement cannot be
  * negative, a contact box has to hold a number, and a link has to be a link
- * — see validationError below, and Backend/Model/field_validation.py, which
+ * — see validationIssues below, and Backend/Model/field_validation.py, which
  * enforces exactly the same rules whatever calls the API.
  */
 
@@ -54,7 +55,6 @@ export type EditableContentRecord = Pick<
   | "listing_type"
   | "contact_name"
   | "contact_phones"
-  | "contact_phone"
   | "description"
   | "instagram_reel_url"
   | "image_urls"
@@ -216,28 +216,35 @@ function toPayload(form: FormState, includeImages: boolean): PropertyContentFiel
 }
 
 /**
- * Everything this form refuses to save, in the order the fields are read.
- * Null when it is good to send.
+ * EVERY reason this form refuses to save, in the order the fields are read
+ * — not just the first. [] when it is good to send.
+ *
+ * It used to stop at the first problem, so a listing with a bad price AND a
+ * bad link took two saves to find that out. Each entry names the field it
+ * belongs to, which is what marks that box red (`hasIssue`) and what the
+ * body scrolls to (`focusFirstIssue`).
  *
  * The Instagram link is the one worth naming: a value that is not a reel
  * link still counted as "this property has a reel", which is what put a
  * property with `reel = hello` (and an area of -100 sqft) into the public
  * landing page's Ready to Add list.
  */
-function validationError(form: FormState): string | null {
+function validationIssues(form: FormState): FieldIssue[] {
+  const issues: FieldIssue[] = [];
+  const add = (field: string, message: string | null) => {
+    if (message) issues.push({ field, message });
+  };
   for (const [key, label, max] of [
     ["area_sqft", "The area in sqft", MAX_AREA],
     ["area_vaar", "The area in vaar", MAX_AREA],
     ["price_amount_inr", "The price", MAX_INR],
   ] as const) {
-    const error = amountError(form[key], label, max);
-    if (error) return error;
+    add(key, amountError(form[key], label, max));
   }
-  return (
-    phoneBoxesError(form.contact_phone_boxes) ??
-    urlError(form.location_url) ??
-    instagramReelError(form.instagram_reel_url)
-  );
+  add("contact_phone_boxes", phoneBoxesError(form.contact_phone_boxes));
+  add("location_url", urlError(form.location_url));
+  add("instagram_reel_url", instagramReelError(form.instagram_reel_url));
+  return issues;
 }
 
 const GRID_STYLE: React.CSSProperties = {
@@ -246,24 +253,65 @@ const GRID_STYLE: React.CSSProperties = {
   gap: 14,
 };
 
+/**
+ * One labelled box.
+ *
+ * `keyHint` is the difference between "here is some help" and "here is the
+ * only spelling this box is stored in". An ordinary hint is a grey line
+ * under the input that costs nothing to skip; a key hint gets the tinted,
+ * ruled panel `.field__hint--key` describes (styles/controls.css), because
+ * skipping it stores the wrong thing without ever failing.
+ *
+ * Every key hint in this dialog marks the same class of mistake: a box
+ * whose value is READ BY MACHINERY — the rupee figure every price filter,
+ * sort and match compares, the areas the size filters compare, the numbers
+ * that get dialled. Typing "65 lakh" into the rupee box does not warn and
+ * does not fail; it leaves the figure empty, and the property then quietly
+ * misses every price filter, every sort and every client match, with
+ * nothing on the page saying why. That is the bug these panels exist to
+ * stop, and it is the reason they are not used on the boxes where free text
+ * is genuinely free text.
+ */
 function Field({
   label,
   hint,
+  keyHint,
   span,
+  field,
+  invalid,
   children,
 }: {
   label: string;
   hint?: string;
+  /** Draw `hint` as a rule, not a nicety. See above. */
+  keyHint?: boolean;
   span?: boolean;
+  /** The key this box raises its issues under. Written out as `data-field`
+   *  so focusFirstIssue can find it; omitted on boxes nothing can refuse. */
+  field?: string;
+  /** A save was just refused over this box — label and control go red. */
+  invalid?: boolean;
   children: React.ReactNode;
 }) {
   return (
-    <div className="field" style={span ? { gridColumn: "1 / -1" } : undefined}>
-      <label className="field__hint" style={{ fontWeight: 560, color: "var(--ink-2)" }}>
+    <div
+      className={`field${invalid ? " field--bad" : ""}`}
+      data-field={field}
+      style={span ? { gridColumn: "1 / -1" } : undefined}
+    >
+      <label className="field__hint" style={{ fontWeight: 560, color: invalid ? undefined : "var(--ink-2)" }}>
         {label}
       </label>
       {children}
-      {hint && <span className="field__hint">{hint}</span>}
+      {hint &&
+        (keyHint ? (
+          <span className="field__hint field__hint--key">
+            <IconAlert size={14} />
+            <span>{hint}</span>
+          </span>
+        ) : (
+          <span className="field__hint">{hint}</span>
+        ))}
     </div>
   );
 }
@@ -296,11 +344,13 @@ export default function PropertyFormDialog<T extends EditableContentRecord = Pro
   // in a toast that fades while the modal is still open — the same treatment
   // the Agents and client dialogs already give it.
   const [formError, setFormError] = useState<string | null>(null);
-  const errorRef = useRef<HTMLDivElement>(null);
-
-  useEffect(() => {
-    if (formError) errorRef.current?.scrollIntoView({ block: "nearest", behavior: "smooth" });
-  }, [formError]);
+  // What the LAST Save attempt refused, all of it -- cleared the moment
+  // another is made, so the bar never shows a problem that is already
+  // fixed. The dialog body is what gets scrolled (to the first offending
+  // field); the bar itself is pinned above the footer and never moves.
+  const [issues, setIssues] = useState<FieldIssue[]>([]);
+  const bodyRef = useRef<HTMLDivElement>(null);
+  useFocusFirstIssue(bodyRef, issues);
   const Noun = noun.charAt(0).toUpperCase() + noun.slice(1);
 
   // Whether this dialog is actually holding the property's photos.
@@ -367,9 +417,10 @@ export default function PropertyFormDialog<T extends EditableContentRecord = Pro
 
   async function handleSave() {
     if (saving) return;
-    const invalid = validationError(form);
-    if (invalid) {
-      setFormError(invalid);
+    const found = validationIssues(form);
+    setIssues(found);
+    if (found.length > 0) {
+      setFormError(null);
       return;
     }
     setSaving(true);
@@ -408,7 +459,7 @@ export default function PropertyFormDialog<T extends EditableContentRecord = Pro
           </button>
         </div>
 
-        <div className="detail-modal__body">
+        <div className="detail-modal__body" ref={bodyRef}>
           <div className="stack stack-4">
             <Field
               label={`${Noun} photos`}
@@ -463,10 +514,22 @@ export default function PropertyFormDialog<T extends EditableContentRecord = Pro
                 />
               </Field>
 
-              <Field label="Area (sqft)" hint="Only if the size is quoted in square feet">
+              <Field
+                field="area_sqft"
+                invalid={hasIssue(issues, "area_sqft")}
+                label="Area (sqft)"
+                hint="Digits only, if the size is quoted in sqft."
+                keyHint
+              >
                 <input className="input" type="number" inputMode="decimal" min={0} value={form.area_sqft} onChange={(e) => set("area_sqft", e.target.value)} placeholder="e.g. 1200" />
               </Field>
-              <Field label="Area (vaar)" hint="Only if the size is quoted in vaar / gaj">
+              <Field
+                field="area_vaar"
+                invalid={hasIssue(issues, "area_vaar")}
+                label="Area (vaar)"
+                hint="Digits only, if the size is quoted in vaar / gaj."
+                keyHint
+              >
                 <input className="input" type="number" inputMode="decimal" min={0} value={form.area_vaar} onChange={(e) => set("area_vaar", e.target.value)} placeholder="e.g. 155" />
               </Field>
               <Field label="Super built" hint="As you'd write it — e.g. 1850 sq ft">
@@ -489,17 +552,41 @@ export default function PropertyFormDialog<T extends EditableContentRecord = Pro
                 </select>
               </Field>
 
-              <Field label="Price (as written)" hint="e.g. 45L, 1.25cr, 15k/month">
+              {/* The two price boxes are the pair the "65 lakh" bug lives
+                  in. This one is wording and is shown as written; the one
+                  beside it is the number everything COMPUTES on, and it is
+                  not filled in from this one — a manually added listing has
+                  no structuring stage to work it out (that only runs on
+                  WhatsApp messages). So both hints are key hints, and both
+                  say what the other box is for: writing the price in only
+                  one of them is the actual mistake. */}
+              <Field
+                label="Price (as written)"
+                hint="Wording only — fill in the ₹ box too."
+                keyHint
+              >
                 <input className="input" value={form.price_text} onChange={(e) => set("price_text", e.target.value)} placeholder="e.g. 45L" />
               </Field>
-              <Field label="Price (₹ amount)">
-                <input className="input" type="number" inputMode="decimal" min={0} value={form.price_amount_inr} onChange={(e) => set("price_amount_inr", e.target.value)} placeholder="e.g. 4500000" />
+              <Field
+                field="price_amount_inr"
+                invalid={hasIssue(issues, "price_amount_inr")}
+                label="Price (₹ amount)"
+                hint="Digits only — 6500000, not &quot;65 lakh&quot;."
+                keyHint
+              >
+                <input className="input" type="number" inputMode="decimal" min={0} value={form.price_amount_inr} onChange={(e) => set("price_amount_inr", e.target.value)} placeholder="e.g. 6500000" />
               </Field>
 
               <Field label="Contact name">
                 <input className="input" value={form.contact_name} onChange={(e) => set("contact_name", e.target.value)} placeholder="e.g. Ramesh Broker" />
               </Field>
-              <Field label="Contact numbers" hint="Just the 10 digits — the +91 is added for you.">
+              <Field
+                field="contact_phone_boxes"
+                invalid={hasIssue(issues, "contact_phone_boxes")}
+                label="Contact numbers"
+                hint="10 digits per box — the +91 is added for you."
+                keyHint
+              >
                 <ContactPhonesField
                   boxes={form.contact_phone_boxes}
                   onChange={(boxes) => set("contact_phone_boxes", boxes)}
@@ -530,6 +617,8 @@ export default function PropertyFormDialog<T extends EditableContentRecord = Pro
               </Field>
 
               <Field
+                field="location_url"
+                invalid={hasIssue(issues, "location_url")}
                 label="Location link (internal only)"
                 hint="A map/pin link for your own team. Never shown on the public site and never included in any message sent to a client, broker or agent."
                 span
@@ -549,6 +638,8 @@ export default function PropertyFormDialog<T extends EditableContentRecord = Pro
               </Field>
 
               <Field
+                field="instagram_reel_url"
+                invalid={hasIssue(issues, "instagram_reel_url")}
                 label="Instagram reel link"
                 hint={`If this ${noun} was posted as an Instagram reel, paste its link — comments and shares of that reel get matched back to this ${noun}.`}
                 span
@@ -576,15 +667,10 @@ export default function PropertyFormDialog<T extends EditableContentRecord = Pro
               <textarea className="textarea" rows={2} value={form.extra_notes} onChange={(e) => set("extra_notes", e.target.value)} placeholder="e.g. floor, facing, parking, possession" />
             </Field>
 
-            {formError && (
-              <div ref={errorRef}>
-                <Note tone="bad" icon={<IconAlert size={16} />}>
-                  {formError}
-                </Note>
-              </div>
-            )}
           </div>
         </div>
+
+        <FormIssues issues={issues} error={formError} />
 
         <div className="detail-modal__foot">
           <Button variant="ghost" onClick={onClose} disabled={saving}>

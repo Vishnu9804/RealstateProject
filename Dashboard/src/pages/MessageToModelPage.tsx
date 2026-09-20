@@ -33,7 +33,7 @@ const PROPERTY_FIELDS: [string, string][] = [
   ["price_text", "Price"],
   ["price_amount_inr", "Price (₹)"],
   ["contact_name", "Contact name"],
-  ["contact_phone", "Contact phone"],
+  ["contact_phones", "Contact numbers"],
   ["review_status", "Tab"],
   ["needs_review", "Needs review"],
   ["review_notes", "Review notes"],
@@ -52,7 +52,7 @@ const REQUIREMENT_FIELDS: [string, string][] = [
   ["budget_min_inr", "Budget min (₹)"],
   ["budget_max_inr", "Budget max (₹)"],
   ["contact_name", "Contact name"],
-  ["contact_phone", "Contact phone"],
+  ["contact_phones", "Contact numbers"],
   ["description", "Description"],
   ["record_id", "Record id"],
 ];

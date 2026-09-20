@@ -5,11 +5,15 @@ import { inquiryClientApi, type ClientDetailsBody } from "../api/inquiryClientAp
 import type { InquiryClientRecord } from "../api/types";
 import { friendlyError } from "../lib/apiError";
 import { loadClientPhoto, setCachedClientPhoto } from "../lib/clientPhotoCache";
+import { sizeRangeError } from "../lib/fieldChecks";
 import { formatCompactInr, parseCompactInr } from "../lib/formatters";
 import { fileToClientPhoto } from "../lib/imageProcessing";
+import { formatPhone, phoneFieldError, toStoredNumber, toTypedNumber } from "../lib/phone";
+import { PhoneInput } from "./ContactPhonesField";
 import { FURNISHING_OPTIONS } from "./PropertyFormDialog";
 import { useToast } from "./ui/Toast";
 import { Button, Note } from "./ui/Primitives";
+import { FormIssues, hasIssue, useFocusFirstIssue, type FieldIssue } from "./ui/FormIssues";
 import { IconAlert, IconCheck, IconImage, IconPlus, IconTrash, IconX } from "./ui/Icons";
 
 /**
@@ -102,12 +106,23 @@ function sizesToSend(form: FormState): Record<string, string> | null {
   return Object.keys(sizes).length > 0 ? sizes : null;
 }
 
-/** Trimmed, blanks dropped, in the order typed — the same "empty means
- *  cleared" shape sizesToSend uses. De-duplication and the count/length caps
- *  are the backend's own job (manual_client_service._clean_additional_phones);
- *  this only avoids sending obviously-empty rows left by a removed box. */
+/** The boxes as the backend stores them: "+91" back on the front of each
+ *  one, blanks dropped, in the order typed — the same "empty means cleared"
+ *  shape sizesToSend uses. De-duplication and the count cap are the
+ *  backend's own job (manual_client_service._clean_additional_phones); this
+ *  only avoids sending obviously-empty rows left by a removed box.
+ *
+ *  The boxes hold the ten digits a person typed, never the stored form (see
+ *  PhoneInput) — toStoredNumber is the one end of that conversion and
+ *  toTypedNumber in toFormState below is the other. A box that is not a
+ *  number at all is a legacy value this dialog loaded and is sent exactly
+ *  as written; the form refuses to save while one is there (phoneFieldError),
+ *  so the fallback only matters for the frame before that check runs. */
 function phonesToSend(phones: string[]): string[] | null {
-  const cleaned = phones.map((phone) => phone.trim()).filter(Boolean);
+  const cleaned = phones
+    .map((phone) => phone.trim())
+    .filter(Boolean)
+    .map((phone) => toStoredNumber(phone) ?? phone);
   return cleaned.length > 0 ? cleaned : null;
 }
 
@@ -202,13 +217,17 @@ function toFormState(client: InquiryClientRecord): FormState {
   // start: an edit that touches nothing else then has nothing to send here.
   const types = splitTypes(client.property_type ?? "");
   return {
-    phone: client.phone,
+    // The ten digits, not the stored "+91…" — every phone box in the
+    // application now holds what was typed and prints the country code as
+    // furniture beside it (PhoneInput). phonesToSend/toStoredNumber put it
+    // back on the way out.
+    phone: toTypedNumber(client.phone),
     name: client.name ?? "",
     email: client.email ?? "",
     current_address: client.current_address ?? "",
     about_loan: client.about_loan ?? "",
     notes: client.notes ?? "",
-    additional_phones: client.additional_phones ?? [],
+    additional_phones: (client.additional_phones ?? []).map(toTypedNumber),
     purpose: client.purpose ?? "",
     property_type: types.join(", "),
     property_sizes: matchSizes(types, client.property_sizes),
@@ -255,9 +274,17 @@ function buildBody(
   initial: FormState,
   mode: "add" | "edit",
   client: InquiryClientRecord | undefined,
-): { body: ClientDetailsBody; error: string | null } {
+): { body: ClientDetailsBody; issues: FieldIssue[] } {
   const changed = (key: keyof FormState) => mode === "add" || form[key] !== initial[key];
   const body: ClientDetailsBody = {};
+  // EVERY problem, not the first one. This used to return on the first
+  // fault it met, so a client with a bad budget AND a bad size took one
+  // Save per mistake to find out. The body is still built as far as it can
+  // be -- it is simply not sent while issues is non-empty.
+  const issues: FieldIssue[] = [];
+  const add = (field: string, message: string | null) => {
+    if (message) issues.push({ field, message });
+  };
 
   let min = client?.budget_min_inr ?? null;
   let max = client?.budget_max_inr ?? null;
@@ -269,18 +296,28 @@ function buildBody(
     const raw = form[key].trim();
     const amount = raw ? parseCompactInr(raw) : null;
     if (raw && amount === null) {
-      return { body, error: `The ${label} budget isn't an amount — try 45L, 1.2cr or 4500000.` };
+      add(key, `The ${label} budget isn't an amount — try 45L, 1.2cr or 4500000.`);
+      continue;
     }
     if (key === "budget_min_inr") min = amount;
     else max = amount;
     if (mode === "edit" || amount !== null) body[key] = amount;
   }
-  if ((changed("budget_min_inr") || changed("budget_max_inr")) && min !== null && max !== null && min > max) {
-    return { body, error: "The minimum budget is above the maximum." };
+  // Only when neither box is separately wrong, so a reversed pair is not
+  // also told it is unreadable. Raised against the maximum: with two boxes
+  // and one relationship between them, that is the one just left.
+  if (issues.length === 0 && (changed("budget_min_inr") || changed("budget_max_inr")) && min !== null && max !== null && min > max) {
+    add("budget_max_inr", "The minimum budget is above the maximum.");
   }
 
   if (changed("email") && form.email.trim() && !EMAIL_PATTERN.test(form.email.trim())) {
-    return { body, error: "That email address doesn't look right." };
+    add("email", "That email address doesn't look right — it should read like name@example.com.");
+  }
+
+  // A size box per picked type. Checked in the unit that type is actually
+  // asked in, so the example in the message matches the box it is under.
+  for (const type of splitTypes(form.property_type)) {
+    add(sizeFieldKey(type), sizeRangeError(form.property_sizes[type] ?? "", sizeUnitOf(type)));
   }
 
   for (const key of TEXT_KEYS) {
@@ -305,27 +342,55 @@ function buildBody(
   if (mode === "add" ? phones !== null : JSON.stringify(phones) !== JSON.stringify(phonesToSend(initial.additional_phones))) {
     body.additional_phones = phones;
   }
-  return { body, error: null };
+  return { body, issues };
 }
 
+/** The `data-field` a per-type size box carries. Derived from the type
+ *  name the same way its input id is, so the two can never disagree. */
+function sizeFieldKey(type: string): string {
+  return `size-${type.toLowerCase().replace(/[^a-z0-9]+/g, "-")}`;
+}
+
+/** Same two kinds of hint PropertyFormDialog's Field draws, for the same
+ *  reason and with the same styling — see that component's comment.
+ *  `keyHint` marks a box whose value is read by machinery rather than only
+ *  by a person, where typing it the wrong way stores the wrong thing
+ *  without ever failing. */
 function Field({
   label,
   htmlFor,
   hint,
+  keyHint,
+  field,
+  invalid,
   children,
 }: {
   label: string;
   htmlFor?: string;
   hint?: React.ReactNode;
+  keyHint?: boolean;
+  /** The key this box raises its issues under -- written out as
+   *  `data-field` so focusFirstIssue can find it. */
+  field?: string;
+  /** A save was just refused over this box. */
+  invalid?: boolean;
   children: React.ReactNode;
 }) {
   return (
-    <div className="field">
-      <label className="field__hint" htmlFor={htmlFor} style={{ fontWeight: 560, color: "var(--ink-2)" }}>
+    <div className={`field${invalid ? " field--bad" : ""}`} data-field={field}>
+      <label className="field__hint" htmlFor={htmlFor} style={{ fontWeight: 560, color: invalid ? undefined : "var(--ink-2)" }}>
         {label}
       </label>
       {children}
-      {hint && <span className="field__hint">{hint}</span>}
+      {hint &&
+        (keyHint ? (
+          <span className="field__hint field__hint--key">
+            <IconAlert size={14} />
+            <span>{hint}</span>
+          </span>
+        ) : (
+          <span className="field__hint">{hint}</span>
+        ))}
     </div>
   );
 }
@@ -365,7 +430,11 @@ export default function ClientFormDialog({
   const [form, setForm] = useState<FormState>(initial);
   const [saving, setSaving] = useState(false);
   const [formError, setFormError] = useState<string | null>(null);
-  const errorRef = useRef<HTMLDivElement>(null);
+  // Everything the LAST Save attempt refused, together, in the pinned bar
+  // above the footer -- see components/ui/FormIssues.
+  const [issues, setIssues] = useState<FieldIssue[]>([]);
+  const bodyRef = useRef<HTMLDivElement>(null);
+  useFocusFirstIssue(bodyRef, issues);
   const requirementsLocked = mode === "edit" && assignedCount > 0;
 
   // --- photo -------------------------------------------------------------
@@ -416,11 +485,6 @@ export default function ClientFormDialog({
     document.addEventListener("keydown", onKeyDown);
     return () => document.removeEventListener("keydown", onKeyDown);
   }, [onClose, saving]);
-
-  // The error sits at the foot of a tall form — bring it into view.
-  useEffect(() => {
-    if (formError) errorRef.current?.scrollIntoView({ block: "nearest", behavior: "smooth" });
-  }, [formError]);
 
   function set<K extends keyof FormState>(key: K, value: FormState[K]) {
     setForm((prev) => ({ ...prev, [key]: value }));
@@ -487,14 +551,45 @@ export default function ClientFormDialog({
 
   async function handleSave() {
     if (saving) return;
-    const phone = form.phone.trim();
-    if (mode === "add" && !phone) {
-      setFormError("Enter the client's WhatsApp number — it's what every message and match is tied to.");
+    const typedPhone = form.phone.trim();
+    if (mode === "add" && !typedPhone) {
+      const missing = [{ field: "phone", message: "Enter the client's WhatsApp number — it's what every message and match is tied to." }];
+      setIssues(missing);
+      setFormError(null);
       return;
     }
-    const { body, error } = buildBody(form, initial, mode, client);
-    if (error) {
-      setFormError(error);
+    // The same ten-digit rule every other phone box in the application now
+    // applies, checked here rather than only by the backend so the answer
+    // arrives in the dialog the box is in.
+    //
+    // The primary number is checked in "add" only. In "edit" its box is
+    // disabled and holds whatever is already stored — a client's number is
+    // who they are here and cannot be changed from this dialog at all — so
+    // refusing to save a name change over a number nobody can retype from
+    // here would be a dead end, not a correction. The other numbers ARE
+    // editable in both modes, so they are checked in both.
+    const phoneIssues: FieldIssue[] = [];
+    if (mode === "add") {
+      const bad = phoneFieldError(typedPhone);
+      if (bad) phoneIssues.push({ field: "phone", message: bad });
+    }
+    form.additional_phones.forEach((extra, index) => {
+      const bad = phoneFieldError(extra);
+      if (bad) phoneIssues.push({ field: `other-phone-${index}`, message: bad });
+    });
+    // "+919016987654" — the one shape the database holds. The backend
+    // normalizes it again (phone_utils.normalize_phone); sending it already
+    // canonical is what keeps the row, the dialog and every other page
+    // showing one spelling of one number.
+    const phone = toStoredNumber(typedPhone) ?? typedPhone;
+    const { body, issues: bodyIssues } = buildBody(form, initial, mode, client);
+    // The phone boxes first: they are the top of the form, so this is the
+    // order the reader meets the problems in, which is the order
+    // focusFirstIssue should travel in.
+    const found = [...phoneIssues, ...bodyIssues];
+    setIssues(found);
+    if (found.length > 0) {
+      setFormError(null);
       return;
     }
     if (photoDirty) body.photo_url = photo;
@@ -519,7 +614,7 @@ export default function ClientFormDialog({
       toast.push({
         tone: "ok",
         title: mode === "add" ? "Client added" : "Client updated",
-        message: saved.name || saved.phone,
+        message: saved.name || formatPhone(saved.phone),
       });
       onSaved(saved, mode);
     } catch (err) {
@@ -531,7 +626,8 @@ export default function ClientFormDialog({
     }
   }
 
-  const title = mode === "add" ? "Add a client" : client?.name || client?.phone || "Edit client";
+  const title =
+    mode === "add" ? "Add a client" : client?.name || (client ? formatPhone(client.phone) : "") || "Edit client";
   const purposeOptions = withCurrent(PURPOSES, form.purpose);
   const furnishingOptions = withCurrent(
     FURNISHING_OPTIONS.map((option) => ({ value: option, label: option })),
@@ -572,7 +668,7 @@ export default function ClientFormDialog({
           </button>
         </div>
 
-        <div className="detail-modal__body">
+        <div className="detail-modal__body" ref={bodyRef}>
           <div className="stack stack-4">
             {requirementsLocked && (
               <Note tone="warn" icon={<IconAlert size={16} />}>
@@ -655,47 +751,44 @@ export default function ClientFormDialog({
             <Field
               label="WhatsApp number"
               htmlFor="client-form-phone"
+              field="phone"
+              invalid={hasIssue(issues, "phone")}
               hint={
                 mode === "add"
-                  ? "With or without the country code — it's how this client is recognised everywhere."
+                  ? "10 digits — this can never be changed later."
                   : "A client's number is who they are here, so it can't be changed."
               }
+              keyHint={mode === "add"}
             >
-              <input
+              <PhoneInput
                 id="client-form-phone"
-                className="input"
-                type="tel"
-                inputMode="tel"
-                autoComplete="off"
-                autoFocus={mode === "add"}
                 value={form.phone}
-                onChange={(event) => set("phone", event.target.value)}
-                placeholder="e.g. 98765 43210"
+                onChange={(value) => set("phone", value)}
+                autoFocus={mode === "add"}
                 disabled={mode === "edit" || saving}
-                maxLength={24}
+                ariaLabel="WhatsApp number"
               />
             </Field>
 
             <Field
               label="Other numbers"
-              hint="Not verified — a landline, a spouse's number, anything else worth having on file."
+              hint="Not verified — a landline, a spouse's number, anything worth having on file. 10 digits per box."
             >
               <div className="stack stack-2">
                 {form.additional_phones.map((phone, index) => (
-                  <div className="row-flex" style={{ gap: 8, flexWrap: "nowrap" }} key={index}>
-                    <input
-                      className="input"
-                      style={{ flex: 1 }}
-                      type="tel"
-                      inputMode="tel"
-                      autoComplete="off"
-                      autoFocus
+                  <div
+                    className="row-flex"
+                    style={{ gap: 8, flexWrap: "nowrap" }}
+                    data-field={`other-phone-${index}`}
+                    key={index}
+                  >
+                    <PhoneInput
                       value={phone}
-                      onChange={(event) => setPhoneAt(index, event.target.value)}
-                      placeholder="e.g. 98765 43210"
+                      onChange={(value) => setPhoneAt(index, value)}
+                      invalid={hasIssue(issues, `other-phone-${index}`)}
+                      autoFocus
                       disabled={saving}
-                      maxLength={32}
-                      aria-label={`Other number ${index + 1}`}
+                      ariaLabel={`Other number ${index + 1}`}
                     />
                     <Button
                       variant="ghost"
@@ -725,7 +818,7 @@ export default function ClientFormDialog({
               />
             </Field>
 
-            <Field label="Email" htmlFor="client-form-email" hint="Optional.">
+            <Field label="Email" htmlFor="client-form-email" hint="Optional." field="email" invalid={hasIssue(issues, "email")}>
               <input
                 id="client-form-email"
                 className="input"
@@ -836,7 +929,8 @@ export default function ClientFormDialog({
             {pickedTypes.length > 0 && (
               <Field
                 label="Preferred size (optional)"
-                hint="Only if they have one in mind — a rough number or a range is perfect."
+                hint="A number or a range — smaller first. Nothing else is stored."
+                keyHint
               >
                 <div className="size-rows">
                   {pickedTypes.map((type) => {
@@ -850,7 +944,11 @@ export default function ClientFormDialog({
                         <div className="size-row__box">
                           <input
                             id={inputId}
-                            className="input"
+                            // Marked on the CONTROL, not on the Field: this
+                            // one field holds a box per picked type, and
+                            // marking the field would point at all of them.
+                            data-field={sizeFieldKey(type)}
+                            className={`input${hasIssue(issues, sizeFieldKey(type)) ? " input--bad" : ""}`}
                             value={form.property_sizes[type] ?? ""}
                             onChange={(event) =>
                               setForm((prev) => ({
@@ -937,7 +1035,8 @@ export default function ClientFormDialog({
               </div>
               <div style={{ display: "grid", gridTemplateColumns: "repeat(2, minmax(0, 1fr))", gap: 10 }}>
                 <input
-                  className="input"
+                  data-field="budget_min_inr"
+                  className={`input${hasIssue(issues, "budget_min_inr") ? " input--bad" : ""}`}
                   inputMode="decimal"
                   aria-label="Minimum budget"
                   value={form.budget_min_inr}
@@ -948,7 +1047,8 @@ export default function ClientFormDialog({
                   maxLength={20}
                 />
                 <input
-                  className="input"
+                  data-field="budget_max_inr"
+                  className={`input${hasIssue(issues, "budget_max_inr") ? " input--bad" : ""}`}
                   inputMode="decimal"
                   aria-label="Maximum budget"
                   value={form.budget_max_inr}
@@ -985,15 +1085,10 @@ export default function ClientFormDialog({
               />
             </Field>
 
-            {formError && (
-              <div ref={errorRef}>
-                <Note tone="bad" icon={<IconAlert size={16} />}>
-                  {formError}
-                </Note>
-              </div>
-            )}
           </div>
         </div>
+
+        <FormIssues issues={issues} error={formError} />
 
         <div className="detail-modal__foot">
           <Button variant="ghost" onClick={onClose} disabled={saving}>

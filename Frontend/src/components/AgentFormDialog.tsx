@@ -1,11 +1,13 @@
-import { useEffect, useRef, useState } from "react";
+import { useRef, useState } from "react";
 import { createPortal } from "react-dom";
 import { agentApi } from "../api/agentApi";
 import type { AgentSummary } from "../api/types";
 import { friendlyError } from "../lib/apiError";
-import { whatsappNumberError } from "../lib/fieldChecks";
+import { phoneFieldError, toStoredNumber, toTypedNumber } from "../lib/phone";
+import { PhoneInput } from "./ContactPhonesField";
 import { useToast } from "./ui/Toast";
-import { Button, Note } from "./ui/Primitives";
+import { Button } from "./ui/Primitives";
+import { FormIssues, useFocusFirstIssue, type FieldIssue } from "./ui/FormIssues";
 import { IconAlert, IconPlus, IconTag, IconX } from "./ui/Icons";
 
 /**
@@ -28,14 +30,16 @@ export default function AgentFormDialog({
   const mode: "add" | "edit" = agent ? "edit" : "add";
   const toast = useToast();
   const [name, setName] = useState(agent?.name ?? "");
-  const [phone, setPhone] = useState(agent?.phone ?? "");
+  // The ten digits, not the stored "+91…" — the same rule every other phone
+  // box in the application follows now (see components/ContactPhonesField's
+  // PhoneInput). toStoredNumber in handleSave puts the country code back.
+  const [phone, setPhone] = useState(agent ? toTypedNumber(agent.phone) : "");
   const [areas, setAreas] = useState<string[]>(agent?.coverage_areas ?? []);
   const [newArea, setNewArea] = useState("");
   const [saving, setSaving] = useState(false);
   const areaInputRef = useRef<HTMLInputElement>(null);
   const nameInputRef = useRef<HTMLInputElement>(null);
   const phoneInputRef = useRef<HTMLInputElement>(null);
-  const errorRef = useRef<HTMLDivElement>(null);
   // Why the last Save attempt didn't go through — the missing-field case
   // included. It used to be silent: Save was simply disabled while a
   // required field was blank, so pressing it did nothing, said nothing, and
@@ -46,10 +50,14 @@ export default function AgentFormDialog({
   // so the red goes away as the problem is fixed rather than on the next
   // Save.
   const [invalid, setInvalid] = useState<{ name: boolean; phone: boolean }>({ name: false, phone: false });
+  // Both problems at once rather than whichever was found first: a dialog
+  // with two boxes in it should not need two Saves to say so. Shown in the
+  // pinned bar above the footer -- see components/ui/FormIssues.
+  const [issues, setIssues] = useState<FieldIssue[]>([]);
+  const bodyRef = useRef<HTMLDivElement>(null);
+  useFocusFirstIssue(bodyRef, issues);
 
-  useEffect(() => {
-    if (formError) errorRef.current?.scrollIntoView({ block: "nearest", behavior: "smooth" });
-  }, [formError]);
+
 
   function addArea() {
     const cleaned = newArea.trim();
@@ -76,39 +84,45 @@ export default function AgentFormDialog({
     if (saving) return;
     const trimmedName = name.trim();
     const trimmedPhone = phone.trim();
-    const missingName = trimmedName.length === 0;
-    const missingPhone = trimmedPhone.length === 0;
-    if (missingName || missingPhone) {
-      setInvalid({ name: missingName, phone: missingPhone });
-      setFormError(
-        missingName && missingPhone
-          ? "Enter the agent's name and WhatsApp number — both are needed before they can be sent a site visit."
-          : missingName
-            ? "Enter the agent's name — it's what every client and visit is listed under."
-            : "Enter the agent's WhatsApp number — it's where every site-visit hand-off is sent.",
-      );
-      (missingName ? nameInputRef : phoneInputRef).current?.focus();
+    // BOTH boxes are judged, and both answers are kept. This used to report
+    // whichever it met first -- a blank name and a bad number meant two
+    // Saves to be told about two boxes that were both visible the whole
+    // time.
+    const found: FieldIssue[] = [];
+    if (trimmedName.length === 0) {
+      found.push({ field: "name", message: "Enter the agent's name — it's what every client and visit is listed under." });
+    }
+    if (trimmedPhone.length === 0) {
+      found.push({
+        field: "phone",
+        message: "Enter the agent's WhatsApp number — it's where every site-visit hand-off is sent.",
+      });
+    } else {
+      // Present, but is it a number? "abc" used to save happily and the
+      // agent card then read "abc" — an agent nothing can ever be sent to.
+      // The same ten-digit rule as every other phone box in the
+      // application, rather than a looser one of its own. The DUPLICATE
+      // check is deliberately not attempted here: only the backend can see
+      // the other agents, and it answers with a 409 that lands in
+      // formError below.
+      const badPhone = phoneFieldError(trimmedPhone);
+      if (badPhone) found.push({ field: "phone", message: badPhone });
+    }
+    setIssues(found);
+    setInvalid({ name: found.some((i) => i.field === "name"), phone: found.some((i) => i.field === "phone") });
+    if (found.length > 0) {
+      setFormError(null);
       return;
     }
 
-    // Present, but is it a number? The Inquiries page's client dialog has
-    // always answered this (through the backend, in these exact words) and
-    // this one never did: "abc" saved happily and the agent card then read
-    // "abc" — an agent nothing can ever be sent to. The DUPLICATE check is
-    // deliberately not attempted here: only the backend can see the other
-    // agents, and it answers with a 409 that lands in formError below.
-    const badPhone = whatsappNumberError(trimmedPhone);
-    if (badPhone) {
-      setInvalid({ name: false, phone: true });
-      setFormError(badPhone);
-      phoneInputRef.current?.focus();
-      return;
-    }
 
     setSaving(true);
     setFormError(null);
     try {
-      const body = { name: trimmedName, phone: trimmedPhone, coverage_areas: areas };
+      // "+919003455667" — what the backend normalizes to anyway
+      // (phone_utils.normalize_phone), sent already canonical so what the
+      // dialog shows and what the row holds can never disagree.
+      const body = { name: trimmedName, phone: toStoredNumber(trimmedPhone) ?? trimmedPhone, coverage_areas: areas };
       if (mode === "edit" && agent) {
         const updated = await agentApi.updateAgent(agent.agent_id, body);
         toast.push({ tone: "ok", title: "Agent updated", message: updated.name });
@@ -147,10 +161,10 @@ export default function AgentFormDialog({
           </button>
         </div>
 
-        <div className="detail-modal__body">
+        <div className="detail-modal__body" ref={bodyRef}>
           <div className="stack stack-4">
             <div style={{ display: "grid", gridTemplateColumns: "repeat(auto-fit, minmax(220px, 1fr))", gap: 14 }}>
-              <div className="field">
+              <div className={`field${invalid.name ? " field--bad" : ""}`} data-field="name">
                 <label className="field__hint" style={{ fontWeight: 560, color: "var(--ink-2)" }} htmlFor="agent-name">
                   Name <span style={{ color: "var(--bad)" }}>*</span>
                 </label>
@@ -168,22 +182,26 @@ export default function AgentFormDialog({
                   autoFocus
                 />
               </div>
-              <div className="field">
+              <div className={`field${invalid.phone ? " field--bad" : ""}`} data-field="phone">
                 <label className="field__hint" style={{ fontWeight: 560, color: "var(--ink-2)" }} htmlFor="agent-phone">
                   WhatsApp number <span style={{ color: "var(--bad)" }}>*</span>
                 </label>
-                <input
+                <PhoneInput
                   id="agent-phone"
-                  ref={phoneInputRef}
-                  className={`input${invalid.phone ? " input--bad" : ""}`}
-                  aria-invalid={invalid.phone || undefined}
+                  inputRef={phoneInputRef}
+                  invalid={invalid.phone}
                   value={phone}
-                  onChange={(e) => {
-                    setPhone(e.target.value);
-                    if (invalid.phone && e.target.value.trim()) setInvalid((prev) => ({ ...prev, phone: false }));
+                  onChange={(value) => {
+                    setPhone(value);
+                    if (invalid.phone && value) setInvalid((prev) => ({ ...prev, phone: false }));
                   }}
-                  placeholder="90034 55667"
+                  ariaLabel="WhatsApp number"
+                  placeholder="9003455667"
                 />
+                <span className="field__hint field__hint--key">
+                  <IconAlert size={14} />
+                  <span>10 digits — every site-visit hand-off is sent here.</span>
+                </span>
               </div>
             </div>
 
@@ -229,15 +247,10 @@ export default function AgentFormDialog({
               <span className="field__hint">Optional — used to flag "Covers this area" when assigning a client.</span>
             </div>
 
-            {formError && (
-              <div ref={errorRef}>
-                <Note tone="bad" icon={<IconAlert size={16} />}>
-                  {formError}
-                </Note>
-              </div>
-            )}
           </div>
         </div>
+
+        <FormIssues issues={issues} error={formError} />
 
         <div className="detail-modal__foot">
           <Button variant="ghost" onClick={onClose} disabled={saving}>

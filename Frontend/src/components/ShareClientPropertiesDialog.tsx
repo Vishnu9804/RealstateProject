@@ -2,6 +2,7 @@ import { useEffect, useRef, useState } from "react";
 import { propertyShareApi } from "../api/propertyShareApi";
 import type { InquiryClientRecord, ShareTarget } from "../api/types";
 import { friendlyError } from "../lib/apiError";
+import { formatPhone } from "../lib/phone";
 import {
   buildClientShareParts,
   MAX_PHOTOS_PER_PROPERTY,
@@ -97,14 +98,14 @@ export default function ShareClientPropertiesDialog({
         closing,
         properties: properties.map((property, index) => ({ record_id: property.record_id, details: details[index] ?? "" })),
       });
-      const recipient = client.name || result.to_phone;
+      const recipient = client.name || formatPhone(result.to_phone);
       const photos = result.photos_sent > 0 ? ` with ${result.photos_sent} photo${result.photos_sent === 1 ? "" : "s"}` : "";
       if (result.sent) {
         toast.push({
           tone: "ok",
           title: "Property details sent",
           message: `${result.properties_sent} ${noun} sent to ${recipient}${photos}${
-            result.from_number ? ` from ${result.from_number}` : ""
+            result.from_number ? ` from ${formatPhone(result.from_number)}` : ""
           }.`,
         });
       } else if (result.properties_sent === 0 && !result.from_number) {
@@ -209,6 +210,6 @@ function clientLine(client: InquiryClientRecord): string {
       client.preferred_areas,
     ]
       .filter(Boolean)
-      .join(" · ") || client.phone
+      .join(" · ") || formatPhone(client.phone)
   );
 }

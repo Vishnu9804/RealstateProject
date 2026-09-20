@@ -30,6 +30,7 @@ import {
   type FilterState,
 } from "../lib/propertyFilters";
 import { CLIENT_FILTER_DEF_BY_KEY, CLIENT_FILTER_DEFS } from "../lib/clientFilters";
+import { formatPhone } from "../lib/phone";
 import { useToast } from "../components/ui/Toast";
 import FilterPopover from "../components/ui/FilterPopover";
 import ClientMatchesDialog, { type DialogView } from "../components/ClientMatchesDialog";
@@ -383,7 +384,13 @@ export default function InquiryClientsPage() {
       if (!needle) return true;
       const haystack = [
         client.name,
+        // As stored AND as shown, so typing the number the way the row
+        // prints it ("+91 90169 87654" pasted back in, or "+91 9016987654")
+        // finds the client, not just typing it the way the row holds it.
+        // The bare digits are already inside the stored form.
         client.phone,
+        formatPhone(client.phone),
+        ...(client.additional_phones ?? []).flatMap((extra) => [extra, formatPhone(extra)]),
         client.email,
         client.purpose,
         client.property_type,
@@ -785,7 +792,8 @@ export default function InquiryClientsPage() {
           body={
             <div className="stack stack-3">
               <p className="section-head__sub" style={{ margin: 0 }}>
-                Removes <strong>{deleteTarget.name || deleteTarget.phone}</strong> ({deleteTarget.phone}) — their
+                Removes <strong>{deleteTarget.name || formatPhone(deleteTarget.phone)}</strong> (
+                {formatPhone(deleteTarget.phone)}) — their
                 requirements, matches and hand-picked properties.
               </p>
               <p className="section-head__sub" style={{ margin: 0 }}>
@@ -1165,7 +1173,10 @@ function ClientTable({
                     )}
                   </td>
                   <td className="cell-truncate">
-                    <Copyable text={client.phone} />
+                    {/* Shown spaced, copied as stored — the same split
+                        ui/ContactPhones makes for a listing's numbers, so
+                        one number reads one way on every page. */}
+                    <Copyable text={client.phone}>{formatPhone(client.phone)}</Copyable>
                   </td>
                   <td>{client.purpose ?? "—"}</td>
                   <td>{client.property_type ?? "—"}</td>

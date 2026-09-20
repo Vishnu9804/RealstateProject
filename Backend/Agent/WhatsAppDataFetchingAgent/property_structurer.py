@@ -345,7 +345,7 @@ _MESSAGE_MODEL_FIELDS = {
     "price_amount_inr",
     "listing_type",
     "contact_name",
-    "contact_phone",
+    "contact_phones",
     "description",
     "review_status",
     "review_notes",
@@ -1624,6 +1624,11 @@ def _to_structured_property(
         price_amount_inr=listing.price_amount_inr,
         listing_type=listing.listing_type,
         contact_name=listing.contact_name,
+        # The LLM returns ONE free-text phone string (glm_extraction_schema's
+        # contact_phone), which is often two numbers with a slash or nothing
+        # between them. contact_phone is StructuredProperty's inbound-only
+        # alias: it is split into contact_phones there and never stored or
+        # returned under this name. See that model's _reconcile_contact_phones.
         contact_phone=listing.contact_phone,
         description=listing.description,
         review_status="accepted" if listing.in_service_area else "outsider",

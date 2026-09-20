@@ -218,19 +218,42 @@ def _clean_details(fields: Dict[str, Any]) -> Dict[str, Any]:
 
 
 def _clean_additional_phones(value: Any) -> Optional[list]:
-    """Trims each entry, drops blanks and exact duplicates (order kept), and
-    caps both the count and each entry's length. Deliberately NOT run
-    through phone_utils.normalize_phone or rejected for looking unlike a
-    phone number: these are never verified and never used to reach anyone
-    programmatically, only stored and shown exactly as staff typed them —
-    a landline, a name-and-number note, whatever is useful to have on file.
-    None (not []) when nothing is left, the same "empty means cleared" rule
-    every other field here follows."""
+    """Every extra number on a client, in the ONE shape this application
+    stores a phone number in: "+91" followed by ten digits. Blanks and
+    duplicates dropped, order kept, count capped. None (not []) when nothing
+    is left, the same "empty means cleared" rule every other field here
+    follows.
+
+    WHAT CHANGED AND WHY
+
+    These used to be stored exactly as staff typed them, on the grounds that
+    they are never verified and nothing is ever sent to one. That is still
+    true of what they are FOR -- but it was never a reason for them to be
+    spelled differently from every other number in the database. The same
+    number sat in a property's contact list as "+919016987654" and on a
+    client as "90169 87654", and the two did not read, copy, search or
+    compare as the same number.
+
+    So they go through Model/phone_numbers.normalize_phone_list, which is
+    the one thing in this project that turns written-down numbers into
+    stored ones -- the same function a listing's contact_phones uses. It is
+    still not phone_utils.normalize_phone: that one answers "is this exactly
+    one valid number" and refuses anything else, which is right for
+    `clients.phone` (a primary key, where a wrong answer creates a duplicate
+    person) and wrong here. This one splits a box holding two numbers into
+    two, and keeps a value it cannot read as a number AT ALL exactly as
+    written rather than dropping it, so a note somebody deliberately stored
+    ("landline, ask for Ramesh") survives.
+
+    The per-entry length cap still applies, to that kept-as-written case --
+    a canonical number is 13 characters and can never reach it."""
     if not isinstance(value, list):
         return None
+    from Model import phone_numbers
+
     cleaned: list = []
     seen = set()
-    for entry in value:
+    for entry in phone_numbers.normalize_phone_list(value):
         text = str(entry).strip()[:_MAX_ADDITIONAL_PHONE_LENGTH]
         if not text or text in seen:
             continue

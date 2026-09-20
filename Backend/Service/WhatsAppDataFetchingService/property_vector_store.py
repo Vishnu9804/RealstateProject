@@ -16,6 +16,7 @@ mode.
 from __future__ import annotations
 
 import threading
+import time
 from datetime import datetime, timezone
 from typing import Any, Dict, List, Optional, Tuple
 
@@ -188,11 +189,85 @@ def get_properties_version() -> str:
         # knows the answer, and asking Postgres for it on that schedule was
         # itself enough to keep a scale-to-zero database permanently awake.
         if property_snapshot.holds_entire_table():
+            _maybe_refresh_from_external_edit()
             latest = property_snapshot.newest_update()
             return f"{property_snapshot.count()}:{latest.isoformat() if latest else '0'}"
         count, latest = property_repository.get_properties_version()
         return f"{count}:{latest.isoformat() if latest else '0'}"
     return f"{len(_properties)}:{_version_counter}"
+
+
+# How often _maybe_refresh_from_external_edit is allowed to actually ask
+# Postgres anything, in seconds. Deliberately longer than Neon's own
+# "suspend compute after" idle timeout (5 minutes by default) rather than
+# close to it: a check every 5 minutes would arrive just often enough to
+# keep resetting that timeout and never let a fully idle database suspend
+# at all, while checking every 10 lets it suspend between checks and only
+# briefly wakes it for the one cheap query below — see that function's own
+# docstring for the full cost trade-off this balances.
+_EXTERNAL_DRIFT_CHECK_INTERVAL_SECONDS = 600.0
+# time.monotonic(), never wall-clock time: a system clock adjustment must
+# never make this fire early or get stuck refusing to fire again.
+_last_external_drift_check = 0.0
+_external_drift_check_lock = threading.Lock()
+
+
+def _maybe_refresh_from_external_edit() -> None:
+    """Catches a `properties` row changed by something other than this
+    application — most notably a row edited directly in Neon's own SQL/
+    table editor, which never calls property_repository.update_property and
+    so never reaches property_snapshot.note_written. Left unchecked, the
+    in-memory snapshot would keep serving the pre-edit value forever: per
+    this module's own docstring, nothing else ever asks Postgres about a
+    property this process wasn't itself told changed.
+
+    Deliberately cheap and deliberately rare, to protect the two things this
+    snapshot exists to protect (see property_snapshot.py's own docstring):
+
+      - The check is property_repository.get_properties_version() — one
+        "count + max(updated_at)" aggregate that never touches image_urls
+        or embedding, the same query already used below for the (here,
+        unreachable) >5000-row case. It costs Postgres about as little as a
+        row count does.
+      - It only ever runs from inside get_properties_version(), which is
+        only ever called while something is actively polling the WhatsApp
+        status endpoint (every open dashboard tab, every few seconds) — an
+        idle backend with no open tab costs nothing extra, and a
+        scale-to-zero Neon database still gets to suspend between sessions.
+      - Throttled to at most once per _EXTERNAL_DRIFT_CHECK_INTERVAL_SECONDS
+        regardless of how often it's asked, so even a dashboard left open
+        all day adds only a handful of these tiny queries per hour.
+
+    A mismatch against the snapshot's own count/newest-update-time means
+    something changed outside this process; the fix is simply to invalidate
+    the snapshot (property_snapshot.invalidate()), which makes the very next
+    read — including the one about to happen a few lines below this call —
+    rebuild it from the database, the same lazy reload that already runs
+    once at startup.
+
+    This depends on `properties.updated_at` actually changing for an edit
+    made outside this app too — see Database/session.py's init_db, which
+    adds a database trigger for exactly that (the ORM's own
+    onupdate=func.now() on PropertyRow.updated_at only fires for writes this
+    process makes itself through SQLAlchemy).
+    """
+    global _last_external_drift_check
+    if time.monotonic() - _last_external_drift_check < _EXTERNAL_DRIFT_CHECK_INTERVAL_SECONDS:
+        return
+    with _external_drift_check_lock:
+        # Re-checked inside the lock: two requests arriving together must
+        # not both pay for the round trip, and only the first should.
+        if time.monotonic() - _last_external_drift_check < _EXTERNAL_DRIFT_CHECK_INTERVAL_SECONDS:
+            return
+        _last_external_drift_check = time.monotonic()
+    try:
+        db_count, db_latest = property_repository.get_properties_version()
+    except Exception:
+        # Best-effort — a transient database hiccup here must never break
+        # the status poll every open page depends on.
+        return
+    if db_count != property_snapshot.count() or db_latest != property_snapshot.newest_update():
+        property_snapshot.invalidate()
 
 
 # In-memory fallback only, for get/set_instagram_media_pk below — mirrors

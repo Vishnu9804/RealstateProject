@@ -7,9 +7,10 @@ import threading
 from typing import Any, Dict, List, Literal, Optional
 
 from fastapi import APIRouter, Depends, HTTPException, Request, Response
-from pydantic import BaseModel, Field, TypeAdapter
+from pydantic import BaseModel, Field, TypeAdapter, field_validator
 
 from Middleware import http_cache
+from Model import field_validation
 from Model.WhatsAppDataFetchingModel.property_record import PropertyRecord
 from Service.AuthManagementService.auth_dependencies import require_admin
 from Service.WhatsAppDataFetchingService import display_settings_service, property_pipeline_service
@@ -46,12 +47,23 @@ _list_bodies: Dict[str, bytes] = {}
 _list_bodies_lock = threading.Lock()
 
 
-class PropertyContentFields(BaseModel):
+class PropertyContentFields(field_validation.ListingContentValidators):
     """The fields the Properties page's Add/Edit dialog exposes — the same
     set the LLM structuring stage would otherwise fill in, plus
     instagram_reel_url (set only by a human, never by the LLM). Every field
     is optional: the dialog itself has no required inputs, so a property can
-    be saved with as little or as much detail as is known right now."""
+    be saved with as little or as much detail as is known right now.
+
+    Optional, but no longer unchecked. What a person types here used to be
+    stored exactly as typed — an area of -100 sqft, a contact number of
+    "xyz", a map pin of "not a url" and, worst of the four, an Instagram
+    reel of "hello", which counted as "this property has a reel" and put it
+    straight into the public landing page's Ready to Add list. The rules
+    come from Model/field_validation.py and are shared with the Builder
+    Projects page, which is the same dialog. They apply ONLY here, on the
+    request body: a listing captured from WhatsApp is built by the LLM stage
+    from whatever a broker wrote, and refusing one of those would lose a
+    real message rather than correct anyone."""
 
     property_type: Optional[str] = None
     bhk: Optional[str] = None
@@ -62,14 +74,16 @@ class PropertyContentFields(BaseModel):
     society_name: Optional[str] = None
     area_name: Optional[str] = None
     address: Optional[str] = None
-    area_sqft: Optional[float] = None
-    area_vaar: Optional[float] = None
+    # An area and a price are measurements: never negative, and never a
+    # number no property could have (see field_validation's own constants).
+    area_sqft: Optional[float] = Field(default=None, ge=0, le=field_validation.MAX_AREA)
+    area_vaar: Optional[float] = Field(default=None, ge=0, le=field_validation.MAX_AREA)
     # Human-only, like instagram_reel_url — never asked of the LLM (see
     # StructuredProperty.super_built).
     super_built: Optional[str] = None
     furnishing: Optional[str] = None
     price_text: Optional[str] = None
-    price_amount_inr: Optional[float] = None
+    price_amount_inr: Optional[float] = Field(default=None, ge=0, le=field_validation.MAX_INR)
     listing_type: Literal["Sale", "Rent"] = "Sale"
     contact_name: Optional[str] = None
     contact_phone: Optional[str] = None

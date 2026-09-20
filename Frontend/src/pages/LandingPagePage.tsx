@@ -5,6 +5,7 @@ import type { PropertyRecord } from "../api/types";
 import { useAppStatus } from "../state/StatusProvider";
 import { usePersistentState } from "../hooks/useUi";
 import { friendlyError } from "../lib/apiError";
+import { isInstagramReelUrl } from "../lib/fieldChecks";
 import { formatPrice, relativeTime } from "../lib/formatters";
 import {
   compileFilters,
@@ -57,7 +58,9 @@ function categoryOf(property: PropertyRecord): Category {
   // image_count, not image_urls.length — the polled list never carries
   // real photos (see propertyApi.getProperties), but the count is accurate.
   const hasImages = property.image_count > 0;
-  const hasReel = Boolean(property.instagram_reel_url);
+  // The same test `qualifying` uses below, so the Photo/Reel/Both split can
+  // never disagree with what got a property onto this page.
+  const hasReel = isInstagramReelUrl(property.instagram_reel_url);
   return hasImages && hasReel ? "both" : hasImages ? "image" : "reel";
 }
 
@@ -158,8 +161,16 @@ export default function LandingPagePage() {
   // The whole point of this page: only a property with something to show on
   // a landing page belongs here at all, and an unreviewed (needs_review)
   // property has no business going live before a human has looked at it.
+  // A reel counts only when it is a link the site can actually play (see
+  // lib/fieldChecks.isInstagramReelUrl). It used to be any non-empty text,
+  // so a property whose reel field held "hello" sat in Ready to Add
+  // offering a public listing with nothing behind it. New links are refused
+  // at the API now; this is what keeps one saved before that out.
   const qualifying = useMemo(
-    () => allProperties.filter((p) => (p.image_count > 0 || p.instagram_reel_url) && !p.needs_review),
+    () =>
+      allProperties.filter(
+        (p) => (p.image_count > 0 || isInstagramReelUrl(p.instagram_reel_url)) && !p.needs_review,
+      ),
     [allProperties],
   );
 

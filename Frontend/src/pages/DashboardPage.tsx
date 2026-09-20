@@ -8,7 +8,7 @@ import { useAppStatus } from "../state/StatusProvider";
 import { useAuth } from "../state/AuthProvider";
 import { useDebounced, usePersistentState, useSearchShortcut } from "../hooks/useUi";
 import { friendlyError } from "../lib/apiError";
-import { formatArea, formatPrice, relativeTime } from "../lib/formatters";
+import { formatArea, formatIst, formatPrice, relativeTime } from "../lib/formatters";
 import {
   addCachedProperty,
   getCachedPropertyList,
@@ -115,6 +115,17 @@ const FETCH_LIMIT = PROPERTY_FETCH_LIMIT;
  * every poll, sort and keystroke.
  */
 export const PAGE_SIZE = 20;
+
+/** Friendly text for PropertyRecord.source (data provenance — how this row
+ *  entered the database), shown in the detail dialog's Record ID block.
+ *  Falls back to the raw stored value for anything not listed here, so a
+ *  future/unknown source string still renders instead of disappearing. */
+const PROPERTY_SOURCE_LABELS: Record<string, string> = {
+  whatsapp: "via WhatsApp capture",
+  manual: "manually",
+  excel: "via Excel import",
+  unknown: "— source unknown",
+};
 
 type ViewMode = "table" | "cards";
 export type SortKey = "time" | "price" | "areaSqft" | "areaVaar" | "society" | "locality";
@@ -1872,7 +1883,9 @@ export function PropertyDetailDialog({
   }, [onClose, lightboxIndex, photoCount]);
 
   const movesTo = property.review_status === "outsider" ? "Main" : "Outsider";
-  const subtitle = [property.area_name, property.address].filter(Boolean).join(" · ");
+  const subtitle = [property.unit_no && `Unit ${property.unit_no}`, property.area_name, property.address]
+    .filter(Boolean)
+    .join(" · ");
 
   return createPortal(
     <>
@@ -2027,6 +2040,26 @@ export function PropertyDetailDialog({
                 </div>
               </div>
             )}
+
+            <div className="detail__block">
+              <div className="detail__k">Record ID</div>
+              <div className="detail__v">
+                <Copyable text={property.record_id} />
+              </div>
+              <div className="faint small" style={{ marginTop: 4 }}>
+                Added {PROPERTY_SOURCE_LABELS[property.source] ?? property.source}
+              </div>
+            </div>
+
+            <div className="detail__block">
+              <div className="detail__k">Landing page</div>
+              <div className="detail__v">{property.on_landing_page ? "Published" : "Not published"}</div>
+              <div className="faint small" style={{ marginTop: 4 }}>
+                {property.qualified_at ? `Qualified ${formatIst(property.qualified_at)}` : "Not yet qualified"}
+                {property.landing_page_updated_at &&
+                  ` · Last changed ${formatIst(property.landing_page_updated_at)}`}
+              </div>
+            </div>
           </div>
 
           {/* For a flagged property this holds the extracted excerpt of the

@@ -15,8 +15,9 @@ by the caller.
 from typing import List, Literal, Optional
 
 from fastapi import APIRouter, Depends, HTTPException
-from pydantic import BaseModel
+from pydantic import BaseModel, Field, field_validator, model_validator
 
+from Model import field_validation
 from Model.BrokerRequirementModel.broker_requirement import BrokerRequirementRecord
 from Service.AuthManagementService.auth_dependencies import require_admin
 from Service.BrokerRequirementService import requirement_pipeline_service
@@ -46,12 +47,46 @@ class RequirementUpdateRequest(BaseModel):
     # requirement_pipeline_service).
     furnishing: Optional[str] = None
     budget_text: Optional[str] = None
-    budget_min_inr: Optional[float] = None
-    budget_max_inr: Optional[float] = None
+    # A budget is a rupee amount, so it cannot be negative, and it cannot be
+    # "1e20" either — a card built from that read "up to 10000000000000cr".
+    # Applied HERE and not on StructuredRequirement, so nothing a broker
+    # writes in WhatsApp can ever fail the structuring stage on it (see
+    # Model/field_validation.py).
+    budget_min_inr: Optional[float] = Field(default=None, ge=0, le=field_validation.MAX_INR)
+    budget_max_inr: Optional[float] = Field(default=None, ge=0, le=field_validation.MAX_INR)
     listing_type: Optional[Literal["Sale", "Rent"]] = None
     contact_name: Optional[str] = None
     contact_phone: Optional[str] = None
     description: Optional[str] = None
+
+    @field_validator("contact_phone")
+    @classmethod
+    def _check_contact_phone(cls, value: Optional[str]) -> Optional[str]:
+        return field_validation.check_contact_phone(value)
+
+    @field_validator("preferred_areas")
+    @classmethod
+    def _clean_preferred_areas(cls, value: Optional[List[str]]) -> Optional[List[str]]:
+        # None stays None — for a PATCH that means "not sent", which is not
+        # the same as "cleared to an empty list".
+        return None if value is None else field_validation.clean_name_list(value)
+
+    @model_validator(mode="after")
+    def _check_budget_range(self) -> "RequirementUpdateRequest":
+        """Refused, not silently swapped. The structuring stage DOES swap a
+        reversed pair (requirement_structurer._normalize_budget_range) and
+        must keep doing so — a language model getting two ends the wrong way
+        round is a transcription slip with no one to ask. A person typing
+        into this form is right there, and the Inquiries page's client form
+        has always told them so in these exact words; a requirement quietly
+        rewriting what they typed is the odd one out."""
+        if (
+            self.budget_min_inr is not None
+            and self.budget_max_inr is not None
+            and self.budget_min_inr > self.budget_max_inr
+        ):
+            raise ValueError("The minimum budget is above the maximum.")
+        return self
 
 
 class RequirementCreateRequest(RequirementUpdateRequest):
@@ -63,7 +98,35 @@ class RequirementCreateRequest(RequirementUpdateRequest):
 
     Unlike DELETE this is not admin-gated: adding a requirement is the same
     kind of routine data entry as editing one, and an employee doing it
-    destroys nothing."""
+    destroys nothing.
+
+    The ONE thing it adds over the Edit body: a brand-new requirement must
+    actually ask for something. An entirely blank Save used to store a card
+    reading "— / —", defaulted to Buy, and — because a pseudo-client always
+    has a purpose — was then scored against every stored property, producing
+    100 "Low" matches ranked on nothing but semantic noise. That check lives
+    on create only, deliberately: a PATCH is applied field by field
+    (exclude_unset), so a body carrying one corrected phone number says
+    nothing about what the rest of the record holds. A requirement that
+    somehow ends up empty anyway is handled where it matters — it matches
+    nothing at all (see requirement_matching_service._has_criteria)."""
+
+    @model_validator(mode="after")
+    def _require_something_to_match_on(self) -> "RequirementCreateRequest":
+        stated = [
+            field_validation.clean_text(self.requirement_type),
+            field_validation.clean_text(self.area_name),
+            self.preferred_areas or None,
+            self.budget_min_inr,
+            self.budget_max_inr,
+            field_validation.clean_text(self.budget_text),
+        ]
+        if not any(value is not None for value in stated):
+            raise ValueError(
+                "Fill in at least one of Property type, Preferred areas or Budget — "
+                "a requirement with none of them has nothing to match properties against."
+            )
+        return self
 
 
 @router.post("", response_model=BrokerRequirementRecord, status_code=201)

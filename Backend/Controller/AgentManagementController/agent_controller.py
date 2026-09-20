@@ -13,8 +13,9 @@ from datetime import datetime, timezone
 from typing import List, Optional
 
 from fastapi import APIRouter, Depends, HTTPException
-from pydantic import BaseModel, Field
+from pydantic import BaseModel, Field, field_validator
 
+from Model import field_validation
 from Model.AgentManagementModel.agent_record import AgentRecord, AgentSummary, AssignedClientSummary
 from Model.AgentManagementModel.handoff_templates import HandoffTemplates
 from Model.AgentManagementModel.visit_record import VisitRecord
@@ -28,11 +29,41 @@ class AgentCreateRequest(BaseModel):
     """The Agents page's Add/Edit agent dialog fields — name and phone are
     required (an agent with neither is useless to assign anyone to);
     coverage_areas defaults to empty since an agent can be added before
-    their areas are finalized."""
+    their areas are finalized.
+
+    "Required" now means what it says. `name: str` alone accepted "" and
+    "   ", and `phone: str` accepted "abc" — an agent row that cannot be
+    called, cannot be messaged, and reads as a blank line on the Agents
+    page. The phone is also put into the same E.164 form a client's number
+    is (Service/WhatsAppInquiryHandlingService/phone_utils.py), so
+    "9000000101" and "+91 90000 00101" are stored as one value and are
+    therefore recognisable as the same agent by the duplicate check in
+    agent_store."""
 
     name: str
     phone: str
     coverage_areas: List[str] = Field(default_factory=list)
+
+    @field_validator("name")
+    @classmethod
+    def _check_name(cls, value: str) -> str:
+        cleaned = field_validation.clean_text(value)
+        if cleaned is None:
+            raise ValueError("Enter the agent's name — it's what every client and visit is listed under.")
+        return cleaned[:120]
+
+    @field_validator("phone")
+    @classmethod
+    def _check_phone(cls, value: str) -> str:
+        normalized = field_validation.to_e164(value)
+        if normalized is None:
+            raise ValueError("Enter the agent's WhatsApp number — it's where every site-visit hand-off is sent.")
+        return normalized
+
+    @field_validator("coverage_areas")
+    @classmethod
+    def _clean_coverage_areas(cls, value: List[str]) -> List[str]:
+        return field_validation.clean_name_list(value)
 
 
 class VisitCompleteRequest(BaseModel):
@@ -62,9 +93,18 @@ def get_agents() -> list[AgentSummary]:
     return agent_store.get_all_agents_with_stats()
 
 
+_DUPLICATE_PHONE_DETAIL = (
+    "Another agent already has this WhatsApp number — every hand-off to that number would reach them "
+    "instead. Find that agent in the list and edit them, or use a different number."
+)
+
+
 @router.post("", response_model=AgentRecord, status_code=201)
 def create_agent(body: AgentCreateRequest) -> AgentRecord:
-    return agent_store.create_agent(body.name, body.phone, body.coverage_areas)
+    try:
+        return agent_store.create_agent(body.name, body.phone, body.coverage_areas)
+    except agent_store.DuplicateAgentPhoneError:
+        raise HTTPException(status_code=409, detail=_DUPLICATE_PHONE_DETAIL)
 
 
 @router.get("/handoff-templates", response_model=HandoffTemplates)
@@ -81,7 +121,10 @@ def set_handoff_templates(body: HandoffTemplates) -> HandoffTemplates:
 
 @router.patch("/{agent_id}", response_model=AgentRecord)
 def update_agent(agent_id: str, body: AgentCreateRequest) -> AgentRecord:
-    updated = agent_store.update_agent(agent_id, body.name, body.phone, body.coverage_areas)
+    try:
+        updated = agent_store.update_agent(agent_id, body.name, body.phone, body.coverage_areas)
+    except agent_store.DuplicateAgentPhoneError:
+        raise HTTPException(status_code=409, detail=_DUPLICATE_PHONE_DETAIL)
     if updated is None:
         raise HTTPException(status_code=404, detail="Agent not found")
     return updated

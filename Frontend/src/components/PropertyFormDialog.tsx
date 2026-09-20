@@ -1,18 +1,26 @@
-import { useEffect, useState } from "react";
+import { useEffect, useRef, useState } from "react";
 import { createPortal } from "react-dom";
 import { propertyApi, type PropertyContentFields } from "../api/propertyApi";
 import type { PropertyRecord } from "../api/types";
 import { friendlyError } from "../lib/apiError";
+import {
+  MAX_AREA,
+  MAX_INR,
+  amountError,
+  contactPhoneError,
+  instagramReelError,
+  urlError,
+} from "../lib/fieldChecks";
 import { useToast } from "./ui/Toast";
-import { Button, Segmented } from "./ui/Primitives";
-import { IconImage, IconInstagram, IconPin, IconX } from "./ui/Icons";
+import { Button, Note, Segmented } from "./ui/Primitives";
+import { IconAlert, IconImage, IconInstagram, IconPin, IconX } from "./ui/Icons";
 import PropertyImagesField from "./PropertyImagesField";
 
 /**
  * The Properties page's Add/Edit dialog — the same field set either way
  * (everything the LLM structuring stage would otherwise fill in, plus
  * instagram_reel_url and super_built, which only a human ever sets). Every
- * field is optional: there is nothing here that blocks Save.
+ * field is optional — nothing here has to be filled in.
  *
  * Also the Builder Projects page's Add/Edit dialog: a builder project has
  * exactly these fields under exactly these names (see Backend/Model/
@@ -23,6 +31,11 @@ import PropertyImagesField from "./PropertyImagesField";
  * Cancel and the header's X both discard the in-progress edit without
  * calling the backend — onClose is the only thing either one does, and
  * neither is wired to onSave.
+ *
+ * "Optional" does not mean "anything goes": a measurement cannot be
+ * negative, a contact box has to hold a number, and a link has to be a link
+ * — see validationError below, and Backend/Model/field_validation.py, which
+ * enforces exactly the same rules whatever calls the API.
  */
 
 /** What the dialog reads off the record it edits: the content fields plus
@@ -196,6 +209,31 @@ function toPayload(form: FormState, includeImages: boolean): PropertyContentFiel
   return payload;
 }
 
+/**
+ * Everything this form refuses to save, in the order the fields are read.
+ * Null when it is good to send.
+ *
+ * The Instagram link is the one worth naming: a value that is not a reel
+ * link still counted as "this property has a reel", which is what put a
+ * property with `reel = hello` (and an area of -100 sqft) into the public
+ * landing page's Ready to Add list.
+ */
+function validationError(form: FormState): string | null {
+  for (const [key, label, max] of [
+    ["area_sqft", "The area in sqft", MAX_AREA],
+    ["area_vaar", "The area in vaar", MAX_AREA],
+    ["price_amount_inr", "The price", MAX_INR],
+  ] as const) {
+    const error = amountError(form[key], label, max);
+    if (error) return error;
+  }
+  return (
+    contactPhoneError(form.contact_phone) ??
+    urlError(form.location_url) ??
+    instagramReelError(form.instagram_reel_url)
+  );
+}
+
 const GRID_STYLE: React.CSSProperties = {
   display: "grid",
   gridTemplateColumns: "repeat(auto-fit, minmax(220px, 1fr))",
@@ -248,6 +286,15 @@ export default function PropertyFormDialog<T extends EditableContentRecord = Pro
   const toast = useToast();
   const [form, setForm] = useState<FormState>(property ? toFormState(property) : BLANK_FORM);
   const [saving, setSaving] = useState(false);
+  // Why the last Save didn't go through, kept in the dialog rather than only
+  // in a toast that fades while the modal is still open — the same treatment
+  // the Agents and client dialogs already give it.
+  const [formError, setFormError] = useState<string | null>(null);
+  const errorRef = useRef<HTMLDivElement>(null);
+
+  useEffect(() => {
+    if (formError) errorRef.current?.scrollIntoView({ block: "nearest", behavior: "smooth" });
+  }, [formError]);
   const Noun = noun.charAt(0).toUpperCase() + noun.slice(1);
 
   // Whether this dialog is actually holding the property's photos.
@@ -313,7 +360,14 @@ export default function PropertyFormDialog<T extends EditableContentRecord = Pro
   }
 
   async function handleSave() {
+    if (saving) return;
+    const invalid = validationError(form);
+    if (invalid) {
+      setFormError(invalid);
+      return;
+    }
     setSaving(true);
+    setFormError(null);
     try {
       const payload = toPayload(form, imagesLoaded);
       const saved = mode === "add" ? await api.create(payload) : await api.update(property!.record_id, payload);
@@ -324,7 +378,9 @@ export default function PropertyFormDialog<T extends EditableContentRecord = Pro
       });
       onSaved(saved, mode);
     } catch (err) {
-      toast.push({ tone: "bad", title: `Couldn't save this ${noun}`, message: friendlyError(err) });
+      const message = friendlyError(err);
+      setFormError(message);
+      toast.push({ tone: "bad", title: `Couldn't save this ${noun}`, message });
     } finally {
       setSaving(false);
     }
@@ -402,10 +458,10 @@ export default function PropertyFormDialog<T extends EditableContentRecord = Pro
               </Field>
 
               <Field label="Area (sqft)" hint="Only if the size is quoted in square feet">
-                <input className="input" type="number" inputMode="decimal" value={form.area_sqft} onChange={(e) => set("area_sqft", e.target.value)} placeholder="e.g. 1200" />
+                <input className="input" type="number" inputMode="decimal" min={0} value={form.area_sqft} onChange={(e) => set("area_sqft", e.target.value)} placeholder="e.g. 1200" />
               </Field>
               <Field label="Area (vaar)" hint="Only if the size is quoted in vaar / gaj">
-                <input className="input" type="number" inputMode="decimal" value={form.area_vaar} onChange={(e) => set("area_vaar", e.target.value)} placeholder="e.g. 155" />
+                <input className="input" type="number" inputMode="decimal" min={0} value={form.area_vaar} onChange={(e) => set("area_vaar", e.target.value)} placeholder="e.g. 155" />
               </Field>
               <Field label="Super built" hint="As you'd write it — e.g. 1850 sq ft">
                 <input className="input" value={form.super_built} onChange={(e) => set("super_built", e.target.value)} placeholder="e.g. 1850 sq ft" />
@@ -431,7 +487,7 @@ export default function PropertyFormDialog<T extends EditableContentRecord = Pro
                 <input className="input" value={form.price_text} onChange={(e) => set("price_text", e.target.value)} placeholder="e.g. 45L" />
               </Field>
               <Field label="Price (₹ amount)">
-                <input className="input" type="number" inputMode="decimal" value={form.price_amount_inr} onChange={(e) => set("price_amount_inr", e.target.value)} placeholder="e.g. 4500000" />
+                <input className="input" type="number" inputMode="decimal" min={0} value={form.price_amount_inr} onChange={(e) => set("price_amount_inr", e.target.value)} placeholder="e.g. 4500000" />
               </Field>
 
               <Field label="Contact name">
@@ -510,6 +566,14 @@ export default function PropertyFormDialog<T extends EditableContentRecord = Pro
             <Field label="Extra" hint="Anything else you keep against this record that has no field of its own.">
               <textarea className="textarea" rows={2} value={form.extra_notes} onChange={(e) => set("extra_notes", e.target.value)} placeholder="e.g. floor, facing, parking, possession" />
             </Field>
+
+            {formError && (
+              <div ref={errorRef}>
+                <Note tone="bad" icon={<IconAlert size={16} />}>
+                  {formError}
+                </Note>
+              </div>
+            )}
           </div>
         </div>
 

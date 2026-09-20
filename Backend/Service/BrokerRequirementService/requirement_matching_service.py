@@ -143,7 +143,17 @@ def get_matches_for_requirement(record_id: str) -> Optional[RequirementMatchResu
         return None
 
     pseudo_client = _as_pseudo_client(requirement)
-    if not matching_service.has_requirements(pseudo_client):
+    if not _has_criteria(pseudo_client):
+        # Nothing to compare properties against — and nothing may be left
+        # STORED from before this was checked either, or the table's Matches
+        # column (get_match_counts, which counts stored rows) would keep
+        # advertising the hundred meaningless matches this requirement used
+        # to collect while the dialog correctly showed none. One read, and a
+        # write only on the first open that finds something to clear; after
+        # that this is the read alone.
+        stored, _, _ = requirement_match_store.get_matches(record_id)
+        if stored:
+            requirement_match_store.replace_matches({record_id: ([], _fingerprint(pseudo_client))}, _now())
         return _build_result(requirement, pseudo_client, [], None, [])
 
     fingerprint = _fingerprint(pseudo_client)
@@ -224,7 +234,7 @@ def recompute_for_requirement(record_id: str) -> Optional[RequirementMatchResult
     run_started_at = _now()
     properties = match_candidates.get_all()
     scores = (
-        _score(requirement, pseudo_client, properties) if matching_service.has_requirements(pseudo_client) else []
+        _score(requirement, pseudo_client, properties) if _has_criteria(pseudo_client) else []
     )
     requirement_match_store.replace_matches(
         {record_id: (scores, _fingerprint(pseudo_client))}, run_started_at
@@ -246,7 +256,7 @@ def score_new_requirements(requirements: List[StructuredRequirement]) -> int:
         pseudo_client = _as_pseudo_client(requirement)
         scores = (
             _score(requirement, pseudo_client, properties)
-            if matching_service.has_requirements(pseudo_client)
+            if _has_criteria(pseudo_client)
             else []
         )
         results[requirement.record_id] = (scores, _fingerprint(pseudo_client))
@@ -291,7 +301,7 @@ def rescore_all_requirements() -> Tuple[int, int, int]:
         try:
             pseudo_client = _as_pseudo_client(requirement)
             fingerprint = _fingerprint(pseudo_client)
-            has_requirements = matching_service.has_requirements(pseudo_client)
+            has_requirements = _has_criteria(pseudo_client)
             if computed_at is None or stored_fingerprint != fingerprint:
                 # Never scored, or its text changed since: nothing stored can
                 # be trusted, so this one alone gets a full re-score.
@@ -355,7 +365,7 @@ def score_builder_projects_for_scored_requirements() -> Tuple[int, int, int]:
             if fingerprint != runs[requirement.record_id][1]:
                 continue
             scores = (
-                _score(requirement, pseudo_client, candidates) if matching_service.has_requirements(pseudo_client) else []
+                _score(requirement, pseudo_client, candidates) if _has_criteria(pseudo_client) else []
             )
             updates[requirement.record_id] = (scores, considered, fingerprint)
         except Exception as exc:  # noqa: BLE001
@@ -505,6 +515,45 @@ def _now() -> datetime:
     return datetime.now(timezone.utc)
 
 
+def _has_criteria(pseudo_client: ClientRecord) -> bool:
+    """Does this requirement actually ASK for anything?
+
+    The requirement-side replacement for matching_service.has_requirements,
+    and it exists for one reason: `purpose` is the one ClientRecord field a
+    pseudo-client ALWAYS has. _as_pseudo_client derives it from
+    listing_type, which is a Literal defaulting to "Sale" — so a requirement
+    can never not have one, so has_requirements could never answer False
+    here, so a completely empty requirement was scored against every stored
+    property and came back with a hundred "Low" matches ranked on semantic
+    noise alone.
+
+    Every OTHER field has_requirements looks at is checked here, unchanged
+    and in the same order, so a requirement stating anything at all — a
+    type, a BHK, a budget, an area, a furnishing level, or nothing but a
+    free-text description (which reaches additional_requirements and is
+    exactly what the semantic half of the score is for) — still matches
+    precisely as it did before. The client side's own function is not
+    touched: a client really can state only a purpose, and that is a real
+    requirement there.
+
+    False makes _build_result report has_requirements=false, which the
+    matches dialog already renders as "Nothing to match on" (see
+    RequirementMatchesDialog.tsx) — the empty state was written for this
+    case and simply never fired."""
+    return any(
+        [
+            pseudo_client.property_type,
+            pseudo_client.bhk,
+            pseudo_client.budget_min_inr is not None,
+            pseudo_client.budget_max_inr is not None,
+            pseudo_client.preferred_areas,
+            pseudo_client.additional_requirements,
+            pseudo_client.property_sizes,
+            pseudo_client.furnishing,
+        ]
+    )
+
+
 def _as_pseudo_client(requirement: StructuredRequirement) -> ClientRecord:
     """The adapter this whole module exists for: a StructuredRequirement
     expressed in the ClientRecord fields scoring.py reads.
@@ -619,7 +668,7 @@ def _build_result(
     return RequirementMatchResult(
         record_id=requirement.record_id,
         requirement_summary=_summarize(requirement),
-        has_requirements=matching_service.has_requirements(pseudo_client),
+        has_requirements=_has_criteria(pseudo_client),
         computed_at=computed_at,
         high=high,
         medium=medium,

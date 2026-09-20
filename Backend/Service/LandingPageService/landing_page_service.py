@@ -431,7 +431,12 @@ def _summary_fields(prop: EmbeddedProperty, image_limit: Optional[int]) -> dict:
         "price_amount_inr": prop.price_amount_inr,
         "listing_type": prop.listing_type,
         "image_urls": images,
-        "has_reel": bool(prop.instagram_reel_url),
+        # Whether there is a reel the card can actually OFFER, not merely
+        # whether the column holds text: a link _reel_embed_url can't read a
+        # shortcode out of (anything stored before that link was validated
+        # on the way in) produced a card advertising a reel and a detail page
+        # with nothing to play.
+        "has_reel": _reel_embed_url(prop.instagram_reel_url) is not None,
         "published_at": prop.landing_page_updated_at,
     }
 

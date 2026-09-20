@@ -3,6 +3,7 @@ import { createPortal } from "react-dom";
 import { agentApi } from "../api/agentApi";
 import type { AgentSummary } from "../api/types";
 import { friendlyError } from "../lib/apiError";
+import { whatsappNumberError } from "../lib/fieldChecks";
 import { useToast } from "./ui/Toast";
 import { Button, Note } from "./ui/Primitives";
 import { IconAlert, IconPlus, IconTag, IconX } from "./ui/Icons";
@@ -87,6 +88,20 @@ export default function AgentFormDialog({
             : "Enter the agent's WhatsApp number — it's where every site-visit hand-off is sent.",
       );
       (missingName ? nameInputRef : phoneInputRef).current?.focus();
+      return;
+    }
+
+    // Present, but is it a number? The Inquiries page's client dialog has
+    // always answered this (through the backend, in these exact words) and
+    // this one never did: "abc" saved happily and the agent card then read
+    // "abc" — an agent nothing can ever be sent to. The DUPLICATE check is
+    // deliberately not attempted here: only the backend can see the other
+    // agents, and it answers with a 409 that lands in formError below.
+    const badPhone = whatsappNumberError(trimmedPhone);
+    if (badPhone) {
+      setInvalid({ name: false, phone: true });
+      setFormError(badPhone);
+      phoneInputRef.current?.focus();
       return;
     }
 

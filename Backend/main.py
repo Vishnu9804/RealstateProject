@@ -57,9 +57,11 @@ import sys
 import threading
 from contextlib import asynccontextmanager
 
-from fastapi import Depends, FastAPI
+from fastapi import Depends, FastAPI, Request
+from fastapi.exceptions import RequestValidationError
 from fastapi.middleware.cors import CORSMiddleware
 from fastapi.middleware.gzip import GZipMiddleware
+from fastapi.responses import JSONResponse
 
 if sys.platform == "win32":
     # The default Windows console codepage (cp1252) can't render the
@@ -375,6 +377,39 @@ app.add_middleware(GZipMiddleware, minimum_size=1024)
 # changes a request or a response.
 app.add_middleware(CpuMeterMiddleware)
 install_threadpool_meter()
+
+
+@app.exception_handler(RequestValidationError)
+async def _validation_error_handler(request: Request, exc: RequestValidationError) -> JSONResponse:
+    """Turns FastAPI's default 422 body — a LIST of per-field dicts — into
+    the same `{"detail": "<one sentence>"}` shape every HTTPException in this
+    application already returns.
+
+    Purely a presentation change; the status code and which requests are
+    refused are exactly as before. It exists because the dashboard's API
+    client reads `detail` and shows it to the operator as-is (see
+    Frontend/src/api/client.ts): with the list it printed a JSON dump of
+    pydantic internals, so the careful wording in Model/field_validation.py
+    ("That doesn't look like a valid phone number.") never reached the person
+    who typed it. The first error is the one shown — the forms validate in
+    the browser too, so by the time one gets here there is normally exactly
+    one thing wrong.
+
+    "Value error, " is pydantic's own prefix on anything a validator raises;
+    stripped so the sentence reads as written."""
+    first = (exc.errors() or [{}])[0]
+    message = str(first.get("msg") or "").strip()
+    if message.startswith("Value error, "):
+        message = message[len("Value error, ") :]
+    if not message:
+        message = "Some of what was sent isn't valid."
+    field = [str(part) for part in (first.get("loc") or []) if part not in ("body", "query", "path")]
+    # Only for the errors pydantic generated itself (a type/constraint
+    # failure names the field but not in a sentence); a validator's own
+    # message already says what it is about.
+    if field and not message.endswith("."):
+        message = f"{field[-1]}: {message}"
+    return JSONResponse(status_code=422, content={"detail": message})
 
 # AuthManagement's own routers are the two exceptions to the blanket login
 # requirement just below: /api/auth (login must be reachable while logged

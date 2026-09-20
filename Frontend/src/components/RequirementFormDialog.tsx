@@ -1,13 +1,14 @@
-import { useEffect, useState } from "react";
+import { useEffect, useRef, useState } from "react";
 import { createPortal } from "react-dom";
 import { requirementApi, type RequirementContentFields } from "../api/requirementApi";
 import type { BrokerRequirementRecord } from "../api/types";
 import { friendlyError } from "../lib/apiError";
+import { MAX_INR, amountError, contactPhoneError } from "../lib/fieldChecks";
 import { REQUIREMENT_TYPE_OPTIONS } from "../lib/requirementFilters";
 import { FURNISHING_OPTIONS } from "./PropertyFormDialog";
 import { useToast } from "./ui/Toast";
-import { Button, Segmented } from "./ui/Primitives";
-import { IconX } from "./ui/Icons";
+import { Button, Note, Segmented } from "./ui/Primitives";
+import { IconAlert, IconX } from "./ui/Icons";
 
 /**
  * The Broker Requirements page's Add and Edit dialog — one form for both, the
@@ -16,8 +17,12 @@ import { IconX } from "./ui/Icons";
  * (POST vs PATCH); the fields themselves are identical, because a requirement
  * typed by hand holds exactly what a captured one holds.
  *
- * Every field is optional — there is nothing here that blocks Save. Cancel
- * and the header's X both discard the in-progress edit without calling the
+ * Almost every field is optional, but a requirement has to ask for
+ * SOMETHING — at least a property type, an area or a budget — or there is
+ * nothing to compare stored properties against (see validationError below,
+ * and the matching identical rule in Backend/Controller/
+ * BrokerRequirementController/broker_requirement_controller.py). Cancel and
+ * the header's X both discard the in-progress edit without calling the
  * backend.
  *
  * The WhatsApp metadata (sender, group, original message, timestamp) is not
@@ -98,6 +103,52 @@ function toPayload(form: FormState): RequirementContentFields {
   };
 }
 
+/**
+ * Everything this form refuses to save, in the order the fields are read —
+ * the browser half of Backend/Controller/BrokerRequirementController/
+ * broker_requirement_controller.py's own rules, so a mistake is answered
+ * here instead of coming back as a server error.
+ *
+ * Why each one:
+ *  - a budget is a rupee figure, so "-500" and "1e20" are not budgets (the
+ *    latter rendered on the card as "up to 10000000000000cr");
+ *  - a reversed pair is REFUSED, in the same words the Inquiries page's
+ *    client form has always used. The structuring stage still silently
+ *    swaps a reversed pair from the LLM, which is right for a model with no
+ *    one to ask — but a person typing here can simply be told;
+ *  - a requirement with no type, no area and no budget has nothing to
+ *    compare properties against. Saving one used to produce a card reading
+ *    "— / —" with a hundred meaningless "Low" matches behind it.
+ *
+ * Returns null when the form is good to send.
+ */
+function validationError(form: FormState): string | null {
+  for (const [key, label] of [
+    ["budget_min_inr", "Budget from"],
+    ["budget_max_inr", "Budget to"],
+  ] as const) {
+    const error = amountError(form[key], label, MAX_INR);
+    if (error) return error;
+  }
+  const min = form.budget_min_inr.trim() ? Number(form.budget_min_inr) : null;
+  const max = form.budget_max_inr.trim() ? Number(form.budget_max_inr) : null;
+  if (min !== null && max !== null && min > max) return "The minimum budget is above the maximum.";
+
+  const phoneError = contactPhoneError(form.contact_phone);
+  if (phoneError) return phoneError;
+
+  const statesSomething =
+    form.requirement_type.trim() ||
+    form.preferred_areas.trim() ||
+    form.budget_text.trim() ||
+    form.budget_min_inr.trim() ||
+    form.budget_max_inr.trim();
+  if (!statesSomething) {
+    return "Fill in at least one of Property type, Preferred areas or Budget — a requirement with none of them has nothing to match properties against.";
+  }
+  return null;
+}
+
 const GRID_STYLE: React.CSSProperties = {
   display: "grid",
   gridTemplateColumns: "repeat(auto-fit, minmax(220px, 1fr))",
@@ -141,6 +192,15 @@ export default function RequirementFormDialog({
   const toast = useToast();
   const [form, setForm] = useState<FormState>(() => toFormState(requirement));
   const [saving, setSaving] = useState(false);
+  // Why the last Save didn't go through, shown in the dialog itself rather
+  // than only as a toast — the toast fades while this modal is still open.
+  // Same treatment the Agents dialog and the client dialog already give it.
+  const [formError, setFormError] = useState<string | null>(null);
+  const errorRef = useRef<HTMLDivElement>(null);
+
+  useEffect(() => {
+    if (formError) errorRef.current?.scrollIntoView({ block: "nearest", behavior: "smooth" });
+  }, [formError]);
 
   useEffect(() => {
     const onKeyDown = (event: KeyboardEvent) => {
@@ -158,7 +218,14 @@ export default function RequirementFormDialog({
   }
 
   async function handleSave() {
+    if (saving) return;
+    const invalid = validationError(form);
+    if (invalid) {
+      setFormError(invalid);
+      return;
+    }
     setSaving(true);
+    setFormError(null);
     try {
       const payload = toPayload(form);
       const saved =
@@ -172,7 +239,9 @@ export default function RequirementFormDialog({
       });
       onSaved(saved, mode);
     } catch (err) {
-      toast.push({ tone: "bad", title: "Couldn't save this requirement", message: friendlyError(err) });
+      const message = friendlyError(err);
+      setFormError(message);
+      toast.push({ tone: "bad", title: "Couldn't save this requirement", message });
     } finally {
       setSaving(false);
     }
@@ -196,7 +265,8 @@ export default function RequirementFormDialog({
             <div className="detail-modal__eyebrow">{mode === "add" ? "New requirement" : "Edit requirement"}</div>
             <h2 className="detail-modal__title cell-truncate">{title}</h2>
             <div className="detail-modal__sub">
-              Every field here is optional — fill in only what the broker actually asked for.
+              Fill in only what the broker actually asked for — at least the property type, an area or a budget,
+              so there is something to match properties against.
             </div>
           </div>
           <button type="button" className="toast__close" onClick={onClose} disabled={saving} aria-label="Close">
@@ -284,7 +354,16 @@ export default function RequirementFormDialog({
                 />
               </Field>
 
-              <Field label="Budget (as written)" hint="e.g. 45L, 80L-1cr, 15k/month">
+              {/* The two numeric boxes below are what filtering and matching
+                  read. This one is the broker's own wording, and its numbers
+                  are only worked out when BOTH of those are left empty (see
+                  requirement_structurer._fill_missing_budget_amounts) — said
+                  here in the hint, because a form that quietly ignores what
+                  someone typed reads as a bug. */}
+              <Field
+                label="Budget (as written)"
+                hint="e.g. 45L, 80L-1cr, 15k/month. Read as the budget only when both boxes below are empty."
+              >
                 <input
                   className="input"
                   value={form.budget_text}
@@ -297,6 +376,7 @@ export default function RequirementFormDialog({
                   className="input"
                   type="number"
                   inputMode="decimal"
+                  min={0}
                   value={form.budget_min_inr}
                   onChange={(e) => set("budget_min_inr", e.target.value)}
                   placeholder="e.g. 8000000"
@@ -307,6 +387,7 @@ export default function RequirementFormDialog({
                   className="input"
                   type="number"
                   inputMode="decimal"
+                  min={0}
                   value={form.budget_max_inr}
                   onChange={(e) => set("budget_max_inr", e.target.value)}
                   placeholder="e.g. 10000000"
@@ -343,6 +424,14 @@ export default function RequirementFormDialog({
                 placeholder="e.g. Fully furnished, veg family, possession 1-15 Sep, 1 vaya"
               />
             </Field>
+
+            {formError && (
+              <div ref={errorRef}>
+                <Note tone="bad" icon={<IconAlert size={16} />}>
+                  {formError}
+                </Note>
+              </div>
+            )}
           </div>
         </div>
 

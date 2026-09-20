@@ -71,7 +71,12 @@ export function propertyLabel(property: HandoffPropertyLike): string {
 }
 
 function describeProperty(property: HandoffPropertyLike, index: number, meta: VisitMeta | undefined): string[] {
-  const location = [property.society_name, property.area_name].filter(Boolean).join(", ");
+  // The AREA only. `propertyLabel` on the next line already IS the society
+  // name whenever there is one, so including it here printed it twice —
+  // "1) Shreepal Residancy, Shreepal Residancy, Pal". Nothing is lost by
+  // dropping it: when there is no society name the label falls back to the
+  // property type, and the area is exactly what should follow it.
+  const location = [property.area_name].filter(Boolean).join(", ");
   const size = formatArea(property.area_sqft, property.area_vaar);
   const details = [property.unit_no && `Unit ${property.unit_no}`, property.bhk, size === "—" ? null : size]
     .filter(Boolean)

@@ -218,6 +218,36 @@ def _retire_extra_requirement_columns(engine) -> None:
         )
 
 
+def _add_agent_phone_unique_index(engine) -> None:
+    """One agent per WhatsApp number, enforced by the database as well as by
+    Service/AgentManagementService/agent_store.py's own check.
+
+    In its own function, with its own transaction and its own try/except,
+    because this is the one statement in init_db that can legitimately FAIL
+    on a real database: a database that already holds two agents on the same
+    number cannot have this index built. That must not take the whole
+    startup down (every other migration around it would roll back), and it
+    must not be "fixed" by deleting somebody's data either — so it is logged
+    and skipped. The application-level check above already refuses new
+    duplicates, and once the existing pair is merged by hand the next
+    startup creates the index without anything further being done.
+
+    IF NOT EXISTS, so after that it is a catalog lookup and nothing more."""
+    from sqlalchemy import text
+
+    from Middleware import step_logger
+
+    try:
+        with engine.begin() as connection:
+            connection.execute(text("CREATE UNIQUE INDEX IF NOT EXISTS ux_agents_phone ON agents (phone)"))
+    except Exception as exc:  # noqa: BLE001
+        step_logger.warn(
+            "Could not add the one-agent-per-number database index — two agents most likely still share a "
+            f"number. New duplicates are refused regardless; merge the existing pair and this clears itself "
+            f"on the next start. ({exc!r})"
+        )
+
+
 def init_db() -> None:
     """Enables the pgvector extension and creates any tables that don't
     already exist — for BOTH features that use this database: the
@@ -356,6 +386,42 @@ def init_db() -> None:
         connection.execute(text("ALTER TABLE properties ADD COLUMN IF NOT EXISTS qualified_at TIMESTAMPTZ"))
         connection.execute(
             text("ALTER TABLE properties ADD COLUMN IF NOT EXISTS updated_at TIMESTAMPTZ NOT NULL DEFAULT now()")
+        )
+        # A database-level trigger, not just PropertyRow.updated_at's
+        # onupdate=func.now() — that only fires when THIS application's own
+        # SQLAlchemy session performs the UPDATE. A row edited any other way
+        # (Neon's own SQL/table editor, a one-off psql session) would leave
+        # updated_at untouched, which is exactly what
+        # property_vector_store._maybe_refresh_from_external_edit relies on
+        # to ever notice an edit this process didn't make itself — without
+        # this trigger, such an edit would show correctly in Neon but never
+        # reach the app's in-memory snapshot, and the dashboard would keep
+        # showing the old value indefinitely. A trigger fires for every
+        # UPDATE regardless of who issued it, closing that gap. Harmless for
+        # this app's own writes: they already set updated_at to the same
+        # "now" the trigger would compute.
+        #
+        # CREATE OR REPLACE + DROP-then-CREATE TRIGGER, so this whole block
+        # is a no-op after the first run.
+        connection.execute(
+            text(
+                """
+                CREATE OR REPLACE FUNCTION set_properties_updated_at() RETURNS trigger AS $$
+                BEGIN
+                    NEW.updated_at = now();
+                    RETURN NEW;
+                END;
+                $$ LANGUAGE plpgsql
+                """
+            )
+        )
+        connection.execute(text("DROP TRIGGER IF EXISTS trg_properties_set_updated_at ON properties"))
+        connection.execute(
+            text(
+                "CREATE TRIGGER trg_properties_set_updated_at "
+                "BEFORE UPDATE ON properties FOR EACH ROW "
+                "EXECUTE FUNCTION set_properties_updated_at()"
+            )
         )
     with engine.begin() as connection:
         # One-time move of the WhatsApp message fields (group_name,
@@ -864,6 +930,8 @@ def init_db() -> None:
         # A free-form staff notes field — a catch-all, unlike the specific
         # fields above. Same nullable, catalog-only, nothing-to-backfill shape.
         connection.execute(text("ALTER TABLE clients ADD COLUMN IF NOT EXISTS notes TEXT"))
+
+    _add_agent_phone_unique_index(engine)
 
     _retire_extra_requirement_columns(engine)
 

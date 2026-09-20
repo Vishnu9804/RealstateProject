@@ -33,6 +33,17 @@ def get_agent_by_id(agent_id: str) -> Optional[AgentRecord]:
         return _to_pydantic(row) if row is not None else None
 
 
+def get_agent_id_phone_pairs() -> List[tuple]:
+    """(agent_id, phone) for every agent — the duplicate-number check's
+    whole input. Two columns rather than get_all_agents()' full rows because
+    the check runs on every agent save and needs nothing else; the field team
+    is a handful of rows, so this is one tiny indexed-free scan and no
+    coverage_areas JSON crosses the wire."""
+    stmt = select(AgentRow.agent_id, AgentRow.phone)
+    with get_client_session() as session:
+        return [(row[0], row[1]) for row in session.execute(stmt).all()]
+
+
 def create_agent(name: str, phone: str, coverage_areas: List[str]) -> AgentRecord:
     with get_client_session() as session:
         row = AgentRow(name=name, phone=phone, coverage_areas=coverage_areas)

@@ -325,5 +325,42 @@ class NoScoringLogicOfItsOwnTest(unittest.TestCase):
         self.assertEqual(match.matched_type, "Row House")
 
 
+class EmptyRequirementTest(unittest.TestCase):
+    """A requirement that asks for NOTHING must match nothing.
+
+    It used to match everything: _as_pseudo_client always fills `purpose`
+    (listing_type is a Literal defaulting to "Sale"), so the shared
+    has_requirements check could never answer False on this side, and a
+    blank requirement was scored against every stored property on semantic
+    similarity alone."""
+
+    def test_a_blank_requirement_has_nothing_to_match_on(self):
+        self.assertFalse(rms._has_criteria(rms._as_pseudo_client(make_requirement())))
+
+    def test_a_blank_rent_requirement_has_nothing_to_match_on_either(self):
+        self.assertFalse(rms._has_criteria(rms._as_pseudo_client(make_requirement(listing_type="Rent"))))
+
+    def test_anything_actually_stated_still_counts(self):
+        for field, value in (
+            ("requirement_type", "Flat"),
+            ("bhk", "3 BHK"),
+            ("budget_min_inr", 50 * LAKH),
+            ("budget_max_inr", 50 * LAKH),
+            ("preferred_areas", ["Vesu"]),
+            ("area_name", "Vesu"),
+            ("furnishing", "Fully furnished"),
+            ("society_name", "Black Residency"),
+            ("description", "veg family, possession Sep"),
+        ):
+            with self.subTest(field=field):
+                requirement = make_requirement(**{field: value})
+                self.assertTrue(rms._has_criteria(rms._as_pseudo_client(requirement)))
+
+    def test_the_client_side_is_untouched(self):
+        """A CLIENT really can state only a purpose — that is a real brief
+        there, and this fix must not have reached it."""
+        self.assertTrue(matching_service.has_requirements(ClientRecord(phone="+919000000001", purpose="buy")))
+
+
 if __name__ == "__main__":
     unittest.main()

@@ -54,7 +54,49 @@ def get_agent_by_id(agent_id: str) -> Optional[AgentRecord]:
     return _agents.get(agent_id)
 
 
+class DuplicateAgentPhoneError(Exception):
+    """Raised by create_agent/update_agent when another agent already holds
+    this WhatsApp number. Two agents on one number is not a harmless
+    duplicate: every hand-off, reminder and visit message is addressed by
+    number (see whatsapp_inquiry_controller.send_handoff_messages), so the
+    second agent silently receives the first one's work."""
+
+
+def _duplicate_phone_holder(normalized_phone: str, exclude_agent_id: Optional[str]) -> Optional[str]:
+    """The agent_id already using this number, or None. Compared on the
+    NORMALIZED form of both sides, not on the stored text: an agent added
+    before numbers were normalized holds "9000000101" where this one arrives
+    as "+919000000101", and those are the same person."""
+    from Model.field_validation import to_e164
+
+    if is_client_database_configured():
+        pairs = agent_repository.get_agent_id_phone_pairs()
+    else:
+        pairs = [(agent.agent_id, agent.phone) for agent in _agents.values()]
+    for agent_id, stored_phone in pairs:
+        if agent_id == exclude_agent_id:
+            continue
+        try:
+            stored_normalized = to_e164(stored_phone)
+        except ValueError:
+            # A stored value that isn't a number at all (nothing stops one
+            # existing from before this check) can't collide with a valid
+            # one — compared as written instead, so it still blocks an exact
+            # re-entry of the same text.
+            stored_normalized = (stored_phone or "").strip()
+        if stored_normalized == normalized_phone:
+            return agent_id
+    return None
+
+
 def create_agent(name: str, phone: str, coverage_areas: List[str]) -> AgentRecord:
+    """`name`/`phone`/`coverage_areas` arrive already trimmed, validated and
+    (for the phone) normalized to E.164 by the request model — see
+    Controller/AgentManagementController/agent_controller.py's
+    AgentCreateRequest. All this adds is the one check that needs to look at
+    the other agents."""
+    if _duplicate_phone_holder(phone, None) is not None:
+        raise DuplicateAgentPhoneError()
     if is_client_database_configured():
         return agent_repository.create_agent(name, phone, coverage_areas)
     record = AgentRecord(agent_id=uuid.uuid4().hex, name=name, phone=phone, coverage_areas=coverage_areas)
@@ -63,6 +105,8 @@ def create_agent(name: str, phone: str, coverage_areas: List[str]) -> AgentRecor
 
 
 def update_agent(agent_id: str, name: str, phone: str, coverage_areas: List[str]) -> Optional[AgentRecord]:
+    if _duplicate_phone_holder(phone, agent_id) is not None:
+        raise DuplicateAgentPhoneError()
     if is_client_database_configured():
         return agent_repository.update_agent(agent_id, name, phone, coverage_areas)
     existing = _agents.get(agent_id)

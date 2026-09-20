@@ -9,6 +9,7 @@ from fastapi import APIRouter, Depends, HTTPException, Request, Response
 from pydantic import BaseModel, Field
 
 from Middleware import http_cache
+from Model import field_validation
 from Model.BuilderProjectModel.builder_project import BuilderProjectRecord
 from Service.AuthManagementService.auth_dependencies import get_current_user
 from Service.BuilderProjectService import builder_project_service
@@ -16,12 +17,16 @@ from Service.BuilderProjectService import builder_project_service
 router = APIRouter(prefix="/builder-projects", tags=["builder-projects"])
 
 
-class BuilderProjectContentFields(BaseModel):
+class BuilderProjectContentFields(field_validation.ListingContentValidators):
     """What the Add/Edit dialog exposes — exactly the Properties page's own
     field set (Controller/WhatsAppDataFetchingController/property_controller.py's
     PropertyContentFields), since it is the same dialog. Every field is
     optional: a project can be saved with as little or as much detail as is
-    known right now."""
+    known right now.
+
+    And checked by exactly the same rules, from the same mixin, for the same
+    reason: it is the same dialog, so a negative area or a reel link that
+    isn't one must be refused here identically."""
 
     property_type: Optional[str] = None
     bhk: Optional[str] = None
@@ -29,12 +34,12 @@ class BuilderProjectContentFields(BaseModel):
     society_name: Optional[str] = None
     area_name: Optional[str] = None
     address: Optional[str] = None
-    area_sqft: Optional[float] = None
-    area_vaar: Optional[float] = None
+    area_sqft: Optional[float] = Field(default=None, ge=0, le=field_validation.MAX_AREA)
+    area_vaar: Optional[float] = Field(default=None, ge=0, le=field_validation.MAX_AREA)
     super_built: Optional[str] = None
     furnishing: Optional[str] = None
     price_text: Optional[str] = None
-    price_amount_inr: Optional[float] = None
+    price_amount_inr: Optional[float] = Field(default=None, ge=0, le=field_validation.MAX_INR)
     listing_type: Literal["Sale", "Rent"] = "Sale"
     contact_name: Optional[str] = None
     contact_phone: Optional[str] = None

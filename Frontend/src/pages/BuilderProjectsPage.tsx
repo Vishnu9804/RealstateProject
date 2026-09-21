@@ -116,7 +116,7 @@ const COLUMNS: Column[] = [
   { key: "type", label: "Type", filterKey: "type" },
   { key: "listingType", label: "Sale/Rent", filterKey: "listingType" },
   { key: "areaSqft", label: "Area (sqft)", sort: "areaSqft", numeric: true, filterKey: "areaSqft" },
-  { key: "areaVaar", label: "Area (vaar)", sort: "areaVaar", numeric: true, filterKey: "areaVaar" },
+  { key: "areaVaar", label: "Area (var)", sort: "areaVaar", numeric: true, filterKey: "areaVaar" },
   { key: "superBuilt", label: "Super built" },
   { key: "furnishing", label: "Furnishing", filterKey: "furnishing" },
   { key: "price", label: "Price", sort: "price", numeric: true, filterKey: "price" },
@@ -668,6 +668,12 @@ export default function BuilderProjectsPage() {
           property={formDialog.project}
           api={BUILDER_PROJECT_FORM_API}
           noun="builder project"
+          // The Properties dialog's must-haves (an area or address, a type,
+          // Sale/Rent, a price, one contact number) are rules about a
+          // LISTING. A builder project is the project itself — often with no
+          // asking price and no broker's number of its own — so this form
+          // stays as it has always been: everything optional.
+          requireCoreFields={false}
           onClose={() => setFormDialog(null)}
           onSaved={handleSaved}
         />

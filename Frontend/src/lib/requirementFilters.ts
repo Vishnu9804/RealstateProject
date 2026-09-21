@@ -19,26 +19,17 @@ import type { ColumnFilterDef } from "./propertyFilters";
  *    which is exactly "this broker could take it".
  */
 
-/** The property types a requirement is written with — the same names the
- *  backend normalizes to (Backend/Agent/BrokerRequirementAgent/
- *  requirement_normalization.py's REQUIREMENT_TYPES). Offered as suggestions
- *  in the Edit dialog, never enforced. */
-export const REQUIREMENT_TYPE_OPTIONS = [
-  "Flat",
-  "Penthouse",
-  "Bungalow",
-  "Villa",
-  "Row House",
-  "Duplex",
-  "Plot",
-  "Industrial Plot",
-  "Land",
-  "Shop",
-  "Office",
-  "Showroom",
-  "Warehouse",
-  "Commercial Space",
-];
+/* The list of types the Add/Edit dialog offers used to live here, as
+   free-text suggestions on a datalist. It is now the one list every form in
+   the application offers — lib/propertyTypeOptions.ts's
+   PROPERTY_TYPE_OPTIONS — picked as chips rather than typed, so a
+   requirement and a client inquiry can never be written with different
+   words for the same thing.
+
+   The Type COLUMN FILTER on this page is untouched by that and is still
+   built from the values actually present in the rows on screen (see
+   requirementTypes below and lib/propertyFilters.ts's `optionOf`), which is
+   what lets it find requirements stored with any older name. */
 
 const UNSAVED_CONTACT = "Unsaved";
 

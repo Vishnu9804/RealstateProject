@@ -97,10 +97,14 @@ _REQUIREMENT_FIELDS = (
 )
 
 # Bounds on the multi-select property type and its per-type sizes. Far above
-# anything the form itself can send (it offers ten types and caps each size
-# at 80 characters) — they exist only so a hand-crafted request to this
+# anything the form itself can send (it offers fourteen types and caps each
+# size at 80 characters) — they exist only so a hand-crafted request to this
 # public endpoint can't park an arbitrarily large value on a client row.
-_MAX_PROPERTY_TYPES = 12
+#
+# This has to stay ABOVE the length of the offered list, not merely near it:
+# at 12, a visitor who genuinely ticked all fourteen had the last two
+# silently dropped on the way in, and the sizes belonging to them with them.
+_MAX_PROPERTY_TYPES = 24
 _MAX_PROPERTY_TYPE_LENGTH = 40
 _MAX_PROPERTY_SIZE_LENGTH = 80
 

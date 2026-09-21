@@ -7,56 +7,37 @@ import type { InquiryChannel, InquiryFormPrefill, InquiryFormSubmission } from "
 import { usePhoneVerification } from "../hooks/usePhoneVerification";
 import { formatBudgetDisplay, isPlausiblePhone, readBudget } from "../lib/format";
 import { joinAreas, mergeAreas, splitAreas, SURAT_AREAS } from "../lib/suratAreas";
+import {
+  AREA_UNITS,
+  SIZE_HINT,
+  joinSizeValue,
+  sizeTextError,
+  splitSizeValue,
+  splitTypes,
+  withStored,
+  type AreaUnit,
+} from "../lib/propertyTypeOptions";
 import AreaPicker from "./AreaPicker";
 import { IconAlert, IconArrowRight, IconCheck, IconEdit } from "./Icons";
 import PhoneVerifyDialog from "./PhoneVerifyDialog";
 
-const PROPERTY_TYPES = [
-  "Flat",
-  "Penthouse",
-  "Row House",
-  "Bungalow",
-  "Farm House",
-  "Shop",
-  "Office",
-  "Land/Plot",
-  "Warehouse",
-  "Other",
-];
-
-/** Types whose size is given in vaar (square yards) — land, or a home that
- *  comes with its own plot. Every other type is asked in sq ft. The matcher
- *  reads a bare number by the same rule (Backend/Service/
- *  ClientPropertyMatchingService/normalization.py's default_size_unit); a
- *  unit the visitor writes themselves always wins over it. */
-const VAAR_TYPE_RE = /bungalow|land|plot|farm/i;
-
-function sizeUnitOf(type: string): "vaar" | "sq ft" {
-  return VAAR_TYPE_RE.test(type) ? "vaar" : "sq ft";
-}
-
-/** The stored comma-separated types ("Flat, Bungalow") back into chips.
- *  A value that isn't one of the options (an older free-text one) is kept
- *  as a chip of its own rather than silently dropped on the next save. */
-function splitTypes(raw: string | null): string[] {
-  const picked: string[] = [];
-  for (const part of (raw ?? "").split(",")) {
-    const label = part.trim().replace(/\s+/g, " ");
-    if (!label) continue;
-    const type = PROPERTY_TYPES.find((option) => option.toLowerCase() === label.toLowerCase()) ?? label;
-    if (!picked.some((existing) => existing.toLowerCase() === type.toLowerCase())) picked.push(type);
-  }
-  return picked;
-}
-
-/** Saved sizes re-keyed onto the chips they belong to. */
-function matchSizes(types: string[], sizes: Record<string, string> | null | undefined): Record<string, string> {
-  const matched: Record<string, string> = {};
-  for (const [key, value] of Object.entries(sizes ?? {})) {
+/** The size boxes' two halves, held apart while they are being typed and
+ *  joined into the one string the backend stores only on submit. Keyed by
+ *  the type exactly as it appears in the picked list. */
+function toSizeState(
+  types: string[],
+  stored: Record<string, string> | null | undefined,
+): { texts: Record<string, string>; units: Record<string, AreaUnit | ""> } {
+  const texts: Record<string, string> = {};
+  const units: Record<string, AreaUnit | ""> = {};
+  for (const [key, value] of Object.entries(stored ?? {})) {
     const type = types.find((candidate) => candidate.toLowerCase() === key.trim().toLowerCase());
-    if (type && value) matched[type] = value;
+    if (!type || !value) continue;
+    const { text, unit } = splitSizeValue(value);
+    texts[type] = text;
+    units[type] = unit;
   }
-  return matched;
+  return { texts, units };
 }
 
 function sizeInputId(prefix: string, type: string): string {
@@ -191,10 +172,12 @@ export default function RequirementsForm({
   // comma-separated string ("Flat, Bungalow"), which is how the backend
   // stores it and how the matcher reads it (each type scored on its own).
   const [propertyTypes, setPropertyTypes] = useState<string[]>([]);
-  // One optional free-text size per picked type, keyed by the type. A size
+  // One optional size per picked type, keyed by the type: the number or
+  // range on one side, the unit tapped beside it on the other. A size
   // survives its type being un-ticked (ticking it again brings it back),
   // but only sizes for types still picked are ever sent — see sizesToSubmit.
   const [propertySizes, setPropertySizes] = useState<Record<string, string>>({});
+  const [propertyUnits, setPropertyUnits] = useState<Record<string, AreaUnit | "">>({});
   const [bhk, setBhk] = useState("");
   // "" means "no preference", which is exactly what most people have — see
   // FURNISHING_OPTIONS. Sent as null in that case.
@@ -346,7 +329,9 @@ export default function RequirementsForm({
     setPurpose(data.purpose ?? "");
     const types = splitTypes(data.property_type);
     setPropertyTypes(types);
-    setPropertySizes(matchSizes(types, data.property_sizes));
+    const sizes = toSizeState(types, data.property_sizes);
+    setPropertySizes(sizes.texts);
+    setPropertyUnits(sizes.units);
     setBhk(data.bhk ?? "");
     setFurnishing(data.furnishing ?? "");
     // Written back the way they'd type it — a returning visitor reads their
@@ -396,14 +381,32 @@ export default function RequirementsForm({
   }
 
   /** Sizes for the types still picked, blanks left out — null when none
-   *  are left, which is how the backend is told there is nothing to keep. */
+   *  are left, which is how the backend is told there is nothing to keep.
+   *  Each value carries the unit tapped beside it ("1000-1500 sqft",
+   *  "150 var"), which is what the matcher reads it by. */
   function sizesToSubmit(): Record<string, string> | null {
     const sizes: Record<string, string> = {};
     for (const type of propertyTypes) {
-      const size = (propertySizes[type] ?? "").trim();
+      const size = joinSizeValue(propertySizes[type] ?? "", propertyUnits[type] ?? "");
       if (size) sizes[type] = size;
     }
     return Object.keys(sizes).length > 0 ? sizes : null;
+  }
+
+  /** The first thing wrong with any size box, or null. A box with something
+   *  typed in it has to be a number or a range AND has to say which unit
+   *  that is: a bare number is ambiguous, and 200 sqft and 200 var are not
+   *  the same property. An empty box is never a problem — a size is
+   *  optional. */
+  function sizeProblem(): string | null {
+    for (const type of propertyTypes) {
+      const text = (propertySizes[type] ?? "").trim();
+      if (!text) continue;
+      const shape = sizeTextError(text);
+      if (shape) return `${type} size: ${shape}`;
+      if (!propertyUnits[type]) return `Please tap sqft or var for the ${type} size.`;
+    }
+    return null;
   }
 
   /** Opens the code dialog, which sends the code the moment it mounts.
@@ -520,6 +523,11 @@ export default function RequirementsForm({
     if (budgetProblem) {
       setBudgetTouched({ min: true, max: true });
       setFormError(budgetProblem);
+      return;
+    }
+    const sizeIssue = sizeProblem();
+    if (sizeIssue) {
+      setFormError(sizeIssue);
       return;
     }
 
@@ -841,7 +849,7 @@ export default function RequirementsForm({
             Property type
           </span>
           <div className="seg seg--chips" role="group" aria-labelledby={`${idPrefix}-type-label`}>
-            {[...PROPERTY_TYPES, ...propertyTypes.filter((type) => !PROPERTY_TYPES.includes(type))].map((type) => {
+            {withStored(propertyTypes).map((type) => {
               const active = propertyTypes.includes(type);
               return (
                 <button
@@ -860,47 +868,74 @@ export default function RequirementsForm({
           <span className="field__hint">Pick every type you'd consider — as many as you like.</span>
         </div>
 
-        {/* One optional box per picked type, in the unit people actually
-            use for it. Free text on purpose: "about 1200", "150–200 vaar",
-            "૨૦૦ વાર" all read fine (see normalization.py's
-            parse_size_requirement), and it only ever nudges the matching —
-            it never rules a property out. */}
+        {/* One optional box per picked type, with BOTH units offered beside
+            it rather than one guessed from the type. A bare number is
+            ambiguous — 200 sqft and 200 var are not the same property — and
+            guessing it used to make a bungalow quoted in sq ft read as nine
+            times its real size. So the unit is asked; a box with anything
+            typed in it cannot be sent until one is tapped (sizeProblem).
+            Leaving every box empty stays perfectly fine: a size is
+            optional, and it only ever nudges the matching — it never rules
+            a property out. */}
         {propertyTypes.length > 0 && (
           <div className="field">
             <span className="field__label">Preferred size (optional)</span>
             <div className="req-form__sizes">
               {propertyTypes.map((type) => {
-                const unit = sizeUnitOf(type);
                 const inputId = sizeInputId(idPrefix, type);
+                const text = propertySizes[type] ?? "";
+                const unit = propertyUnits[type] ?? "";
+                const needsUnit = Boolean(text.trim()) && !unit;
                 return (
                   <div className="req-form__size" key={type}>
                     <label className="req-form__size-type" htmlFor={inputId}>
                       {type}
                     </label>
-                    <div className="req-form__size-box">
+                    <div className="req-form__size-entry">
                       <input
                         id={inputId}
                         type="text"
                         autoComplete="off"
-                        placeholder={unit === "vaar" ? "e.g. 200 or 150–250" : "e.g. 1200 or 1000–1500"}
-                        value={propertySizes[type] ?? ""}
+                        placeholder="e.g. 70, 70 - 80 or 70 to 80"
+                        value={text}
                         onChange={(event) =>
                           setPropertySizes((previous) => ({ ...previous, [type]: event.target.value }))
                         }
                         aria-describedby={`${idPrefix}-size-hint`}
-                        maxLength={80}
+                        maxLength={60}
                       />
-                      <span className="req-form__size-unit" aria-hidden="true">
-                        {unit}
-                      </span>
+                      <div
+                        className={`unit-caps${needsUnit ? " unit-caps--needed" : ""}`}
+                        role="radiogroup"
+                        aria-label={`Unit for the ${type} size`}
+                      >
+                        {AREA_UNITS.map((option) => (
+                          <button
+                            key={option.value}
+                            type="button"
+                            role="radio"
+                            aria-checked={unit === option.value}
+                            className={`unit-caps__opt${unit === option.value ? " is-on" : ""}`}
+                            onClick={() =>
+                              setPropertyUnits((previous) => ({
+                                ...previous,
+                                // Tapping the chosen unit again unpicks it,
+                                // which is the only way back to unanswered.
+                                [type]: previous[type] === option.value ? "" : option.value,
+                              }))
+                            }
+                          >
+                            {option.label}
+                          </button>
+                        ))}
+                      </div>
                     </div>
                   </div>
                 );
               })}
             </div>
-            <span className="field__hint" id={`${idPrefix}-size-hint`}>
-              Only if you have one in mind — a rough number or a range is perfect, written any way you like, in any
-              language.
+            <span className="field__hint field__hint--key" id={`${idPrefix}-size-hint`}>
+              {SIZE_HINT}
             </span>
           </div>
         )}

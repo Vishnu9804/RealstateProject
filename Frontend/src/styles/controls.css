@@ -179,14 +179,24 @@
   display: flex;
   align-items: flex-start;
   gap: 9px;
+  /* A flex item of the dialog column, beside a body that is `flex: 1`. Kept
+     at its natural height so the body — not the refusal — is what gives up
+     room, and the Save button below it never gets pushed out of the modal. */
+  flex: none;
   padding: 11px 22px;
   border-top: 1px solid color-mix(in oklab, var(--bad) 30%, transparent);
   background: color-mix(in oklab, var(--bad) 10%, var(--plane-1));
   color: var(--ink);
   font-size: 12.5px;
   line-height: 1.5;
-  max-height: 140px;
-  overflow-y: auto;
+  /* Deliberately NOT scrollable and NOT height-capped. It used to be
+     max-height:140px + overflow-y:auto, which meant the answer to "why
+     won't this save?" could be a half-sentence with the rest hidden inside
+     a second scrollbar, inside a dialog that already scrolls. A refusal
+     nobody can finish reading is not a refusal. The bar grows to fit
+     instead; the messages themselves are kept to one short sentence each so
+     it never grows far. */
+  overflow-wrap: anywhere;
 }
 .form-issues > svg { flex: none; margin-top: 2px; color: var(--bad); }
 .form-issues__list { margin: 0; padding-left: 17px; display: grid; gap: 3px; }
@@ -691,3 +701,164 @@ kbd {
    e.g. IconArrowRight as a Back button's icon — instead of hand-drawing a
    mirror-image icon just for direction. */
 .icon-flip-x { transform: scaleX(-1); }
+
+/* ---- searchable single-choice dropdown (components/ui/TypeSelect) ------
+   The trigger is deliberately an .input in everything but name — it sits in
+   the same grid as the plain text boxes beside it, and a control that is
+   half a button and half a field reads as neither. The menu is a portal
+   (the dialogs clip their own scrolling body), so it is `fixed` and carries
+   the popover's own glass. */
+.type-select { position: relative; min-width: 0; }
+.type-select__trigger {
+  display: flex;
+  align-items: center;
+  gap: 10px;
+  width: 100%;
+  padding: 0 12px 0 14px;
+  height: 42px;
+  border-radius: var(--r-sm);
+  border: 1px solid var(--rim);
+  background: var(--plane-0);
+  color: var(--ink);
+  font: inherit;
+  font-size: 14px;
+  text-align: left;
+  cursor: pointer;
+  box-shadow: inset 0 2px 6px rgba(0, 0, 0, 0.22), 0 1px 0 var(--rim-top);
+  transition:
+    border-color var(--t-fast) var(--ease-out),
+    box-shadow var(--t-base) var(--ease-out),
+    background-color var(--t-fast) var(--ease-out);
+}
+:root[data-theme="light"] .type-select__trigger {
+  box-shadow: inset 0 2px 5px rgba(30, 40, 90, 0.07), 0 1px 0 var(--rim-top);
+}
+.type-select__trigger:hover:not(:disabled) { border-color: var(--rim-strong); background: var(--plane-1); }
+.type-select__trigger:focus-visible,
+.type-select__trigger.is-open {
+  outline: none;
+  border-color: color-mix(in oklab, var(--accent) 62%, transparent);
+  box-shadow: inset 0 2px 6px rgba(0, 0, 0, 0.2), 0 0 0 3px var(--accent-soft), 0 10px 28px -12px var(--accent-glow);
+  background: var(--plane-1);
+}
+.type-select__trigger:disabled { opacity: 0.55; cursor: not-allowed; }
+.type-select__value { flex: 1; min-width: 0; overflow: hidden; text-overflow: ellipsis; white-space: nowrap; }
+/* The placeholder reads as a prompt, not as a value — the same grey the
+   real inputs give theirs. */
+.type-select__value.is-empty { color: var(--ink-4); }
+.type-select__caret { display: grid; place-items: center; color: var(--ink-4); transition: transform var(--t-fast) var(--ease-out); }
+.type-select__trigger.is-open .type-select__caret { transform: rotate(180deg); color: var(--ink-2); }
+
+.type-select__menu {
+  position: fixed;
+  /* Above .modal-scrim (200) and .lightbox-scrim (210): this menu is only
+     ever opened from inside a dialog, and it is painted into document.body
+     rather than into the dialog, so it must not depend on DOM order to
+     land in front of the form it belongs to. */
+  z-index: 240;
+  display: flex;
+  flex-direction: column;
+  min-width: 200px;
+  border-radius: var(--r-md);
+  background: var(--plane-2);
+  border: 1px solid var(--rim-strong);
+  box-shadow: var(--elev-4);
+  backdrop-filter: blur(28px) saturate(180%);
+  -webkit-backdrop-filter: blur(28px) saturate(180%);
+  overflow: hidden;
+}
+.type-select__search {
+  display: flex;
+  align-items: center;
+  gap: 9px;
+  padding: 10px 12px;
+  color: var(--ink-4);
+  border-bottom: 1px solid var(--rim);
+}
+.type-select__search-icon { display: grid; place-items: center; }
+.type-select__input {
+  flex: 1;
+  min-width: 0;
+  border: 0;
+  background: transparent;
+  outline: none;
+  font: inherit;
+  font-size: 13.5px;
+  color: var(--ink);
+}
+.type-select__input::placeholder { color: var(--ink-4); }
+.type-select__clear {
+  width: 20px;
+  height: 20px;
+  display: grid;
+  place-items: center;
+  border: 0;
+  border-radius: 50%;
+  background: var(--plane-2);
+  color: var(--ink-3);
+  cursor: pointer;
+  transition: all var(--t-fast) var(--ease-out);
+}
+.type-select__clear:hover { background: var(--plane-3); color: var(--ink); }
+.type-select__list { flex: 1; min-height: 0; overflow-y: auto; padding: 4px 8px 8px; overscroll-behavior: contain; }
+.type-select__none { padding: 16px 6px; font-size: 12.5px; color: var(--ink-4); text-align: center; }
+.type-select__opt {
+  display: flex;
+  align-items: center;
+  gap: 10px;
+  width: 100%;
+  padding: 8px 9px;
+  border: 1px solid transparent;
+  border-radius: 9px;
+  background: transparent;
+  color: var(--ink-2);
+  font: inherit;
+  font-size: 13px;
+  text-align: left;
+  cursor: pointer;
+  transition: background-color var(--t-fast) var(--ease-out), color var(--t-fast) var(--ease-out);
+}
+.type-select__opt-label { flex: 1; min-width: 0; overflow: hidden; text-overflow: ellipsis; white-space: nowrap; }
+/* The keyboard highlight and the pointer hover are the SAME state — the
+   list has one cursor, whichever is moving it. */
+.type-select__opt.is-active { background: var(--plane-1); border-color: var(--rim); color: var(--ink); }
+.type-select__opt[aria-selected="true"] { color: var(--accent); font-weight: 620; }
+.type-select__opt--clear { color: var(--ink-4); }
+
+/* ---- sqft / var unit capsule (components/ui/PropertyTypePicker) --------
+   Sits beside a size box rather than inside it: the unit is ASKED here, not
+   printed as a label, so it has to look pressable. --needed is the state a
+   box with something typed in it and no unit chosen is in — not an error
+   yet (nothing has been saved), just visibly unanswered. */
+.unit-caps {
+  display: inline-flex;
+  flex: 0 0 auto;
+  padding: 3px;
+  gap: 2px;
+  border-radius: 10px;
+  background: var(--plane-0);
+  border: 1px solid var(--rim);
+  box-shadow: inset 0 2px 6px rgba(0, 0, 0, 0.2);
+}
+.unit-caps--needed {
+  border-color: color-mix(in oklab, var(--warn) 62%, transparent);
+  box-shadow: inset 0 2px 6px rgba(0, 0, 0, 0.2), 0 0 0 2px color-mix(in oklab, var(--warn) 22%, transparent);
+}
+.unit-caps__opt {
+  border: 0;
+  background: transparent;
+  padding: 0 11px;
+  height: 30px;
+  border-radius: 8px;
+  font: inherit;
+  font-size: 12.5px;
+  font-weight: 620;
+  color: var(--ink-3);
+  cursor: pointer;
+  white-space: nowrap;
+  transition: all var(--t-fast) var(--ease-out);
+}
+.unit-caps__opt:hover:not(:disabled) { color: var(--ink); }
+.unit-caps__opt.is-on { background: var(--accent-gradient); color: #fff; box-shadow: var(--elev-2); }
+.unit-caps__opt:active:not(:disabled) { transform: scale(0.96); }
+.unit-caps__opt:disabled { opacity: 0.55; cursor: not-allowed; }

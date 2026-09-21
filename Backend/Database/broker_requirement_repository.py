@@ -28,6 +28,10 @@ from Service.WhatsAppDataFetchingService import message_fingerprint
 # message text/timestamp) is system-assigned and never editable.
 EDITABLE_CONTENT_FIELDS = (
     "requirement_type",
+    # The size wanted per type — see StructuredRequirement.property_sizes.
+    # Editable for the same reason requirement_type is: it is what the
+    # broker asked for, and the dialog is where it is stated.
+    "property_sizes",
     "bhk",
     "area_name",
     "preferred_areas",
@@ -52,6 +56,7 @@ _COLUMNS = (
     # update_requirement, which only writes EDITABLE_CONTENT_FIELDS.
     "source",
     "requirement_type",
+    "property_sizes",
     "bhk",
     "area_name",
     "preferred_areas",

@@ -12,7 +12,7 @@ by the service (see requirement_pipeline_service.create_requirement), never
 by the caller.
 """
 
-from typing import List, Literal, Optional
+from typing import Dict, List, Literal, Optional
 
 from fastapi import APIRouter, Depends, HTTPException
 from pydantic import BaseModel, Field, field_validator, model_validator
@@ -37,6 +37,19 @@ class RequirementUpdateRequest(BaseModel):
     came from, and nothing in the UI may rewrite it."""
 
     requirement_type: Optional[str] = None
+    # {type: "1000-1500 sqft"} for the types in requirement_type. Free text
+    # per type, never a number — read by the same parser a client's own
+    # property_sizes is. Optional[Dict] rather than a plain dict so a PATCH
+    # that leaves it out stays silent about it (exclude_unset), which is what
+    # keeps an unrelated edit from blanking the sizes; an explicit null is
+    # how the dialog says "there are none left".
+    #
+    # Deliberately NOT constrained to a vocabulary of types or of units: the
+    # offered lists live in the browser, and a value stored before them (or
+    # typed some other way) must round-trip untouched. The service tidies
+    # this onto the types actually asked for — see
+    # requirement_pipeline_service._align_property_sizes.
+    property_sizes: Optional[Dict[str, str]] = None
     bhk: Optional[str] = None
     area_name: Optional[str] = None
     preferred_areas: Optional[List[str]] = None

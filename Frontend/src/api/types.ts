@@ -790,6 +790,11 @@ export interface BrokerRequirementRecord {
    *  client inquiries. */
   source_connection_id: string | null;
   requirement_type: string | null;
+  /** The size wanted for each type in `requirement_type`, keyed by the type
+   *  as written there and carrying its own unit — {"Flat": "1000-1500 sqft",
+   *  "Bungalow": "150 var"}. Null when none was given. The same shape (and
+   *  the same reader) as a client's own property_sizes. */
+  property_sizes: Record<string, string> | null;
   bhk: string | null;
   /** The primary locality — simply the first of preferred_areas. */
   area_name: string | null;

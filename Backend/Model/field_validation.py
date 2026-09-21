@@ -270,12 +270,43 @@ def canonical_property_type(value: Optional[str]) -> Optional[str]:
     return requirement_normalization.canonical_requirement_type(value)
 
 
-def canonical_bhk(value: Optional[str]) -> Optional[str]:
-    """"3" -> "3 BHK", "4bhk , 5bhk" -> "4 BHK, 5 BHK". Same reasoning as
-    canonical_property_type above."""
-    from Agent.BrokerRequirementAgent import requirement_normalization
+# Words a person or an LLM writes to mean "there is nothing here". They are
+# not values, and storing one makes it look like an answer: an area filter
+# then offers "Unknown" as a locality, and the Localities tile counts it as a
+# real place. Compared case-folded and stripped of surrounding punctuation,
+# so "NULL", "Unknown.", " none " are all caught.
+_NOT_A_VALUE = frozenset(
+    {
+        "null",
+        "none",
+        "nil",
+        "nan",
+        "unknown",
+        "unspecified",
+        "undefined",
+        "n/a",
+        "na",
+        "not specified",
+        "not mentioned",
+        "not available",
+        "not given",
+        "-",
+        "--",
+        "—",
+    }
+)
 
-    return requirement_normalization.canonical_bhk(value)
+
+def blank_if_placeholder(value: Optional[str]) -> Optional[str]:
+    """None for a value that only says "nothing here" — see _NOT_A_VALUE —
+    and the trimmed text otherwise. An empty string becomes None too, so one
+    rule covers both ways a field can be unanswered."""
+    if value is None:
+        return None
+    trimmed = value.strip()
+    if not trimmed:
+        return None
+    return None if trimmed.strip(" .,;:!?\"'()[]").casefold() in _NOT_A_VALUE else trimmed
 
 
 class ListingContentValidators(BaseModel):
@@ -323,7 +354,19 @@ class ListingContentValidators(BaseModel):
     def _v_property_type(cls, value: Optional[str]) -> Optional[str]:
         return canonical_property_type(value)
 
-    @field_validator("bhk", check_fields=False)
+    # There is deliberately NO validator for `bhk` (stored in the column
+    # "configuration"). It used to be rewritten onto "N BHK" tokens, which
+    # silently dropped everything that was not one: "4 BHK, G+2" saved as
+    # "4 BHK" and the "G+2" the broker typed was gone. The field is free text
+    # now — whatever is typed is what is stored — matching how a listing
+    # captured from WhatsApp has always been stored (that path never ran this
+    # rewrite). Matching is unaffected: it re-reads the configuration from the
+    # stored text at score time rather than relying on a canonical spelling.
+
+    # A locality is a place, so a word that means "no answer" is no answer —
+    # it must not become an option in the Area filter or a number in the
+    # Localities tile.
+    @field_validator("area_name", check_fields=False)
     @classmethod
-    def _v_bhk(cls, value: Optional[str]) -> Optional[str]:
-        return canonical_bhk(value)
+    def _v_area_name(cls, value: Optional[str]) -> Optional[str]:
+        return blank_if_placeholder(value)

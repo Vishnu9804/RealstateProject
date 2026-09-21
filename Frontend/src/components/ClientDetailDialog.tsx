@@ -154,9 +154,12 @@ const STATUS_TONE: Record<string, "ok" | "warn" | "bad" | "info" | "accent"> = {
 };
 
 /** The sizes the client gave, ready to print as chips: just the size when
- *  they asked for one kind of property ("110 vaar"), qualified by type when
- *  they asked for several ("Row House 110 vaar"), since the number alone
- *  would then say nothing about which requirement it belongs to. */
+ *  they asked for one kind of property ("110 var"), qualified by type when
+ *  they asked for several ("Row House 110 var"), since the number alone
+ *  would then say nothing about which requirement it belongs to.
+ *
+ *  Printed exactly as stored — the unit is part of the stored value now
+ *  (see lib/propertyTypeOptions.ts), so nothing here has to guess it. */
 function sizeChips(client: InquiryClientRecord): string[] {
   const sizes = client.property_sizes;
   if (!sizes) return [];

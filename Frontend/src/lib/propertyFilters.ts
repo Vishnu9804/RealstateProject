@@ -146,7 +146,7 @@ export type PropertyContentFilterable = Pick<
  *  bounded simply isn't inside that range (see compileFilters). */
 export const CONTENT_FILTER_DEFS: ColumnFilterDef<PropertyContentFilterable>[] = [
   { key: "locality", label: "Area", kind: "values", optionOf: (property) => property.area_name },
-  { key: "bhk", label: "BHK", kind: "values", optionOf: (property) => property.bhk },
+  { key: "bhk", label: "Configuration", kind: "values", optionOf: (property) => property.bhk },
   { key: "type", label: "Type", kind: "values", optionOf: (property) => property.property_type },
   { key: "listingType", label: "Sale/Rent", kind: "values", optionOf: (property) => property.listing_type },
   { key: "furnishing", label: "Furnishing", kind: "values", optionOf: (property) => property.furnishing },
@@ -161,10 +161,10 @@ export const CONTENT_FILTER_DEFS: ColumnFilterDef<PropertyContentFilterable>[] =
   },
   {
     key: "areaVaar",
-    label: "Area (vaar)",
+    label: "Area (var)",
     kind: "range",
     numberOf: (property) => property.area_vaar,
-    format: (value) => `${Math.round(value)} vaar`,
+    format: (value) => `${Math.round(value)} var`,
     parse: parseArea,
     unitHint: "e.g. 155 or 500",
   },

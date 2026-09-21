@@ -22,7 +22,7 @@ import { useScrolled } from "../hooks/useUi";
 
 const NAV = [
   { to: "/", end: true, label: "Connection", icon: IconLink },
-  { to: "/dashboard", end: false, label: "Properties", icon: IconGrid },
+  { to: "/properties", end: false, label: "Properties", icon: IconGrid },
   // Sits next to Properties on purpose: the two are the supply and demand
   // halves of the same intake, and reading one usually means reading the
   // other.
@@ -110,7 +110,7 @@ export default function Layout() {
                   <NavLink key={item.to} to={item.to} end={item.end} className="dock__link">
                     <Icon size={16} />
                     <span>{item.label}</span>
-                    {item.to === "/dashboard" && needsReview > 0 && (
+                    {item.to === "/properties" && needsReview > 0 && (
                       <span className="dock__badge" title={`${needsReview} properties need review`}>
                         {needsReview > 99 ? "99+" : needsReview}
                       </span>

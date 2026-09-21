@@ -118,7 +118,7 @@ def _area_line(prop: StructuredProperty) -> str | None:
     the two: a number only means something next to its own unit."""
     parts = [
         f"{round(value)} {unit}"
-        for value, unit in ((prop.area_sqft, "sqft"), (prop.area_vaar, "vaar"))
+        for value, unit in ((prop.area_sqft, "sqft"), (prop.area_vaar, "var"))
         if value is not None
     ]
     return " / ".join(parts) if parts else None

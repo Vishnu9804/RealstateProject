@@ -156,14 +156,14 @@ export const COLUMNS: Column[] = [
   { key: "unitNo", label: "Unit / Flat no." },
   { key: "locality", label: "Area", sort: "locality", filterKey: "locality" },
   { key: "address", label: "Address" },
-  { key: "bhk", label: "BHK", filterKey: "bhk" },
+  { key: "bhk", label: "Configuration", filterKey: "bhk" },
   { key: "type", label: "Type", filterKey: "type" },
   { key: "listingType", label: "Sale/Rent", filterKey: "listingType" },
   // Two columns, not one: sqft and vaar are different measurements and a
   // single combined column could only be sorted or bounded by converting one
   // into the other — see lib/propertyFilters.ts.
   { key: "areaSqft", label: "Area (sqft)", sort: "areaSqft", numeric: true, filterKey: "areaSqft" },
-  { key: "areaVaar", label: "Area (vaar)", sort: "areaVaar", numeric: true, filterKey: "areaVaar" },
+  { key: "areaVaar", label: "Area (var)", sort: "areaVaar", numeric: true, filterKey: "areaVaar" },
   // Free text a person typed ("1850 sq ft") — see PropertyRecord.super_built.
   // No filter or sort: like Society/Address it is near-unique text, and the
   // search box already searches it.

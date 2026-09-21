@@ -90,7 +90,7 @@ export default function AgentFormDialog({
     // time.
     const found: FieldIssue[] = [];
     if (trimmedName.length === 0) {
-      found.push({ field: "name", message: "Enter the agent's name — it's what every client and visit is listed under." });
+      found.push({ field: "name", message: "Enter the agent's name." });
     }
     if (trimmedPhone.length === 0) {
       found.push({

@@ -375,6 +375,60 @@ def get_requirements_version() -> str:
     return requirement_store.get_requirements_version()
 
 
+_MAX_SIZE_TEXT_LENGTH = 80
+
+
+def _align_property_sizes(sizes: Optional[dict], requirement_type: Optional[str]) -> Optional[dict]:
+    """{type: size} keyed by the types this requirement actually asks for,
+    in the order they are asked for — or None when nothing is left.
+
+    Two jobs, both of which exist because a size is looked up BY its type
+    name later (Service/ClientPropertyMatchingService/normalization.size_for):
+
+      - a size whose type is no longer picked is dropped. Un-ticking a type
+        must not leave its size behind on the record;
+      - a size keyed by a name the type has since been renamed to something
+        else ("Apartment" -> "Flat", "Land/Plot" -> "Plot", see
+        requirement_normalization.canonical_requirement_type) is re-keyed
+        onto the stored name. Each key is put through the same
+        canonicalization the type list itself went through, so the two
+        always agree however the key was written.
+
+    The identical rule the client side applies to a client's own sizes (see
+    inquiry_form_service._clean_property_sizes), and for the identical
+    reason. Blank sizes are dropped — an unanswered optional box is not a
+    preference."""
+    if not sizes:
+        return None
+    labels = [label for label in (part.strip() for part in (requirement_type or "").split(",")) if label]
+    if not labels:
+        return None
+    by_lower = {label.lower(): label for label in labels}
+    aligned: Dict[str, str] = {}
+    for key, value in sizes.items():
+        text = " ".join(str(value or "").split())[:_MAX_SIZE_TEXT_LENGTH]
+        if not text:
+            continue
+        written = " ".join(str(key).split())
+        if not written:
+            continue
+        # The key as sent first, then the canonical form of it — a key that
+        # already matches a stored label must not be put through a rename
+        # that could split it into two.
+        candidates = [written]
+        canonical = requirement_normalization.canonical_requirement_type(written)
+        if canonical:
+            candidates.extend(part.strip() for part in canonical.split(","))
+        for candidate in candidates:
+            label = by_lower.get(candidate.lower())
+            if label and label not in aligned:
+                aligned[label] = text
+                break
+    # Back into the order the types are asked in, so the dict reads the same
+    # way the type list does.
+    return {label: aligned[label] for label in labels if label in aligned} or None
+
+
 def create_requirement(content_fields: Dict[str, Any]) -> BrokerRequirementRecord:
     """Backs the Broker Requirements page's Add dialog — a requirement entered
     by hand (an operator hears what a broker wants on a call, or in a chat
@@ -434,6 +488,14 @@ def create_requirement(content_fields: Dict[str, Any]) -> BrokerRequirementRecor
     requirement.bhk = requirement_normalization.canonical_bhk(requirement.bhk)
     requirement.requirement_type = requirement_normalization.canonical_requirement_type(requirement.requirement_type)
     requirement.furnishing = requirement_normalization.canonical_furnishing(requirement.furnishing)
+    # AFTER the line above, deliberately: canonicalizing renames the types
+    # ("Apartment" -> "Flat", "Land/Plot" -> "Plot"), and a size keyed by the
+    # name the dialog sent would then belong to a type that is no longer
+    # there — stored, but never found again by the matcher, which looks sizes
+    # up BY the stored type name (normalization.size_for).
+    requirement.property_sizes = _align_property_sizes(
+        requirement.property_sizes, requirement.requirement_type
+    )
     # The structurer's own post-model clean-ups, reused rather than repeated:
     # both are pure functions over the record (no LLM call, no I/O), and this
     # is what lets someone type just "80L-1cr" into Budget and still get the
@@ -475,6 +537,22 @@ def update_requirement(record_id: str, content_updates: Dict[str, Any]) -> Optio
     existing = requirement_store.get_requirement(record_id)
     if existing is None:
         return None
+    if "property_sizes" in filtered:
+        # Tidied BEFORE the comparison below, for the same reason furnishing
+        # is: a dict that would be stored identically must not count as a
+        # change and must not trigger a needless re-score.
+        #
+        # An edit is NOT canonicalized (unlike an Add — see
+        # create_requirement), so the types are stored exactly as the dialog
+        # sent them; the alignment still runs, to drop a size belonging to a
+        # type that has just been un-ticked. Keyed against whatever this same
+        # save is storing, falling back to what is already on the record when
+        # the dialog didn't send a type list at all — no extra read either
+        # way, `existing` is already in hand.
+        filtered["property_sizes"] = _align_property_sizes(
+            filtered["property_sizes"],
+            filtered["requirement_type"] if "requirement_type" in filtered else existing.requirement_type,
+        )
     moved = {key for key, value in filtered.items() if getattr(existing, key, None) != value}
     updated = requirement_store.update_requirement(record_id, filtered)
     if updated is None:

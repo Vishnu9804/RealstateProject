@@ -495,20 +495,14 @@
 .size-rows { display: grid; gap: 10px; }
 .size-row { display: grid; grid-template-columns: minmax(96px, 1fr) minmax(0, 2fr); align-items: center; gap: 12px; }
 .size-row__type { min-width: 0; font-size: 13px; font-weight: 560; color: var(--ink-2); }
-/* The unit sits inside the box rather than after it, so "1200" and "sq ft"
-   read as one value however narrow the dialog gets. */
-.size-row__box { position: relative; min-width: 0; }
-.size-row__box .input { padding-right: 58px; }
-.size-row__unit {
-  position: absolute;
-  right: 12px;
-  top: 50%;
-  transform: translateY(-50%);
-  font-size: 12px;
-  font-weight: 600;
-  color: var(--ink-4);
-  pointer-events: none;
-}
+/* The unit is now CHOSEN, not printed: the capsule sits beside the box as a
+   pair of buttons rather than as a label inside it (the old .size-row__box /
+   .size-row__unit treatment), because a bungalow quoted in sq ft used to be
+   stored as a bare number under a "vaar" label and then read as nine times
+   the size. It wraps under the box on a narrow dialog rather than squeezing
+   the number out of view. */
+.size-row__entry { display: flex; align-items: center; gap: 8px; min-width: 0; flex-wrap: wrap; }
+.size-row__entry .input { flex: 1 1 130px; min-width: 0; }
 
 /* The cr / L / K key above the budget boxes — same key, same words as the
    public form's, so a budget is written the same way on both. */

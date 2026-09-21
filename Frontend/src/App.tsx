@@ -1,4 +1,4 @@
-import { BrowserRouter, Route, Routes } from "react-router-dom";
+import { BrowserRouter, Navigate, Route, Routes } from "react-router-dom";
 import Layout from "./components/Layout";
 import RequireAuth from "./components/RequireAuth";
 import AgentsPage from "./pages/AgentsPage";
@@ -57,7 +57,15 @@ export default function App() {
                     }
                   >
                     <Route index element={<ConnectionPage />} />
-                    <Route path="dashboard" element={<DashboardPage />} />
+                    {/* The Properties page. Its component is still called
+                        DashboardPage (it is the page this tool was built
+                        around), but the address says what the page IS. */}
+                    <Route path="properties" element={<DashboardPage />} />
+                    {/* The address it used to live at. Kept as a redirect so
+                        a bookmark, an open tab or a pasted link from before
+                        the rename still lands on the page rather than on a
+                        blank screen. */}
+                    <Route path="dashboard" element={<Navigate to="/properties" replace />} />
                     <Route path="requirements" element={<BrokerRequirementsPage />} />
                     <Route path="builder-projects" element={<BuilderProjectsPage />} />
                     <Route path="landing-page" element={<LandingPagePage />} />

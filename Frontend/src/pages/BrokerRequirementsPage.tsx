@@ -1210,6 +1210,20 @@ function RequirementDetailDialog({
               )}
             </div>
 
+            {/* The size wanted per type, only when one was stated — every
+                other detail a broker wrote about size still lives in the
+                description below, in their own words. */}
+            {requirement.property_sizes && Object.keys(requirement.property_sizes).length > 0 && (
+              <div className="detail__block">
+                <div className="detail__k">Size wanted</div>
+                <div className="detail__v">
+                  {Object.entries(requirement.property_sizes)
+                    .map(([type, size]) => `${type}: ${size}`)
+                    .join(" · ")}
+                </div>
+              </div>
+            )}
+
             <div className="detail__block">
               <div className="detail__k">Contact</div>
               <div className="detail__v">{requirement.contact_name ?? "—"}</div>

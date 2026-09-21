@@ -5,9 +5,11 @@ import type { PropertyRecord } from "../api/types";
 import { friendlyError } from "../lib/apiError";
 import { MAX_AREA, MAX_INR, amountError, instagramReelError, urlError } from "../lib/fieldChecks";
 import { phoneList, toStoredNumber, toTypedNumber } from "../lib/phone";
+import { PROPERTY_TYPE_OPTIONS } from "../lib/propertyTypeOptions";
 import ContactPhonesField, { phoneBoxesError, toPhoneBoxes } from "./ContactPhonesField";
 import { useToast } from "./ui/Toast";
 import { Button, Segmented } from "./ui/Primitives";
+import TypeSelect from "./ui/TypeSelect";
 import { FormIssues, hasIssue, useFocusFirstIssue, type FieldIssue } from "./ui/FormIssues";
 import { IconAlert, IconImage, IconInstagram, IconPin, IconX } from "./ui/Icons";
 import PropertyImagesField from "./PropertyImagesField";
@@ -22,7 +24,24 @@ import PropertyImagesField from "./PropertyImagesField";
  * exactly these fields under exactly these names (see Backend/Model/
  * BuilderProjectModel/builder_project.py), so that page passes its own
  * endpoints as `api` and its own `noun` rather than keeping a second copy
- * of this form in step by hand.
+ * of this form in step by hand. That page passes `requireCoreFields={false}`
+ * — the five rules below are about property LISTINGS, and a builder project
+ * genuinely has no broker's contact number or asking price of its own, so
+ * applying them there would only block saves nobody can satisfy.
+ *
+ * FOR A PROPERTY, FIVE THINGS ARE NOT OPTIONAL (`requireCoreFields`):
+ *  - an area/locality OR an address — a listing nobody can place is not a
+ *    listing;
+ *  - the property type;
+ *  - Sale or Rent, which now starts UNSET on an Add rather than
+ *    pre-selected as "Sale" — a default that silently makes every hurried
+ *    entry a sale is worse than asking;
+ *  - a price: the wording OR the ₹ amount (either one; the ₹ box is still
+ *    the one every filter, sort and match reads);
+ *  - at least one contact number.
+ * Everything else stays optional, and every one of these is checked in both
+ * Add and Edit — a listing that cannot be placed, priced or called is no
+ * more useful for having been saved before the rule existed.
  *
  * Cancel and the header's X both discard the in-progress edit without
  * calling the backend — onClose is the only thing either one does, and
@@ -97,7 +116,10 @@ interface FormState {
   furnishing: string;
   price_text: string;
   price_amount_inr: string;
-  listing_type: "Sale" | "Rent";
+  /** null = nothing chosen yet, which is only ever the starting state of an
+   *  Add on a form that requires it (see requireCoreFields). A stored record
+   *  always carries one of the two, so Edit never opens unset. */
+  listing_type: "Sale" | "Rent" | null;
   contact_name: string;
   // One box per number, each holding what is TYPED (the bare ten digits),
   // never the stored "+91..." form — see ContactPhonesField.
@@ -124,7 +146,9 @@ const BLANK_FORM: FormState = {
   furnishing: "",
   price_text: "",
   price_amount_inr: "",
-  listing_type: "Sale",
+  // Unset, not "Sale". The dialog puts "Sale" back when the form does not
+  // require an answer (builder projects) — see the useState below.
+  listing_type: null,
   contact_name: "",
   contact_phone_boxes: [""],
   description: "",
@@ -192,7 +216,12 @@ function toPayload(form: FormState, includeImages: boolean): PropertyContentFiel
     furnishing: text(form.furnishing),
     price_text: text(form.price_text),
     price_amount_inr: num(form.price_amount_inr),
-    listing_type: form.listing_type,
+    // Never null on the wire: the column is not nullable and the API type
+    // has no third value. On a form that requires an answer validation has
+    // already refused an unset one, so this fallback is only ever reached
+    // by a form that does not (builder projects), where "Sale" is exactly
+    // the default this field has always had.
+    listing_type: form.listing_type ?? "Sale",
     contact_name: text(form.contact_name),
     // Blank boxes are dropped rather than sent as "": emptying every box is
     // how a listing's numbers are cleared, and [] is what says that.
@@ -228,18 +257,46 @@ function toPayload(form: FormState, includeImages: boolean): PropertyContentFiel
  * link still counted as "this property has a reel", which is what put a
  * property with `reel = hello` (and an area of -100 sqft) into the public
  * landing page's Ready to Add list.
+ *
+ * `requireCore` adds the five must-haves described at the top of this file.
+ * The two "either one of these" rules raise the SAME message against BOTH
+ * boxes on purpose: both go red, and the bar de-duplicates by message, so
+ * the reader is told once and shown where either answer can go.
+ *
+ * They are collected in the order the boxes appear in the form, so the bar
+ * reads top-to-bottom and focusFirstIssue lands on the first thing wrong
+ * rather than the first thing checked.
  */
-function validationIssues(form: FormState): FieldIssue[] {
+function validationIssues(form: FormState, requireCore: boolean): FieldIssue[] {
   const issues: FieldIssue[] = [];
   const add = (field: string, message: string | null) => {
     if (message) issues.push({ field, message });
   };
+  if (requireCore) {
+    if (!form.area_name.trim() && !form.address.trim()) {
+      const message = "Add an area / locality or an address — at least one of the two.";
+      add("area_name", message);
+      add("address", message);
+    }
+    if (!form.property_type.trim()) add("property_type", "Pick the property type.");
+    if (form.listing_type === null) add("listing_type", "Choose whether this is for Sale or for Rent.");
+  }
   for (const [key, label, max] of [
     ["area_sqft", "The area in sqft", MAX_AREA],
-    ["area_vaar", "The area in vaar", MAX_AREA],
+    ["area_vaar", "The area in var", MAX_AREA],
     ["price_amount_inr", "The price", MAX_INR],
   ] as const) {
     add(key, amountError(form[key], label, max));
+  }
+  if (requireCore && !form.price_text.trim() && !form.price_amount_inr.trim()) {
+    const message = "Add the price — the wording or the ₹ amount, at least one of the two.";
+    add("price_text", message);
+    add("price_amount_inr", message);
+  }
+  // Missing first, then malformed: an empty field cannot also be badly
+  // typed, and phoneBoxesError has nothing to say about empty boxes.
+  if (requireCore && !form.contact_phone_boxes.some((box) => box.trim())) {
+    add("contact_phone_boxes", "Add at least one contact number.");
   }
   add("contact_phone_boxes", phoneBoxesError(form.contact_phone_boxes));
   add("location_url", urlError(form.location_url));
@@ -279,6 +336,7 @@ function Field({
   span,
   field,
   invalid,
+  required,
   children,
 }: {
   label: string;
@@ -291,6 +349,9 @@ function Field({
   field?: string;
   /** A save was just refused over this box — label and control go red. */
   invalid?: boolean;
+  /** This box has to be filled in — marks the label with a red asterisk, so
+   *  the rule is visible before Save rather than only after it. */
+  required?: boolean;
   children: React.ReactNode;
 }) {
   return (
@@ -301,6 +362,11 @@ function Field({
     >
       <label className="field__hint" style={{ fontWeight: 560, color: invalid ? undefined : "var(--ink-2)" }}>
         {label}
+        {required && (
+          <span style={{ color: "var(--bad)", marginLeft: 3 }} title="Required" aria-hidden>
+            *
+          </span>
+        )}
       </label>
       {children}
       {hint &&
@@ -326,6 +392,7 @@ export default function PropertyFormDialog<T extends EditableContentRecord = Pro
   // does not pass an api of its own (T then defaults to PropertyRecord).
   api = PROPERTY_FORM_API as unknown as ContentFormApi<T>,
   noun = "property",
+  requireCoreFields = true,
 }: {
   mode: "add" | "edit";
   property?: T;
@@ -336,9 +403,18 @@ export default function PropertyFormDialog<T extends EditableContentRecord = Pro
   /** What the record is called in this dialog's wording ("property",
    *  "builder project"). */
   noun?: string;
+  /** Whether the five property must-haves at the top of this file apply —
+   *  an area or an address, a type, Sale/Rent, a price, one number. True
+   *  for property listings; the Builder Projects page turns it off, which
+   *  leaves that form exactly as it has always been. */
+  requireCoreFields?: boolean;
 }) {
   const toast = useToast();
-  const [form, setForm] = useState<FormState>(property ? toFormState(property) : BLANK_FORM);
+  const [form, setForm] = useState<FormState>(() =>
+    // Sale/Rent starts unset only where an answer is actually required;
+    // everywhere else it keeps the "Sale" default it has always had.
+    property ? toFormState(property) : { ...BLANK_FORM, listing_type: requireCoreFields ? null : "Sale" },
+  );
   const [saving, setSaving] = useState(false);
   // Why the last Save didn't go through, kept in the dialog rather than only
   // in a toast that fades while the modal is still open — the same treatment
@@ -417,7 +493,7 @@ export default function PropertyFormDialog<T extends EditableContentRecord = Pro
 
   async function handleSave() {
     if (saving) return;
-    const found = validationIssues(form);
+    const found = validationIssues(form, requireCoreFields);
     setIssues(found);
     if (found.length > 0) {
       setFormError(null);
@@ -452,7 +528,11 @@ export default function PropertyFormDialog<T extends EditableContentRecord = Pro
             <h2 className="detail-modal__title cell-truncate">
               {mode === "add" ? `Add a ${noun}` : (property?.society_name ?? property?.area_name ?? `Edit ${noun}`)}
             </h2>
-            <div className="detail-modal__sub">Every field here is optional — fill in only what you know.</div>
+            <div className="detail-modal__sub">
+              {requireCoreFields
+                ? "Fields marked * are required — an area or an address, the type, Sale or Rent, a price and one contact number. Everything else is optional."
+                : "Every field here is optional — fill in only what you know."}
+            </div>
           </div>
           <button type="button" className="toast__close" onClick={onClose} disabled={saving} aria-label="Close">
             <IconX size={15} />
@@ -490,19 +570,73 @@ export default function PropertyFormDialog<T extends EditableContentRecord = Pro
               <Field label="Unit / Flat number">
                 <input className="input" value={form.unit_no} onChange={(e) => set("unit_no", e.target.value)} placeholder="e.g. 402 or A-404" />
               </Field>
-              <Field label="Area / locality">
+              {/* The pair that has to answer "where is it?". Either box
+                  satisfies it, so both carry the mark and both go red
+                  together — see validationIssues. */}
+              <Field
+                label="Area / locality"
+                field="area_name"
+                invalid={hasIssue(issues, "area_name")}
+                required={requireCoreFields}
+                hint={requireCoreFields ? "This or an address — at least one." : undefined}
+              >
                 <input className="input" value={form.area_name} onChange={(e) => set("area_name", e.target.value)} placeholder="e.g. Vesu" />
               </Field>
-              <Field label="Address" span>
+              <Field
+                label="Address"
+                field="address"
+                invalid={hasIssue(issues, "address")}
+                required={requireCoreFields}
+                hint={requireCoreFields ? "This or an area / locality — at least one." : undefined}
+                span
+              >
                 <input className="input" value={form.address} onChange={(e) => set("address", e.target.value)} placeholder="Street, road or landmark" />
               </Field>
-              <Field label="Property type">
-                <input className="input" value={form.property_type} onChange={(e) => set("property_type", e.target.value)} placeholder="e.g. Flat, Shop, Land/Plot" />
+              {/* One choice, searchable — a LISTING is one kind of
+                  property, unlike a client or a broker asking for
+                  something, who may accept several. Typing filters the
+                  list; a value already stored that isn't on the list (an
+                  older "Land/Plot", or free text) is offered first and is
+                  kept, so opening and saving can never blank it. */}
+              <Field
+                label="Property type"
+                field="property_type"
+                invalid={hasIssue(issues, "property_type")}
+                required={requireCoreFields}
+                hint="Pick one — start typing to narrow the list."
+              >
+                <TypeSelect
+                  ariaLabel="Property type"
+                  value={form.property_type}
+                  onChange={(value) => set("property_type", value)}
+                  options={PROPERTY_TYPE_OPTIONS}
+                  placeholder="Search or pick a type"
+                  emptyLabel="— No type —"
+                  disabled={saving}
+                />
               </Field>
-              <Field label="BHK">
-                <input className="input" value={form.bhk} onChange={(e) => set("bhk", e.target.value)} placeholder="e.g. 2 BHK" />
+              {/* Free text, stored exactly as typed. It is not only a
+                  bedroom count — "4 BHK, G+2", "2 BHK duplex", "G+1 shop"
+                  are all real answers here — which is why the column behind
+                  it is called "configuration" and why nothing rewrites it. */}
+              <Field label="Configuration" hint="However it is written — 3 BHK, “4 BHK, G+2”, 1 RK, G+2.">
+                <input
+                  className="input"
+                  value={form.bhk}
+                  onChange={(e) => set("bhk", e.target.value)}
+                  placeholder="e.g. 3 BHK or 4 BHK, G+2"
+                />
               </Field>
-              <Field label="Sale or Rent">
+              {/* Starts with NOTHING selected on an Add (see the useState
+                  above): a pre-selected "Sale" is an answer the form gives
+                  on the reader's behalf, and a rental saved as a sale is
+                  wrong everywhere it is then read. */}
+              <Field
+                label="Sale or Rent"
+                field="listing_type"
+                invalid={hasIssue(issues, "listing_type")}
+                required={requireCoreFields}
+              >
                 <Segmented
                   ariaLabel="Sale or Rent"
                   value={form.listing_type}
@@ -526,8 +660,8 @@ export default function PropertyFormDialog<T extends EditableContentRecord = Pro
               <Field
                 field="area_vaar"
                 invalid={hasIssue(issues, "area_vaar")}
-                label="Area (vaar)"
-                hint="Digits only, if the size is quoted in vaar / gaj."
+                label="Area (var)"
+                hint="Digits only, if the size is quoted in var / gaj. 1 var = 9 sqft."
                 keyHint
               >
                 <input className="input" type="number" inputMode="decimal" min={0} value={form.area_vaar} onChange={(e) => set("area_vaar", e.target.value)} placeholder="e.g. 155" />
@@ -562,6 +696,9 @@ export default function PropertyFormDialog<T extends EditableContentRecord = Pro
                   one of them is the actual mistake. */}
               <Field
                 label="Price (as written)"
+                field="price_text"
+                invalid={hasIssue(issues, "price_text")}
+                required={requireCoreFields}
                 hint="Wording only — fill in the ₹ box too."
                 keyHint
               >
@@ -571,6 +708,7 @@ export default function PropertyFormDialog<T extends EditableContentRecord = Pro
                 field="price_amount_inr"
                 invalid={hasIssue(issues, "price_amount_inr")}
                 label="Price (₹ amount)"
+                required={requireCoreFields}
                 hint="Digits only — 6500000, not &quot;65 lakh&quot;."
                 keyHint
               >
@@ -584,7 +722,12 @@ export default function PropertyFormDialog<T extends EditableContentRecord = Pro
                 field="contact_phone_boxes"
                 invalid={hasIssue(issues, "contact_phone_boxes")}
                 label="Contact numbers"
-                hint="10 digits per box — the +91 is added for you."
+                required={requireCoreFields}
+                hint={
+                  requireCoreFields
+                    ? "At least one. 10 digits per box — the +91 is added for you."
+                    : "10 digits per box — the +91 is added for you."
+                }
                 keyHint
               >
                 <ContactPhonesField

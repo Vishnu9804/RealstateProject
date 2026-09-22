@@ -576,6 +576,12 @@ export interface PropertyRecord {
    *  set; both only when the listing itself quoted both. */
   area_sqft: number | null;
   area_vaar: number | null;
+  /** The upper end of a var SIZE RANGE typed in the Add/Edit dialog
+   *  ("80 - 90 var" -> area_vaar: 80, area_vaar_max: 90). null whenever the
+   *  var size is a single figure (area_vaar alone) or unset — sorting,
+   *  filtering and matching all keep reading area_vaar exactly as before,
+   *  this is display/data-entry only. */
+  area_vaar_max: number | null;
   /** The "super built" area as a person typed it ("1850 sq ft") — set only
    *  in the Add/Edit dialog, never extracted from WhatsApp by the LLM. */
   super_built: string | null;

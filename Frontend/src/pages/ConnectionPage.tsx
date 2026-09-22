@@ -277,12 +277,7 @@ function WhatsAppTab() {
     <div className="stack stack-6">
       <header className="section-head">
         <div>
-          <div className="section-head__eyebrow">Connection</div>
           <h1 className="page-title">WhatsApp connection</h1>
-          <p className="section-head__sub">
-            Link as many WhatsApp numbers as you need, then decide what each one is for. Everything here can be
-            changed later without restarting the backend.
-          </p>
         </div>
         <Button variant="ghost" icon={<IconRefresh size={15} />} onClick={load}>
           Refresh

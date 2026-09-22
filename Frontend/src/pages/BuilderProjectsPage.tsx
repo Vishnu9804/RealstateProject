@@ -439,12 +439,7 @@ export default function BuilderProjectsPage() {
     <div className="stack stack-5">
       <header className="section-head">
         <div>
-          <div className="section-head__eyebrow">Supply — added by hand</div>
           <h1 className="page-title">Builder Projects</h1>
-          <p className="section-head__sub">
-            Projects you add yourself with the Add button — never captured from WhatsApp. The same fields as a
-            property, and the same filters: click any column heading to filter by the values seen so far.
-          </p>
         </div>
         <div className="row-flex">
           <span className="toolbar__meta">
@@ -674,6 +669,10 @@ export default function BuilderProjectsPage() {
           // asking price and no broker's number of its own — so this form
           // stays as it has always been: everything optional.
           requireCoreFields={false}
+          // BuilderProjectRecord has no area_vaar_max column — this form's
+          // Area (var) box stays the plain single-number box it has always
+          // been, exactly like every other field here.
+          supportsAreaVaarRange={false}
           onClose={() => setFormDialog(null)}
           onSaved={handleSaved}
         />

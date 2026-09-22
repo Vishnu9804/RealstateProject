@@ -564,13 +564,7 @@ export default function InquiryClientsPage() {
     <div className="stack stack-5">
       <header className="section-head">
         <div>
-          <div className="section-head__eyebrow">Step 3 — WhatsApp inquiry handling</div>
           <h1 className="page-title">Inquiries</h1>
-          <p className="section-head__sub">
-            Everyone who's reached out about a property — through the WhatsApp
-            registration form, or by leaving their name and number on the public
-            website — in one list. Refreshes automatically.
-          </p>
         </div>
         <div className="row-flex">
           <span className="toolbar__meta">

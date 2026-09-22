@@ -14,6 +14,11 @@ export interface PropertyContentFields {
   address?: string | null;
   area_sqft?: number | null;
   area_vaar?: number | null;
+  /** The upper end of a var SIZE RANGE ("80 - 90 var" -> area_vaar: 80,
+   *  area_vaar_max: 90). Omitted entirely (not sent as null) for a form that
+   *  doesn't offer a var range — Builder Projects has no such column, and
+   *  the key is simply left out of that request body. */
+  area_vaar_max?: number | null;
   super_built?: string | null;
   furnishing?: string | null;
   price_text?: string | null;

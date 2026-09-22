@@ -1,6 +1,7 @@
 import { useEffect, useRef, useState } from "react";
 import { createPortal } from "react-dom";
 import { requirementApi, type RequirementContentFields } from "../api/requirementApi";
+import { settingsApi } from "../api/settingsApi";
 import type { BrokerRequirementRecord } from "../api/types";
 import { friendlyError } from "../lib/apiError";
 import { MAX_INR } from "../lib/fieldChecks";
@@ -8,8 +9,10 @@ import { formatCompactInr, parseCompactInr } from "../lib/formatters";
 import { phoneList, toStoredNumber, toTypedNumber } from "../lib/phone";
 import ContactPhonesField, { phoneBoxesError, toPhoneBoxes } from "./ContactPhonesField";
 import { SIZE_HINT, splitTypes } from "../lib/propertyTypeOptions";
+import { mergeAreas, SURAT_AREAS } from "../lib/suratAreas";
 import { FURNISHING_OPTIONS } from "./PropertyFormDialog";
 import { useToast } from "./ui/Toast";
+import AreaPicker from "./ui/AreaPicker";
 import { Button, Segmented } from "./ui/Primitives";
 import { FormIssues, hasIssue, useFocusFirstIssue, type FieldIssue } from "./ui/FormIssues";
 import {
@@ -56,13 +59,15 @@ interface FormState {
    *  backend stores at save time. */
   property_sizes: TypeSizeState;
   bhk: string;
-  preferred_areas: string;
+  /** Picked from the area picker (or typed in as a new one) — see
+   *  components/ui/AreaPicker.tsx. The first one is this requirement's main
+   *  Area. */
+  preferred_areas: string[];
   society_name: string;
   /** One of FURNISHING_OPTIONS, or "" for "not stated" — the same three
    *  values a property's furnishing uses, which is what lets matching
    *  compare the two sides at all. */
   furnishing: string;
-  budget_text: string;
   budget_min_inr: string;
   budget_max_inr: string;
   /** null = nothing chosen yet, which is only ever an Add's starting state.
@@ -99,13 +104,9 @@ function toFormState(requirement?: BrokerRequirementRecord): FormState {
     requirement_type: types.join(", "),
     property_sizes: toTypeSizeState(types, requirement?.property_sizes),
     bhk: requirement?.bhk ?? "",
-    // Edited as one comma-separated line rather than a list widget: these
-    // are short free-text localities copied from the message, and typing
-    // "Vesu, Althan" is faster than managing chips for two of them.
-    preferred_areas: requirement?.preferred_areas.join(", ") ?? "",
+    preferred_areas: requirement?.preferred_areas ?? [],
     society_name: requirement?.society_name ?? "",
     furnishing: requirement?.furnishing ?? "",
-    budget_text: requirement?.budget_text ?? "",
     // Shown the way the broker would say it ("85L", "1.2cr") — see
     // budgetText, and see the Budget field below for why this box stopped
     // being a bare digits-only number box.
@@ -127,10 +128,9 @@ function toPayload(form: FormState): RequirementContentFields {
   // already refused anything parseCompactInr cannot read, so a null here is
   // an empty box and nothing else.
   const num = (value: string) => (value.trim() ? parseCompactInr(value) : null);
-  const areas = form.preferred_areas
-    .split(",")
-    .map((area) => area.trim())
-    .filter(Boolean);
+  // Already a clean, de-duplicated list — AreaPicker never lets a blank or
+  // repeated area in.
+  const areas = form.preferred_areas;
   return {
     requirement_type: text(form.requirement_type),
     // One per picked type, each carrying the unit picked beside it
@@ -145,7 +145,10 @@ function toPayload(form: FormState): RequirementContentFields {
     area_name: areas[0] ?? null,
     society_name: text(form.society_name),
     furnishing: text(form.furnishing),
-    budget_text: text(form.budget_text),
+    // budget_text (the broker's own wording) is not on this form any more —
+    // deliberately omitted rather than sent as null, so saving an edit never
+    // wipes the wording a WhatsApp-captured requirement already has. The two
+    // ₹ boxes below are what filtering and matching actually read.
     budget_min_inr: num(form.budget_min_inr),
     budget_max_inr: num(form.budget_max_inr),
     // Never null on the wire — the API type has no third value, and
@@ -181,10 +184,6 @@ function toPayload(form: FormState): RequirementContentFields {
  *    card be saved reading "— / —" with a hundred meaningless "Low" matches
  *    behind it — the new rules are strictly stronger, so nothing that would
  *    have been refused before is accepted now.
- *
- *    Note the budget rule names the two ₹ boxes only: "Budget (as written)"
- *    is wording, and the matcher reads the rupee figures — which is exactly
- *    why the wording alone does not satisfy it.
  *
  * Returns EVERY problem it finds rather than only the first, so a form
  * with two mistakes in it takes one Save to discover both. Each entry names
@@ -355,6 +354,27 @@ export default function RequirementFormDialog({
   const bodyRef = useRef<HTMLDivElement>(null);
   useFocusFirstIssue(bodyRef, issues);
 
+  // The area picker's offered list: the well-known Surat localities plus
+  // whichever ones this app's own Settings page has configured that aren't
+  // already on it (see lib/suratAreas.ts's mergeAreas) — the exact same
+  // source the public requirements form's own picker reads. Failure is
+  // silent on purpose: the picker still works perfectly off the hardcoded
+  // list, and typing an area is always allowed regardless, so a dead
+  // settings call is not worth a visible error on this dialog.
+  const [areaOptions, setAreaOptions] = useState<string[]>(SURAT_AREAS);
+  useEffect(() => {
+    let cancelled = false;
+    settingsApi
+      .getAreaKeywords()
+      .then((settings) => {
+        if (!cancelled && settings.keywords.length > 0) setAreaOptions(mergeAreas(SURAT_AREAS, settings.keywords));
+      })
+      .catch(() => undefined);
+    return () => {
+      cancelled = true;
+    };
+  }, []);
+
   useEffect(() => {
     const onKeyDown = (event: KeyboardEvent) => {
       if (event.key === "Escape" && !saving) {
@@ -495,20 +515,29 @@ export default function RequirementFormDialog({
             )}
 
             <div style={GRID_STYLE}>
-              <Field label="BHK" hint="e.g. 2 BHK, or 4 BHK, 5 BHK">
-                <input className="input" value={form.bhk} onChange={(e) => set("bhk", e.target.value)} placeholder="e.g. 2 BHK" />
+              <Field
+                label="BHK"
+                hint="Write it however they think of it — “3 BHK”, “2 to 5 BHK”, “2 or 3 BHK”, “3+ BHK”, “exactly 3 BHK”, “1 RK”."
+              >
+                <input
+                  className="input"
+                  value={form.bhk}
+                  onChange={(e) => set("bhk", e.target.value)}
+                  placeholder="e.g. 3 BHK, 2 to 5 BHK, 3+ BHK"
+                />
               </Field>
 
               <Field
                 label="Preferred areas"
-                hint="Comma-separated. The first one is used as this requirement's main Area."
+                hint="Tap an area to add it. Not on the list? Type it and press Add — the first one picked is used as this requirement's main Area."
                 span
               >
-                <input
-                  className="input"
-                  value={form.preferred_areas}
-                  onChange={(e) => set("preferred_areas", e.target.value)}
-                  placeholder="e.g. Vesu, Althan, Pal"
+                <AreaPicker
+                  id="requirement-form-areas"
+                  selected={form.preferred_areas}
+                  onChange={(areas) => set("preferred_areas", areas)}
+                  options={areaOptions}
+                  disabled={saving}
                 />
               </Field>
 
@@ -564,26 +593,6 @@ export default function RequirementFormDialog({
                 />
               </Field>
 
-              {/* The two rupee boxes below are what filtering and matching
-                  read. This one is the broker's own wording, and its numbers
-                  are only ever worked out when BOTH of those are left empty
-                  (see requirement_structurer._fill_missing_budget_amounts)
-                  — which, since one of them is now required, never happens
-                  to anything saved from this form. So the hint says plainly
-                  that this box is wording: a form that quietly ignores what
-                  someone typed reads as a bug. */}
-              <Field
-                label="Budget (as written)"
-                hint="Wording only — the ₹ boxes below are what filtering and matching actually read."
-                keyHint
-              >
-                <input
-                  className="input"
-                  value={form.budget_text}
-                  onChange={(e) => set("budget_text", e.target.value)}
-                  placeholder="e.g. 80L-1cr"
-                />
-              </Field>
               {/* One Budget field with two boxes, identical to the
                   Inquiries page's client dialog — same legend, same
                   placeholders, same parser (parseCompactInr) and the same

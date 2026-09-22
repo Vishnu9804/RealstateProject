@@ -67,6 +67,11 @@ AREA_KNOWLEDGE_BASE: Dict[str, List[str]] = {
     'Chanakyapuri': [
         'Chanakyapuri',
     ],
+    'City lights': [
+        'City lights',
+        'ashok pan house city lights',
+        'RANDOME society',
+    ],
     'Citylight': [
         'Citylight',
         'Anurodh Dwar',

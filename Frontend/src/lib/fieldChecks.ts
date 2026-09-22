@@ -119,3 +119,18 @@ export function sizeRangeError(value: string, unit: "sqft" | "var" | ""): string
   }
   return null;
 }
+
+/** The number(s) `sizeRangeError` has already approved, split apart: `low`
+ *  is the figure typed (or a range's smaller end), `high` is a range's
+ *  other end or null for a single figure. Reads the SAME regex, so anything
+ *  this accepts is exactly what sizeRangeError has already said is fine —
+ *  call it only after that has returned null. null (not {low, high: null})
+ *  for an empty box, so a caller can tell "nothing typed" apart from
+ *  "one figure typed". */
+export function parseSizeRange(value: string): { low: number; high: number | null } | null {
+  const trimmed = value.trim();
+  if (!trimmed) return null;
+  const match = SIZE_RE.exec(trimmed);
+  if (!match) return null;
+  return { low: Number(match[1]), high: match[2] === undefined ? null : Number(match[2]) };
+}

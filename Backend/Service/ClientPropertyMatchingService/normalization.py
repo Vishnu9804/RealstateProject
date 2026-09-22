@@ -633,6 +633,17 @@ def _pair_compatibility(client_token: str, prop_token: str, is_primary: bool) ->
 # --- BHK -----------------------------------------------------------------
 
 _BHK_NUM_RE = re.compile(r"(\d+(?:\.\d+)?)")
+
+# "G+1", "G+2", "Stilt+4", "Ground + 2" — a building's floor structure, which
+# now shares the same field as the bedroom count (a property's "bhk" is a
+# full CONFIGURATION — see StructuredProperty.bhk and the WhatsApp
+# extraction prompt's CONFIGURATION rule — so "4 BHK, G+2" and a bare
+# "G+2" with no bedroom count at all are both real, stored values). Its own
+# number is NEVER a bedroom count, so it is stripped out before bhk_distance
+# looks for one below — otherwise a property whose configuration is just
+# "G+1" (no BHK stated) would misread its floor count as "1 BHK" and score
+# as an exact match against a 1 BHK request that has nothing to do with it.
+_FLOOR_STRUCTURE_RE = re.compile(r"\b(?:g|ground|stilt|basement|b)\s*\+\s*\d+(?:\.\d+)?\b", re.IGNORECASE)
 _MIN_WORDS_RE = re.compile(r"\bmin(?:imum)?\b|\+|\babove\b|\bat ?least\b|\bor more\b")
 _STRICT_WORDS_RE = re.compile(r"\bexactly\b|\bonly\b|\bstrictly\b")
 
@@ -809,7 +820,8 @@ def bhk_distance(client_raw: Optional[str], property_raw: Optional[str]) -> Opti
     intent = parse_bhk_intent(client_raw)
     if intent is None or not property_raw:
         return None
-    prop_numbers = [float(n) for n in _BHK_NUM_RE.findall(property_raw.lower())]
+    stripped = _FLOOR_STRUCTURE_RE.sub(" ", property_raw)
+    prop_numbers = [float(n) for n in _BHK_NUM_RE.findall(stripped.lower())]
     if not prop_numbers:
         return None
     return _intent_distance(prop_numbers[0], intent)

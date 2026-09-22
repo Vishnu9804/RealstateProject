@@ -63,20 +63,133 @@ export function parseCompactInr(raw: string): number | null {
   }
 }
 
+/** A range's two halves split apart — "80L - 1.2cr", "1 cr to 5 cr" — from
+ *  whichever of "-", an en/em dash, or the word "to" separates them. null
+ *  when there is no separator at all, which is how the caller tells "a
+ *  range" apart from "one figure". */
+function splitRangeText(raw: string): [string, string] | null {
+  const match = raw.match(/^(.+?)\s*(?:-|–|—|\bto\b)\s*(.+)$/i);
+  if (!match) return null;
+  const [, left, right] = match;
+  if (!left.trim() || !right.trim()) return null;
+  return [left.trim(), right.trim()];
+}
+
+/** splitRangeText, but only when BOTH halves actually read as money — so a
+ *  stray dash in ordinary wording ("Rs 45L - urgent sale") is never mistaken
+ *  for a range. */
+function priceRangeSides(raw: string): [string, string] | null {
+  const range = splitRangeText(raw.trim());
+  if (!range) return null;
+  return parseCompactInr(range[0]) !== null && parseCompactInr(range[1]) !== null ? range : null;
+}
+
+/** True when `raw` reads as a genuine two-sided price range under
+ *  parsePriceRange's own splitting rule — used to decide whether a stored
+ *  price should be shown verbatim (a range) or as its clean compact amount
+ *  (a single figure). */
+export function isPriceRangeText(raw: string): boolean {
+  return priceRangeSides(raw) !== null;
+}
+
+/** One side of a price box, tidied to its compact form when it reads back
+ *  exactly — "1.8 cr" -> "1.8cr". Left as typed when it doesn't parse or
+ *  doesn't round-trip, so a side no one can read is never silently changed. */
+function tidyPriceSide(side: string): string {
+  const amount = parseCompactInr(side);
+  if (amount === null) return side;
+  const compact = formatCompactInr(amount);
+  return parseCompactInr(compact) === amount ? compact : side;
+}
+
 /**
- * The stored numeric amount wins over the broker's own wording.
+ * Tidies a typed price box onto its compact form WITHOUT collapsing a range
+ * to one figure — "1.8 cr to 2 cr" -> "1.8cr - 2cr", "85 lakh" -> "85L".
  *
- * The wording ("45 Lakh", "45L onwards", "Rs.45,00,000/-") is whatever each
- * person happened to type, so a column of it can't be scanned or compared —
- * and it is what the numeric amount was extracted *from*, so showing the
- * number loses nothing. The original text is still surfaced on hover and in
- * the expanded row, which is where you go when you want to check the
- * extraction rather than read the price.
+ * This is the opposite number of parsePriceRange: that function collapses a
+ * range to its MIDPOINT for price_amount_inr (the one figure a property has
+ * to sort/filter/match by), while this one is for what a human reads back —
+ * whatever was typed, figure or range, so nothing they wrote is flattened
+ * into the internal midpoint just because the box got tidied.
+ */
+export function tidyPriceInput(raw: string): string {
+  const text = raw.trim();
+  if (!text) return raw;
+  const range = priceRangeSides(text);
+  if (range) return `${tidyPriceSide(range[0])} - ${tidyPriceSide(range[1])}`;
+  return tidyPriceSide(text);
+}
+
+/**
+ * The Properties Add/Edit dialog's single combined Price box: one figure
+ * ("85L"), or a range ("80L - 1.2cr", "1 cr to 5 cr"). Each side reads
+ * exactly what parseCompactInr does — plain rupees, or L/cr/K notation.
+ *
+ * A property has only ONE numeric price column (price_amount_inr) — there
+ * is no min/max pair to fill the way a requirement's budget has. A range is
+ * therefore collapsed to its MIDPOINT ("2cr to 3cr" -> 2.5cr): the box's own
+ * wording (whatever was typed, range included) is what price_text still
+ * carries in full, so nothing the broker said is lost — this amount is only
+ * what sorting, filtering and matching read as "the" price.
+ *
+ * Empty is fine (the box is optional): {amount: null, error: null}. A
+ * reversed range is REFUSED, not silently swapped — a person typing into
+ * this box is right there to fix it themselves.
+ */
+export function parsePriceRange(raw: string): { amount: number | null; error: string | null } {
+  const text = raw.trim();
+  if (!text) return { amount: null, error: null };
+  const range = splitRangeText(text);
+  if (range) {
+    const left = parseCompactInr(range[0]);
+    const right = parseCompactInr(range[1]);
+    if (left === null || right === null) {
+      return { amount: null, error: `We couldn't read "${text}" — try 80L - 1.2cr, or 1 cr to 5 cr.` };
+    }
+    if (left > right) {
+      return { amount: null, error: "The starting price is above the ending price." };
+    }
+    return { amount: (left + right) / 2, error: null };
+  }
+  const amount = parseCompactInr(text);
+  if (amount === null) {
+    return { amount: null, error: `We couldn't read "${text}" — try 45L, 1.2cr, 4500000, or a range like 80L - 1.2cr.` };
+  }
+  return { amount, error: null };
+}
+
+/**
+ * The stored numeric amount wins over the broker's own wording — EXCEPT
+ * when price_text is a genuine range ("80L - 1.2cr"). A property has only
+ * one price column, so a range typed into the combined Price box (see
+ * PropertyFormDialog) is collapsed to its MIDPOINT for price_amount_inr —
+ * showing that midpoint here would silently turn "1.8cr to 2cr" into
+ * "1.9cr" everywhere the price is read, which is not what was entered and
+ * not what price_text still says. A range is therefore shown verbatim
+ * (tidied to its compact form on each side).
+ *
+ * For everything else — a single figure, or free-form wording ("45 Lakh",
+ * "45L onwards", "Rs.45,00,000/-") — the numeric amount still wins: that
+ * wording is whatever each person happened to type, so a column of it can't
+ * be scanned or compared, and it is what the amount was extracted *from*,
+ * so showing the number loses nothing. The original text is still surfaced
+ * on hover and in the expanded row, which is where you go when you want to
+ * check the extraction rather than read the price.
  */
 export function formatPrice(priceText: string | null, priceAmountInr: number | null): string {
+  if (priceText && isPriceRangeText(priceText)) return tidyPriceInput(priceText);
   if (priceAmountInr !== null) return formatCompactInr(priceAmountInr);
   if (priceText) return priceText;
   return "—";
+}
+
+/** formatPrice's own display rule, but "" instead of "—" for nothing at all
+ *  — what the Properties Add/Edit dialog's combined Price box opens showing
+ *  for an existing record (see PropertyFormDialog's toFormState), so a
+ *  blank box stays genuinely blank rather than showing a literal dash. */
+export function displayPrice(priceText: string | null, priceAmountInr: number | null): string {
+  const shown = formatPrice(priceText, priceAmountInr);
+  return shown === "—" ? "" : shown;
 }
 
 /**

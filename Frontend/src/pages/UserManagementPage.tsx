@@ -59,12 +59,7 @@ export default function UserManagementPage() {
     <div className="stack stack-5">
       <header className="section-head">
         <div>
-          <div className="section-head__eyebrow">Access control</div>
           <h1 className="page-title">Team &amp; access</h1>
-          <p className="section-head__sub">
-            Employees can use every page, but can't delete records, mark properties sold out, unlink WhatsApp, disconnect
-            Instagram or manage logins — and can't change their own username or password.
-          </p>
         </div>
         <div className="row-flex" style={{ gap: 8 }}>
           <Button variant="ghost" icon={<IconLock size={15} />} onClick={() => setChangingPassword(true)}>

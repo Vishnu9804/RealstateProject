@@ -71,7 +71,6 @@ export default function ClientDetailDialog({
                   property dialog carries, so a client and a listing read
                   the same way side by side. */}
               <div className="detail-modal__badges">
-                <Badge tone={STATUS_TONE[client.status] ?? "info"}>{client.status || "new"}</Badge>
                 {sourceLabel(client.source) && <Badge tone="info">{sourceLabel(client.source)}</Badge>}
                 {(client.bhk || client.property_type) && (
                   <span className="fact">
@@ -144,14 +143,6 @@ function sourceLabel(source: string | null): string {
     }[source] ?? source
   );
 }
-
-const STATUS_TONE: Record<string, "ok" | "warn" | "bad" | "info" | "accent"> = {
-  new: "accent",
-  complete: "ok",
-  completed: "ok",
-  pending: "warn",
-  incomplete: "warn",
-};
 
 /** The sizes the client gave, ready to print as chips: just the size when
  *  they asked for one kind of property ("110 var"), qualified by type when

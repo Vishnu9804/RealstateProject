@@ -513,6 +513,77 @@
   .size-row { grid-template-columns: minmax(0, 1fr); gap: 6px; }
 }
 
+/* Preferred areas — the same tap-to-add capsule picker the public
+   requirements form uses (LandingPage/src/components/AreaPicker.tsx),
+   styled to this app's own dialogs (components/ui/AreaPicker.tsx). Selected
+   areas sit above the search as removable chips (reusing .chip/.chip__x,
+   the same pill the filter strip already uses); the search box filters the
+   capsule row below it. */
+.area-picker { display: grid; gap: 10px; }
+.area-picker__selected { display: flex; flex-wrap: wrap; gap: 8px; align-items: center; }
+.area-picker__pick { padding: 6px 6px 6px 14px; }
+
+/* Hollow rather than filled, same reasoning as every other "undo everything"
+   control in this app: filling it would make "remove all" look exactly as
+   chosen as the areas it removes. */
+.area-picker__clear {
+  display: inline-flex;
+  align-items: center;
+  height: 30px;
+  padding: 0 14px;
+  border-radius: var(--r-pill);
+  border: 1px dashed var(--rim-strong);
+  background: transparent;
+  color: var(--ink-3);
+  font-size: 12px;
+  font-weight: 560;
+  transition: color var(--t-fast) var(--ease-out), border-color var(--t-fast) var(--ease-out),
+    background-color var(--t-fast) var(--ease-out);
+}
+.area-picker__clear:hover:not(:disabled) {
+  color: var(--bad);
+  border-color: color-mix(in oklab, var(--bad) 45%, transparent);
+  background: color-mix(in oklab, var(--bad) 8%, transparent);
+}
+.area-picker__clear:disabled { opacity: 0.55; cursor: not-allowed; }
+
+/* Capped and scrollable rather than fifty capsules pushing the rest of the
+   dialog off screen — tall enough for three rows, which is where the search
+   starts being quicker than the scroll anyway. */
+.area-picker__options {
+  display: flex;
+  flex-wrap: wrap;
+  gap: 8px;
+  max-height: 150px;
+  overflow-y: auto;
+  padding: 2px;
+}
+.area-picker__chip {
+  display: inline-flex;
+  align-items: center;
+  gap: 6px;
+  height: 32px;
+  padding: 0 13px;
+  border-radius: var(--r-pill);
+  border: 1px solid var(--rim);
+  background: var(--plane-1);
+  color: var(--ink-2);
+  font-size: 13px;
+  font-weight: 540;
+  white-space: nowrap;
+  cursor: pointer;
+  transition: background-color var(--t-fast) var(--ease-out), border-color var(--t-fast) var(--ease-out),
+    color var(--t-fast) var(--ease-out), transform var(--t-fast) var(--ease-out);
+}
+.area-picker__chip:hover:not(:disabled) { border-color: var(--rim-strong); color: var(--ink); transform: translateY(-1px); }
+.area-picker__chip:active:not(:disabled) { transform: scale(0.97); }
+.area-picker__chip:disabled { opacity: 0.55; cursor: not-allowed; }
+/* The typed-in area — dashed, so "add something new" reads as visibly a
+   different action from picking one off the list, the same distinction
+   .area-picker__clear draws against the solid chips beside it. */
+.area-picker__chip--new { border-style: dashed; border-color: var(--accent); color: var(--accent); }
+.area-picker__empty { margin: 2px; font-size: 12.5px; color: var(--ink-4); }
+
 .client-avatar {
   display: inline-grid;
   place-items: center;

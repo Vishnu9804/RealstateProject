@@ -519,10 +519,19 @@ export default function RequirementsForm({
       setFormError("Please choose whether you want to buy or rent.");
       return;
     }
+    if (propertyTypes.length === 0) {
+      setFormError("Please pick at least one property type.");
+      return;
+    }
     const budgetProblem = minBudget.error ?? maxBudget.error ?? budgetOrderError;
     if (budgetProblem) {
       setBudgetTouched({ min: true, max: true });
       setFormError(budgetProblem);
+      return;
+    }
+    if (minBudget.amount === null && maxBudget.amount === null) {
+      setBudgetTouched({ min: true, max: true });
+      setFormError("Please add a budget — a minimum or a maximum, at least one of the two.");
       return;
     }
     const sizeIssue = sizeProblem();

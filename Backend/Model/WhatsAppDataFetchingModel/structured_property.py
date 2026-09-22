@@ -73,6 +73,16 @@ class StructuredProperty(BaseModel):
     # property_area_sqft, which converts only for scoring).
     area_sqft: Optional[float] = None
     area_vaar: Optional[float] = None
+    # The upper end of a var SIZE RANGE typed in the Add/Edit dialog ("80 -
+    # 90 var" -> area_vaar=80, area_vaar_max=90). None whenever the var size
+    # is a single figure or unset. Set by a human only, never by the LLM (no
+    # broker message names a range this precisely) — absent from the
+    # extraction schema for the same reason super_built is. Deliberately NOT
+    # read by matching/scoring/sorting/filtering: those all compare on
+    # area_vaar alone, exactly as before this field existed, so a range is
+    # captured and shown without changing how any existing property is
+    # matched or ranked.
+    area_vaar_max: Optional[float] = None
     # The "super built" (super built-up) area, exactly as a human typed it in
     # the Add/Edit dialog — e.g. "1850 sq ft". Never extracted by the LLM: it
     # is deliberately absent from the extraction schema

@@ -105,12 +105,7 @@ export default function AgentsPage() {
     <div className="stack stack-5">
       <header className="section-head">
         <div>
-          <div className="section-head__eyebrow">Step 4 — Field team</div>
           <h1 className="page-title">Agents</h1>
-          <p className="section-head__sub">
-            Your site-visit team. Assign a client to an agent and both sides get everything they need on WhatsApp — no
-            phone call in between.
-          </p>
         </div>
         <Button variant="primary" icon={<IconPlus size={15} />} onClick={() => setShowAddAgent(true)}>
           Add agent

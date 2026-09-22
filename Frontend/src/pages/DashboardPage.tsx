@@ -793,12 +793,7 @@ export default function DashboardPage() {
     <div className="stack stack-5">
       <header className="section-head">
         <div>
-          <div className="section-head__eyebrow">Step 2 — Intake</div>
           <h1 className="page-title">Properties</h1>
-          <p className="section-head__sub">
-            Every qualified WhatsApp message, structured into columns and de-duplicated. Click any column heading to
-            filter by the values seen so far. The list refreshes itself every few seconds.
-          </p>
         </div>
         <div className="row-flex">
           <span className="toolbar__meta">

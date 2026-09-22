@@ -1024,6 +1024,21 @@ def _build_system_prompt(area_knowledge_supplied: bool = False) -> str:
             "related. Never merge two bullets into one property, and never split one bullet's "
             "own size/price/location details into more than one property entry.",
             "",
+            "CONFIGURATION (the \"bhk\" field) — despite its name this field is not only a "
+            "bedroom count, it is the property's full CONFIGURATION: the bedroom count "
+            "(BHK/RK) AND/OR any building/floor structure the message states for that SAME "
+            "property, combined into one string. Examples: \"5\"/\"5bhk\"/\"5 BHK\" -> "
+            "\"5 BHK\" (a bare number that means a bedroom count is NEVER written bare — "
+            "always attach \"BHK\"/\"RK\", because this field is read on its own by people "
+            "who never see the original message, and a lone digit tells them nothing); "
+            "\"G+1\"/\"g+2\"/\"Stilt+4\" with no bedroom count given -> \"G+1\"/\"G+2\"/"
+            "\"Stilt+4\", written exactly as stated; \"4 BHK, G+2\" (both stated together "
+            "for the same property) -> \"4 BHK, G+2\". Do not pile anything else into this "
+            "field — no furnishing, no area, no price, no property type, and not a single "
+            "unit's own floor (\"3rd floor\" is a fact about one flat, not a configuration, "
+            "and belongs nowhere — there is no field for it). This field is strictly the "
+            "bedroom count and/or the G+ building structure and nothing more.",
+            "",
             "Keep society_name (a specific named building/project/society, e.g. \"Black "
             "Residency\") and area_name (the general locality, e.g. \"Althan\") strictly "
             "separate — do not put a locality in society_name or a building name in "

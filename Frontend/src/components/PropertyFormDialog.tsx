@@ -3,7 +3,8 @@ import { createPortal } from "react-dom";
 import { propertyApi, type PropertyContentFields } from "../api/propertyApi";
 import type { PropertyRecord } from "../api/types";
 import { friendlyError } from "../lib/apiError";
-import { MAX_AREA, MAX_INR, amountError, instagramReelError, urlError } from "../lib/fieldChecks";
+import { MAX_AREA, MAX_INR, amountError, instagramReelError, parseSizeRange, sizeRangeError, urlError } from "../lib/fieldChecks";
+import { displayPrice, parsePriceRange, tidyPriceInput } from "../lib/formatters";
 import { phoneList, toStoredNumber, toTypedNumber } from "../lib/phone";
 import { PROPERTY_TYPE_OPTIONS } from "../lib/propertyTypeOptions";
 import ContactPhonesField, { phoneBoxesError, toPhoneBoxes } from "./ContactPhonesField";
@@ -29,19 +30,29 @@ import PropertyImagesField from "./PropertyImagesField";
  * genuinely has no broker's contact number or asking price of its own, so
  * applying them there would only block saves nobody can satisfy.
  *
- * FOR A PROPERTY, FIVE THINGS ARE NOT OPTIONAL (`requireCoreFields`):
+ * FOR A PROPERTY, FOUR THINGS ARE NOT OPTIONAL (`requireCoreFields`):
  *  - an area/locality OR an address — a listing nobody can place is not a
  *    listing;
  *  - the property type;
  *  - Sale or Rent, which now starts UNSET on an Add rather than
  *    pre-selected as "Sale" — a default that silently makes every hurried
  *    entry a sale is worse than asking;
- *  - a price: the wording OR the ₹ amount (either one; the ₹ box is still
- *    the one every filter, sort and match reads);
  *  - at least one contact number.
  * Everything else stays optional, and every one of these is checked in both
- * Add and Edit — a listing that cannot be placed, priced or called is no
- * more useful for having been saved before the rule existed.
+ * Add and Edit — a listing that cannot be placed or called is no more
+ * useful for having been saved before the rule existed.
+ *
+ * Price is deliberately NOT among them, and is now ONE combined box rather
+ * than the separate wording/₹-amount pair it used to be (`form.price_text`
+ * still holds it — see displayPrice/tidyPriceInput/parsePriceRange). A single figure
+ * ("85L") or L/cr/K notation fills price_amount_inr directly; a range
+ * ("80L - 1.2cr") is collapsed to its MIDPOINT, since a listing has only the
+ * one price column for every filter, sort and match to read. Whatever was
+ * typed — figure or range — is always kept verbatim in price_text too, so
+ * nothing a broker said is lost even though only one number is read by
+ * machinery. This combined box is Property-only: Builder Projects
+ * (`requireCoreFields={false}`) keeps its own separate wording and ₹-amount
+ * boxes exactly as they have always been.
  *
  * Cancel and the header's X both discard the in-progress edit without
  * calling the backend — onClose is the only thing either one does, and
@@ -161,7 +172,27 @@ const BLANK_FORM: FormState = {
   is_available: true,
 };
 
-function toFormState(property: EditableContentRecord): FormState {
+/** area_vaar_max lives only on a real PropertyRecord (see
+ *  supportsAreaVaarRange) — EditableContentRecord's shared Pick type deliberately
+ *  does not carry it, so BuilderProjectRecord (which has no such column)
+ *  never has to declare a field its backend can't fill in. Read this way
+ *  ONLY where supportsAreaVaarRange is true, which is the one place the cast
+ *  is safe. */
+function areaVaarMaxOf(property: EditableContentRecord): number | null {
+  return (property as { area_vaar_max?: number | null }).area_vaar_max ?? null;
+}
+
+/** "80" for a single figure, "80 - 90" for a range — the one text box a
+ *  range-capable Area (var) field edits. Only ever called when
+ *  supportsAreaVaarRange is true. */
+function areaVaarDisplay(property: EditableContentRecord): string {
+  const low = property.area_vaar;
+  if (low === null || low === undefined) return "";
+  const high = areaVaarMaxOf(property);
+  return high !== null && high !== low ? `${low} - ${high}` : `${low}`;
+}
+
+function toFormState(property: EditableContentRecord, supportsAreaVaarRange: boolean, combinedPrice: boolean): FormState {
   return {
     property_type: property.property_type ?? "",
     bhk: property.bhk ?? "",
@@ -170,10 +201,10 @@ function toFormState(property: EditableContentRecord): FormState {
     area_name: property.area_name ?? "",
     address: property.address ?? "",
     area_sqft: property.area_sqft?.toString() ?? "",
-    area_vaar: property.area_vaar?.toString() ?? "",
+    area_vaar: supportsAreaVaarRange ? areaVaarDisplay(property) : (property.area_vaar?.toString() ?? ""),
     super_built: property.super_built ?? "",
     furnishing: property.furnishing ?? "",
-    price_text: property.price_text ?? "",
+    price_text: combinedPrice ? displayPrice(property.price_text, property.price_amount_inr) : (property.price_text ?? ""),
     price_amount_inr: property.price_amount_inr?.toString() ?? "",
     listing_type: property.listing_type,
     contact_name: property.contact_name ?? "",
@@ -188,6 +219,45 @@ function toFormState(property: EditableContentRecord): FormState {
   };
 }
 
+/** area_vaar (+ area_vaar_max when the box supports a range) out of the one
+ *  text box. On a form that doesn't support a range, area_vaar_max is left
+ *  out of the object entirely rather than sent as null — Builder Projects'
+ *  backend model has no such column, and PropertyContentFields treats an
+ *  absent key and an explicit null differently everywhere else in this file
+ *  (see includeImages below), so the same courtesy applies here. On a form
+ *  that DOES support a range, area_vaar_max is always included, even as
+ *  null: a range typed in, then edited back down to one figure, has to
+ *  clear the stored max rather than leave the old one behind. */
+function areaVaarPayload(
+  raw: string,
+  supportsAreaVaarRange: boolean,
+): Pick<PropertyContentFields, "area_vaar"> & Partial<Pick<PropertyContentFields, "area_vaar_max">> {
+  if (!supportsAreaVaarRange) return { area_vaar: raw.trim() ? Number(raw) : null };
+  const parsed = parseSizeRange(raw);
+  return { area_vaar: parsed ? parsed.low : null, area_vaar_max: parsed ? parsed.high : null };
+}
+
+/** price_text + price_amount_inr out of the one combined Price box — see
+ *  displayPrice/parsePriceRange. price_text is always the raw text typed
+ *  (figure or range, verbatim), so nothing a broker said is lost; a range
+ *  collapses to its midpoint for price_amount_inr, since that is the one
+ *  number every filter, sort and match reads. On a form that doesn't
+ *  combine them (Builder Projects), the two boxes are read exactly as they
+ *  have always been. */
+function pricePayload(
+  form: FormState,
+  combinedPrice: boolean,
+): Pick<PropertyContentFields, "price_text" | "price_amount_inr"> {
+  const text = (value: string) => (value.trim() ? value.trim() : null);
+  if (!combinedPrice) {
+    return {
+      price_text: text(form.price_text),
+      price_amount_inr: form.price_amount_inr.trim() ? Number(form.price_amount_inr) : null,
+    };
+  }
+  return { price_text: text(form.price_text), price_amount_inr: parsePriceRange(form.price_text).amount };
+}
+
 /** Blank strings become null, not "" — an empty field must actually clear
  *  the value server-side, not overwrite it with an empty string.
  *
@@ -200,7 +270,12 @@ function toFormState(property: EditableContentRecord): FormState {
  *  ignore the field (the endpoint applies only the keys actually present —
  *  see PropertyUpdateRequest's exclude_unset), so an edit to a price can
  *  never cost a property its photos. */
-function toPayload(form: FormState, includeImages: boolean): PropertyContentFields {
+function toPayload(
+  form: FormState,
+  includeImages: boolean,
+  supportsAreaVaarRange: boolean,
+  combinedPrice: boolean,
+): PropertyContentFields {
   const text = (value: string) => (value.trim() ? value.trim() : null);
   const num = (value: string) => (value.trim() ? Number(value) : null);
   const payload: PropertyContentFields = {
@@ -211,11 +286,10 @@ function toPayload(form: FormState, includeImages: boolean): PropertyContentFiel
     area_name: text(form.area_name),
     address: text(form.address),
     area_sqft: num(form.area_sqft),
-    area_vaar: num(form.area_vaar),
+    ...areaVaarPayload(form.area_vaar, supportsAreaVaarRange),
     super_built: text(form.super_built),
     furnishing: text(form.furnishing),
-    price_text: text(form.price_text),
-    price_amount_inr: num(form.price_amount_inr),
+    ...pricePayload(form, combinedPrice),
     // Never null on the wire: the column is not nullable and the API type
     // has no third value. On a form that requires an answer validation has
     // already refused an unset one, so this fallback is only ever reached
@@ -258,16 +332,16 @@ function toPayload(form: FormState, includeImages: boolean): PropertyContentFiel
  * property with `reel = hello` (and an area of -100 sqft) into the public
  * landing page's Ready to Add list.
  *
- * `requireCore` adds the five must-haves described at the top of this file.
- * The two "either one of these" rules raise the SAME message against BOTH
- * boxes on purpose: both go red, and the bar de-duplicates by message, so
- * the reader is told once and shown where either answer can go.
+ * `requireCore` adds the four must-haves described at the top of this file.
+ * The area/address "either one of these" rule raises the SAME message
+ * against BOTH boxes on purpose: both go red, and the bar de-duplicates by
+ * message, so the reader is told once and shown where either answer can go.
  *
  * They are collected in the order the boxes appear in the form, so the bar
  * reads top-to-bottom and focusFirstIssue lands on the first thing wrong
  * rather than the first thing checked.
  */
-function validationIssues(form: FormState, requireCore: boolean): FieldIssue[] {
+function validationIssues(form: FormState, requireCore: boolean, supportsAreaVaarRange: boolean): FieldIssue[] {
   const issues: FieldIssue[] = [];
   const add = (field: string, message: string | null) => {
     if (message) issues.push({ field, message });
@@ -281,17 +355,24 @@ function validationIssues(form: FormState, requireCore: boolean): FieldIssue[] {
     if (!form.property_type.trim()) add("property_type", "Pick the property type.");
     if (form.listing_type === null) add("listing_type", "Choose whether this is for Sale or for Rent.");
   }
-  for (const [key, label, max] of [
-    ["area_sqft", "The area in sqft", MAX_AREA],
-    ["area_vaar", "The area in var", MAX_AREA],
-    ["price_amount_inr", "The price", MAX_INR],
-  ] as const) {
+  for (const [key, label, max] of [["area_sqft", "The area in sqft", MAX_AREA]] as const) {
     add(key, amountError(form[key], label, max));
   }
-  if (requireCore && !form.price_text.trim() && !form.price_amount_inr.trim()) {
-    const message = "Add the price — the wording or the ₹ amount, at least one of the two.";
-    add("price_text", message);
-    add("price_amount_inr", message);
+  // A range-capable box reads its own rule (a number OR a range, same shape
+  // as the Requirement/Client dialogs' Preferred size box); a form without
+  // range support keeps the plain single-figure check it has always had.
+  add("area_vaar", supportsAreaVaarRange ? sizeRangeError(form.area_vaar, "var") : amountError(form.area_vaar, "The area in var", MAX_AREA));
+  // Price: on a property listing, one combined box, optional — a figure or
+  // a range, read by parsePriceRange (which also refuses a reversed range).
+  // On a form without that (Builder Projects), the plain separate ₹-amount
+  // box keeps the single-figure check it has always had.
+  if (requireCore) {
+    if (form.price_text.trim()) {
+      const price = parsePriceRange(form.price_text);
+      if (price.error) add("price_text", price.error);
+    }
+  } else {
+    add("price_amount_inr", amountError(form.price_amount_inr, "The price", MAX_INR));
   }
   // Missing first, then malformed: an empty field cannot also be badly
   // typed, and phoneBoxesError has nothing to say about empty boxes.
@@ -393,6 +474,7 @@ export default function PropertyFormDialog<T extends EditableContentRecord = Pro
   api = PROPERTY_FORM_API as unknown as ContentFormApi<T>,
   noun = "property",
   requireCoreFields = true,
+  supportsAreaVaarRange = true,
 }: {
   mode: "add" | "edit";
   property?: T;
@@ -403,17 +485,25 @@ export default function PropertyFormDialog<T extends EditableContentRecord = Pro
   /** What the record is called in this dialog's wording ("property",
    *  "builder project"). */
   noun?: string;
-  /** Whether the five property must-haves at the top of this file apply —
-   *  an area or an address, a type, Sale/Rent, a price, one number. True
+  /** Whether the four property must-haves at the top of this file apply —
+   *  an area or an address, a type, Sale/Rent, one contact number. True
    *  for property listings; the Builder Projects page turns it off, which
    *  leaves that form exactly as it has always been. */
   requireCoreFields?: boolean;
+  /** Whether the Area (var) box accepts a range ("80 - 90", "80 to 90"), not
+   *  just one figure. True for property listings, which have an
+   *  area_vaar_max column to hold the upper end. The Builder Projects page
+   *  turns this off — BuilderProjectRecord has no such column, so that form
+   *  keeps its plain single-number box exactly as it has always been. */
+  supportsAreaVaarRange?: boolean;
 }) {
   const toast = useToast();
   const [form, setForm] = useState<FormState>(() =>
     // Sale/Rent starts unset only where an answer is actually required;
     // everywhere else it keeps the "Sale" default it has always had.
-    property ? toFormState(property) : { ...BLANK_FORM, listing_type: requireCoreFields ? null : "Sale" },
+    property
+      ? toFormState(property, supportsAreaVaarRange, requireCoreFields)
+      : { ...BLANK_FORM, listing_type: requireCoreFields ? null : "Sale" },
   );
   const [saving, setSaving] = useState(false);
   // Why the last Save didn't go through, kept in the dialog rather than only
@@ -473,6 +563,18 @@ export default function PropertyFormDialog<T extends EditableContentRecord = Pro
     setForm((prev) => ({ ...prev, [key]: value }));
   }
 
+  /** Blur: tidy a figure or range onto its compact form ("85L", "80L -
+   *  1.2cr") — see tidyPriceInput. A range stays a range: only each side is
+   *  reformatted, never collapsed to price_amount_inr's midpoint, which
+   *  would silently turn "1.8cr to 2cr" into "1.9cr" right in front of
+   *  whoever typed it. Leaves an unreadable or empty box exactly as typed.
+   *  Only wired to the combined Price box (requireCoreFields); Builder
+   *  Projects' separate ₹-amount box has never reformatted itself. */
+  function onPriceBlur() {
+    const parsed = parsePriceRange(form.price_text);
+    if (!parsed.error) set("price_text", tidyPriceInput(form.price_text));
+  }
+
   // Functional updates, not "[...form.image_urls, ...dataUrls]" closed over
   // the render's `form` — PropertyImagesField resolves each file async, and
   // a second drop landing before the first finishes must never clobber it.
@@ -493,7 +595,7 @@ export default function PropertyFormDialog<T extends EditableContentRecord = Pro
 
   async function handleSave() {
     if (saving) return;
-    const found = validationIssues(form, requireCoreFields);
+    const found = validationIssues(form, requireCoreFields, supportsAreaVaarRange);
     setIssues(found);
     if (found.length > 0) {
       setFormError(null);
@@ -502,7 +604,7 @@ export default function PropertyFormDialog<T extends EditableContentRecord = Pro
     setSaving(true);
     setFormError(null);
     try {
-      const payload = toPayload(form, imagesLoaded);
+      const payload = toPayload(form, imagesLoaded, supportsAreaVaarRange, requireCoreFields);
       const saved = mode === "add" ? await api.create(payload) : await api.update(property!.record_id, payload);
       toast.push({
         tone: "ok",
@@ -530,7 +632,7 @@ export default function PropertyFormDialog<T extends EditableContentRecord = Pro
             </h2>
             <div className="detail-modal__sub">
               {requireCoreFields
-                ? "Fields marked * are required — an area or an address, the type, Sale or Rent, a price and one contact number. Everything else is optional."
+                ? "Fields marked * are required — an area or an address, the type, Sale or Rent and one contact number. Everything else is optional."
                 : "Every field here is optional — fill in only what you know."}
             </div>
           </div>
@@ -661,10 +763,25 @@ export default function PropertyFormDialog<T extends EditableContentRecord = Pro
                 field="area_vaar"
                 invalid={hasIssue(issues, "area_vaar")}
                 label="Area (var)"
-                hint="Digits only, if the size is quoted in var / gaj. 1 var = 9 sqft."
+                hint={
+                  supportsAreaVaarRange
+                    ? "A number or a range, if the size is quoted in var / gaj — 155, 80 - 90, or 80 to 90. 1 var = 9 sqft."
+                    : "Digits only, if the size is quoted in var / gaj. 1 var = 9 sqft."
+                }
                 keyHint
               >
-                <input className="input" type="number" inputMode="decimal" min={0} value={form.area_vaar} onChange={(e) => set("area_vaar", e.target.value)} placeholder="e.g. 155" />
+                {supportsAreaVaarRange ? (
+                  <input
+                    className="input"
+                    type="text"
+                    inputMode="decimal"
+                    value={form.area_vaar}
+                    onChange={(e) => set("area_vaar", e.target.value)}
+                    placeholder="e.g. 155 or 80 - 90"
+                  />
+                ) : (
+                  <input className="input" type="number" inputMode="decimal" min={0} value={form.area_vaar} onChange={(e) => set("area_vaar", e.target.value)} placeholder="e.g. 155" />
+                )}
               </Field>
               <Field label="Super built" hint="As you'd write it — e.g. 1850 sq ft">
                 <input className="input" value={form.super_built} onChange={(e) => set("super_built", e.target.value)} placeholder="e.g. 1850 sq ft" />
@@ -686,34 +803,71 @@ export default function PropertyFormDialog<T extends EditableContentRecord = Pro
                 </select>
               </Field>
 
-              {/* The two price boxes are the pair the "65 lakh" bug lives
-                  in. This one is wording and is shown as written; the one
-                  beside it is the number everything COMPUTES on, and it is
-                  not filled in from this one — a manually added listing has
-                  no structuring stage to work it out (that only runs on
-                  WhatsApp messages). So both hints are key hints, and both
-                  say what the other box is for: writing the price in only
-                  one of them is the actual mistake. */}
-              <Field
-                label="Price (as written)"
-                field="price_text"
-                invalid={hasIssue(issues, "price_text")}
-                required={requireCoreFields}
-                hint="Wording only — fill in the ₹ box too."
-                keyHint
-              >
-                <input className="input" value={form.price_text} onChange={(e) => set("price_text", e.target.value)} placeholder="e.g. 45L" />
-              </Field>
-              <Field
-                field="price_amount_inr"
-                invalid={hasIssue(issues, "price_amount_inr")}
-                label="Price (₹ amount)"
-                required={requireCoreFields}
-                hint="Digits only — 6500000, not &quot;65 lakh&quot;."
-                keyHint
-              >
-                <input className="input" type="number" inputMode="decimal" min={0} value={form.price_amount_inr} onChange={(e) => set("price_amount_inr", e.target.value)} placeholder="e.g. 6500000" />
-              </Field>
+              {requireCoreFields ? (
+                // One combined Price box — optional, unlike the four
+                // required fields above. Accepts a plain rupee figure, the
+                // broker's own L/cr/K shorthand, or a range ("80L - 1.2cr",
+                // "1 cr to 5 cr") in that same shorthand — see
+                // parsePriceRange, which is also what reads it back on Save
+                // (a range is collapsed to its midpoint for price_amount_inr;
+                // the exact typed text still fills price_text). Spans the
+                // row the way the two boxes it replaces used to.
+                <Field
+                  label="Price (₹)"
+                  hint="Optional. Write it the way they'd say it — 85L, 1.2cr, or a range like 80L - 1.2cr or 1cr to 5cr."
+                  span
+                >
+                  {/* The key, before the box — it answers "how do I write
+                      this?" before anyone has to wonder. */}
+                  <div className="budget-units">
+                    <span>
+                      <b>cr</b> crore
+                    </span>
+                    <span>
+                      <b>L</b> lakh
+                    </span>
+                    <span>
+                      <b>K</b> thousand
+                    </span>
+                  </div>
+                  <input
+                    data-field="price_text"
+                    className={`input${hasIssue(issues, "price_text") ? " input--bad" : ""}`}
+                    inputMode="text"
+                    aria-label="Price"
+                    value={form.price_text}
+                    onChange={(e) => set("price_text", e.target.value)}
+                    onBlur={onPriceBlur}
+                    placeholder="e.g. 85L, 1.2cr, or 80L - 1.2cr"
+                    maxLength={40}
+                  />
+                </Field>
+              ) : (
+                // Builder Projects keeps its own two separate boxes,
+                // unchanged: no structuring stage ever fills price_amount_inr
+                // in from price_text here, so both hints say what the OTHER
+                // box is for.
+                <>
+                  <Field
+                    label="Price (as written)"
+                    field="price_text"
+                    invalid={hasIssue(issues, "price_text")}
+                    hint="Wording only — fill in the ₹ box too."
+                    keyHint
+                  >
+                    <input className="input" value={form.price_text} onChange={(e) => set("price_text", e.target.value)} placeholder="e.g. 45L" />
+                  </Field>
+                  <Field
+                    field="price_amount_inr"
+                    invalid={hasIssue(issues, "price_amount_inr")}
+                    label="Price (₹ amount)"
+                    hint="Digits only — 6500000, not &quot;65 lakh&quot;."
+                    keyHint
+                  >
+                    <input className="input" type="number" inputMode="decimal" min={0} value={form.price_amount_inr} onChange={(e) => set("price_amount_inr", e.target.value)} placeholder="e.g. 6500000" />
+                  </Field>
+                </>
+              )}
 
               <Field label="Contact name">
                 <input className="input" value={form.contact_name} onChange={(e) => set("contact_name", e.target.value)} placeholder="e.g. Ramesh Broker" />

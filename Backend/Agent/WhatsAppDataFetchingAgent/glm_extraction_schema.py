@@ -17,7 +17,13 @@ class GLMPropertyListing(BaseModel):
         'Give the KIND of property only — "duplex", "simplex" and "triplex" describe the internal layout, not the '
         'type, so a "duplex flat" is a "Flat" and a "duplex penthouse" is a "Penthouse".',
     )
-    bhk: Optional[str] = Field(default=None, description='Bedroom configuration as written, e.g. "2 BHK", "1 RK".')
+    bhk: Optional[str] = Field(
+        default=None,
+        description='The property\'s CONFIGURATION, not only its bedroom count: the BHK/RK count and/or any '
+        'G+ building structure stated for it, e.g. "2 BHK", "1 RK", "G+2", "4 BHK, G+2". A bare bedroom-count '
+        'number is always written with its unit ("5" -> "5 BHK"), never as a bare digit — see the prompt\'s '
+        "own CONFIGURATION rule (property_structurer.py) for the full guidance this is extracted under.",
+    )
     unit_no: Optional[str] = Field(
         default=None,
         description='The individual unit\'s own number inside its building, ONLY if the message states one '

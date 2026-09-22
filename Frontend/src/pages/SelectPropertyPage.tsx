@@ -139,12 +139,31 @@ export default function SelectPropertyPage() {
   useEffect(() => {
     if (!clientPhone) return;
     let cancelled = false;
-    inquiryClientApi
-      .getManualProperties(clientPhone)
-      .then((ids) => {
+    // The checkbox has to open showing EVERY property this client's Matches
+    // dialog already shows, not only the ones hand-picked before — a scored
+    // match that nobody manually added still belongs to this client, and it
+    // looked unchecked here for no reason a manual-only read could explain.
+    // getMatches is the same cache-only read the Matches dialog itself
+    // opens on (see matchingApi.getMatches), so this never re-runs scoring;
+    // builder projects are filtered out since this page only lists rows
+    // from propertyApi.getProperties.
+    //
+    // savedIds is seeded to this SAME union, not just the manual ids, so an
+    // untouched visit stays non-dirty (Save disabled) rather than offering
+    // to write every scored match into the manual table. Unchecking a
+    // scored-only property still calls removeManualProperty on Save, which
+    // is a harmless no-op there (see Database/manual_property_repository.py's
+    // `remove` — a DELETE that matches no row does nothing) since it was
+    // never a manual row to begin with.
+    Promise.all([inquiryClientApi.getManualProperties(clientPhone), matchingApi.getMatches(clientPhone)])
+      .then(([manualIds, matches]) => {
         if (cancelled) return;
-        setSavedIds(new Set(ids));
-        setSelected(new Set(ids));
+        const scoredIds = [...matches.high, ...matches.medium, ...matches.low]
+          .filter((match) => match.property_source !== "builder_project")
+          .map((match) => match.record_id);
+        const union = new Set([...manualIds, ...scoredIds]);
+        setSavedIds(union);
+        setSelected(union);
       })
       .catch((err) => !cancelled && setError(friendlyError(err)));
     return () => {
@@ -320,11 +339,7 @@ export default function SelectPropertyPage() {
           >
             ← Back to {clientName}'s matches
           </button>
-          <div className="section-head__eyebrow">Step 4 — Manual selection</div>
           <h1 className="page-title">Select a property for {clientName}</h1>
-          <p className="section-head__sub">
-            The same list as Properties, with a checkbox — tick anything worth showing this client, matched or not, then save.
-          </p>
         </div>
         <div className="row-flex">
           <span className="toolbar__meta">

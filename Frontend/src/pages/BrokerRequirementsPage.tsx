@@ -476,7 +476,17 @@ export default function BrokerRequirementsPage() {
    *  only re-download every other row to learn nothing. */
   function applySaved(saved: BrokerRequirementRecord, mode: "add" | "edit") {
     if (mode === "add") {
-      setRequirements((prev) => (prev ? [...prev, saved] : [saved]));
+      // De-duplicated by record_id, not a bare append: create_requirement
+      // scores the new requirement against every stored property before its
+      // response comes back, which can take long enough for the background
+      // status poll (StatusProvider, every 7s) to notice requirements_version
+      // move and trigger this page's own load() first. If that happens, the
+      // fetched list already contains this record — appending it again would
+      // leave two rows sharing one record_id, and since confirmDelete removes
+      // by record_id, deleting either would silently delete both.
+      setRequirements((prev) =>
+        prev ? [...prev.filter((r) => r.record_id !== saved.record_id), saved] : [saved],
+      );
       // Marked as already seen so the new-arrival highlight doesn't fire for
       // a row this operator just typed themselves.
       seenIds.current?.add(saved.record_id);
@@ -526,14 +536,7 @@ export default function BrokerRequirementsPage() {
     <div className="stack stack-5">
       <header className="section-head">
         <div>
-          <div className="section-head__eyebrow">Step 2 — Demand</div>
           <h1 className="page-title">Broker Requirements</h1>
-          <p className="section-head__sub">
-            What brokers are <strong>looking for</strong>, structured from the chats selected under Requirement
-            monitoring on the Connection page. A message that reads as a requirement never becomes a property, and one
-            message can produce several requirements — each gets its own row here. Click any column heading to filter
-            by the values seen so far.
-          </p>
         </div>
         <div className="row-flex">
           <span className="toolbar__meta">

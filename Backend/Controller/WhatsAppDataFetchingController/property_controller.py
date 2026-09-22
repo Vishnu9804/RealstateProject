@@ -7,7 +7,7 @@ import threading
 from typing import Any, Dict, List, Literal, Optional
 
 from fastapi import APIRouter, Depends, HTTPException, Request, Response
-from pydantic import BaseModel, Field, TypeAdapter, field_validator
+from pydantic import BaseModel, Field, TypeAdapter, field_validator, model_validator
 
 from Middleware import http_cache
 from Model import field_validation
@@ -78,6 +78,11 @@ class PropertyContentFields(field_validation.ListingContentValidators):
     # number no property could have (see field_validation's own constants).
     area_sqft: Optional[float] = Field(default=None, ge=0, le=field_validation.MAX_AREA)
     area_vaar: Optional[float] = Field(default=None, ge=0, le=field_validation.MAX_AREA)
+    # The upper end of a var SIZE RANGE ("80 - 90 var" -> area_vaar=80,
+    # area_vaar_max=90) — see StructuredProperty.area_vaar_max. None for a
+    # single figure, exactly like area_vaar alone used to mean before this
+    # field existed.
+    area_vaar_max: Optional[float] = Field(default=None, ge=0, le=field_validation.MAX_AREA)
     # Human-only, like instagram_reel_url — never asked of the LLM (see
     # StructuredProperty.super_built).
     super_built: Optional[str] = None
@@ -108,6 +113,21 @@ class PropertyContentFields(field_validation.ListingContentValidators):
     video_available: bool = False
     extra_notes: Optional[str] = None
     is_available: bool = True
+
+    @model_validator(mode="after")
+    def _check_area_vaar_range(self) -> "PropertyContentFields":
+        """Refused, not silently swapped — same rule and same reasoning as
+        the Broker Requirements Add/Edit dialog's own budget range check
+        (BrokerRequirementController.RequirementUpdateRequest): a person
+        typing a var range into this dialog is right there, so a reversed
+        pair is pointed out rather than quietly reordered for them."""
+        if (
+            self.area_vaar is not None
+            and self.area_vaar_max is not None
+            and self.area_vaar > self.area_vaar_max
+        ):
+            raise ValueError("The minimum var is above the maximum.")
+        return self
 
 
 class PropertyUpdateRequest(PropertyContentFields):

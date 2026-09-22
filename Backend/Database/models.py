@@ -114,6 +114,15 @@ class PropertyRow(Base):
     # StructuredProperty.area_sqft/area_vaar.
     area_sqft: Mapped[Optional[float]] = mapped_column(Float, nullable=True)
     area_vaar: Mapped[Optional[float]] = mapped_column(Float, nullable=True)
+    # The upper end of a var SIZE RANGE typed in the Add/Edit dialog ("80 -
+    # 90 var" -> area_vaar=80, area_vaar_max=90). NULL whenever the var size
+    # is a single figure (area_vaar alone) or unset — see
+    # StructuredProperty.area_vaar_max. Retrofitted by Database/session.py's
+    # init_db, so nullable, and deliberately NOT read by sorting, filtering
+    # or matching: those all keep reading area_vaar exactly as before, so a
+    # property with no range behaves identically to one stored before this
+    # column existed.
+    area_vaar_max: Mapped[Optional[float]] = mapped_column(Float, nullable=True)
     # Set by a human in the Add/Edit dialog, never by the LLM — see
     # StructuredProperty.super_built. Retrofitted by Database/session.py's
     # init_db, so nullable.

@@ -2,6 +2,7 @@ import { useEffect, useRef, useState } from "react";
 import { createPortal } from "react-dom";
 import { ApiError } from "../api/client";
 import { inquiryClientApi, type ClientDetailsBody } from "../api/inquiryClientApi";
+import { settingsApi } from "../api/settingsApi";
 import type { InquiryClientRecord } from "../api/types";
 import { friendlyError } from "../lib/apiError";
 import { loadClientPhoto, setCachedClientPhoto } from "../lib/clientPhotoCache";
@@ -9,9 +10,11 @@ import { SIZE_HINT, splitTypes } from "../lib/propertyTypeOptions";
 import { formatCompactInr, parseCompactInr } from "../lib/formatters";
 import { fileToClientPhoto } from "../lib/imageProcessing";
 import { formatPhone, phoneFieldError, toStoredNumber, toTypedNumber } from "../lib/phone";
+import { joinAreas, mergeAreas, splitAreas, SURAT_AREAS } from "../lib/suratAreas";
 import { PhoneInput } from "./ContactPhonesField";
 import { FURNISHING_OPTIONS } from "./PropertyFormDialog";
 import { useToast } from "./ui/Toast";
+import AreaPicker from "./ui/AreaPicker";
 import { Button, Note } from "./ui/Primitives";
 import { FormIssues, hasIssue, useFocusFirstIssue, type FieldIssue } from "./ui/FormIssues";
 import {
@@ -130,7 +133,12 @@ interface FormState {
   furnishing: string;
   budget_min_inr: string;
   budget_max_inr: string;
-  preferred_areas: string;
+  /** Picked from the area picker (or typed in as a new one) — see
+   *  components/ui/AreaPicker.tsx. Joined into the one stored string only
+   *  at save time (see buildBody), the same way property_sizes and
+   *  additional_phones below are handled outside the generic TEXT_KEYS
+   *  loop. */
+  preferred_areas: string[];
   additional_requirements: string;
 }
 
@@ -144,7 +152,6 @@ type TextKey =
   | "property_type"
   | "bhk"
   | "furnishing"
-  | "preferred_areas"
   | "additional_requirements";
 const TEXT_KEYS: TextKey[] = [
   "name",
@@ -156,7 +163,6 @@ const TEXT_KEYS: TextKey[] = [
   "property_type",
   "bhk",
   "furnishing",
-  "preferred_areas",
   "additional_requirements",
 ];
 
@@ -175,7 +181,7 @@ const BLANK_FORM: FormState = {
   furnishing: "",
   budget_min_inr: "",
   budget_max_inr: "",
-  preferred_areas: "",
+  preferred_areas: [],
   additional_requirements: "",
 };
 
@@ -211,7 +217,7 @@ function toFormState(client: InquiryClientRecord): FormState {
     furnishing: client.furnishing ?? "",
     budget_min_inr: budgetText(client.budget_min_inr),
     budget_max_inr: budgetText(client.budget_max_inr),
-    preferred_areas: client.preferred_areas ?? "",
+    preferred_areas: splitAreas(client.preferred_areas),
     additional_requirements: client.additional_requirements ?? "",
   };
 }
@@ -219,22 +225,6 @@ function toFormState(client: InquiryClientRecord): FormState {
 function textOrNull(value: string): string | null {
   const trimmed = value.trim();
   return trimmed ? trimmed : null;
-}
-
-/** Split on commas or slashes, trimmed, de-duplicated case-insensitively and
- *  re-joined with ", " — the shape the public form stores (its
- *  lib/suratAreas.ts splitAreas/joinAreas), so both read identically in the
- *  table and to the matcher. */
-function normalizeAreas(raw: string): string | null {
-  const seen = new Set<string>();
-  const areas: string[] = [];
-  for (const part of raw.split(/[,/]/)) {
-    const cleaned = part.trim();
-    if (!cleaned || seen.has(cleaned.toLowerCase())) continue;
-    seen.add(cleaned.toLowerCase());
-    areas.push(cleaned);
-  }
-  return areas.length > 0 ? areas.join(", ") : null;
 }
 
 /**
@@ -300,9 +290,20 @@ function buildBody(
 
   for (const key of TEXT_KEYS) {
     if (!changed(key)) continue;
-    const value = key === "preferred_areas" ? normalizeAreas(form[key]) : textOrNull(form[key]);
+    const value = textOrNull(form[key]);
     if (mode === "add" && value === null) continue;
     body[key] = value;
+  }
+
+  // Preferred areas, picked from AreaPicker rather than typed — joined into
+  // the one string the backend stores, and compared by what would actually
+  // be SENT (the same rule sizes and additional_phones follow above), so
+  // re-picking the same areas in a different order is not a change worth
+  // saving or re-matching over.
+  const areas = form.preferred_areas.length > 0 ? joinAreas(form.preferred_areas) : null;
+  const initialAreas = initial.preferred_areas.length > 0 ? joinAreas(initial.preferred_areas) : null;
+  if (mode === "add" ? areas !== null : areas !== initialAreas) {
+    body.preferred_areas = areas;
   }
 
   // Sizes ride with the types they belong to, and are compared by what
@@ -417,6 +418,26 @@ export default function ClientFormDialog({
   const bodyRef = useRef<HTMLDivElement>(null);
   useFocusFirstIssue(bodyRef, issues);
   const requirementsLocked = mode === "edit" && assignedCount > 0;
+
+  // The area picker's offered list: the well-known Surat localities plus
+  // whichever ones this app's own Settings page has configured that aren't
+  // already on it (see lib/suratAreas.ts's mergeAreas) — the exact same
+  // source the public requirements form's own picker reads. Failure is
+  // silent on purpose: the picker still works perfectly off the hardcoded
+  // list, and typing an area is always allowed regardless.
+  const [areaOptions, setAreaOptions] = useState<string[]>(SURAT_AREAS);
+  useEffect(() => {
+    let cancelled = false;
+    settingsApi
+      .getAreaKeywords()
+      .then((settings) => {
+        if (!cancelled && settings.keywords.length > 0) setAreaOptions(mergeAreas(SURAT_AREAS, settings.keywords));
+      })
+      .catch(() => undefined);
+    return () => {
+      cancelled = true;
+    };
+  }, []);
 
   // --- photo -------------------------------------------------------------
   // `photoDirty` is what decides whether the photo is sent at all: an edit
@@ -1045,13 +1066,16 @@ export default function ClientFormDialog({
               </div>
             </Field>
 
-            <Field label="Preferred areas" htmlFor="client-form-areas" hint="Separate areas with commas.">
-              <input
+            <Field
+              label="Preferred areas"
+              htmlFor="client-form-areas"
+              hint="Tap an area to add it. Not on the list? Type it and press Add — we'll still match against it."
+            >
+              <AreaPicker
                 id="client-form-areas"
-                className="input"
-                value={form.preferred_areas}
-                onChange={(event) => set("preferred_areas", event.target.value)}
-                placeholder="e.g. Vesu, Althan, Pal"
+                selected={form.preferred_areas}
+                onChange={(areas) => set("preferred_areas", areas)}
+                options={areaOptions}
                 disabled={requirementsLocked || saving}
               />
             </Field>

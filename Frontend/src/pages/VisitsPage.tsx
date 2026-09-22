@@ -449,12 +449,7 @@ export default function VisitsPage() {
     <div className="stack stack-5">
       <header className="section-head">
         <div>
-          <div className="section-head__eyebrow">Field team · site visits</div>
           <h1 className="page-title">Visits</h1>
-          <p className="section-head__sub">
-            Every site visit in one place — out with an agent now, or already done. A client visiting the same
-            property again is grouped into one row; click it to see every visit. Refreshes automatically.
-          </p>
         </div>
         <div className="row-flex">
           <span className="toolbar__meta">

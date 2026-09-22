@@ -415,12 +415,7 @@ export default function LandingPagePage() {
     <div className="stack stack-5">
       <header className="section-head">
         <div>
-          <div className="section-head__eyebrow">Landing Page</div>
           <h1 className="page-title">Landing Page</h1>
-          <p className="section-head__sub">
-            Choose which properties show up on the public landing page. Only properties with at least one photo or an
-            Instagram reel appear here — those are the only ones with something to show.
-          </p>
         </div>
         <div className="row-flex">
           <span className="toolbar__meta">

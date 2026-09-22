@@ -1282,6 +1282,15 @@ def init_db() -> None:
         # A free-form staff notes field — a catch-all, unlike the specific
         # fields above. Same nullable, catalog-only, nothing-to-backfill shape.
         connection.execute(text("ALTER TABLE clients ADD COLUMN IF NOT EXISTS notes TEXT"))
+        # The upper end of a var SIZE RANGE ("80 - 90 var"), beside the
+        # existing area_vaar (which now holds the lower end of a range, or
+        # the one figure typed when there is no range — see
+        # StructuredProperty.area_vaar_max). NULL for every row written
+        # before this existed and for every property whose var size is still
+        # a single figure, which correctly means "no range, just the one
+        # number" and changes nothing about how area_vaar itself is read by
+        # sorting, filtering or matching. Nullable, no default: catalog-only.
+        connection.execute(text("ALTER TABLE properties ADD COLUMN IF NOT EXISTS area_vaar_max FLOAT"))
 
     _add_agent_phone_unique_index(engine)
 

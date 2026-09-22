@@ -87,7 +87,10 @@ inside the sold-out transaction (Database/soldout_property_repository.py).
 
 The requirement's own embedding is a local model call, memoised in memory
 per requirement against the exact text it was built from (see
-_requirement_vector) — it is never stored and never costs database traffic.
+_requirement_vector), and persisted to BrokerRequirementRow.embedding
+whenever a fresh one is computed — one small write, only on a cache miss
+(a new requirement, an edited one, or the first score after a process
+restart), never on every read.
 """
 
 from __future__ import annotations
@@ -497,7 +500,16 @@ _PER_TYPE_SCORING_MARKER = "|| per-type scoring v1"
 # hard compatibility check, a stated size the listing cannot answer priced as
 # an unknown, and new bucket cutoffs. See
 # ClientPropertyMatchingService/scoring.py and match_config.py.
-_ENGINE_MARKER = "|| matching engine v3"
+#
+# v4: STRICTER, on the three things that were letting almost every
+# requirement fill its hundred-row shortlist. Budget is now a hard filter on
+# both sides of the client's target band by the same ratio each way (a
+# ceiling-only brief is ₹65L–₹1cr eligible from ₹58.5L to ₹1.10cr; a
+# floor-only brief finally has a top at all), the semantic field carries
+# more weight and budget slightly less, and an area name is matched as whole
+# words so "Pal" stops matching "Palanpur" while "Sarthana" still matches
+# "Sarthana Jakatnaka". See ClientPropertyMatchingService/match_config.py.
+_ENGINE_MARKER = "|| matching engine v4"
 
 
 def _fingerprint(pseudo_client: ClientRecord) -> str:
@@ -595,6 +607,11 @@ def _as_pseudo_client(requirement: StructuredRequirement) -> ClientRecord:
         still reaches the score through the semantic half, exactly as
         before.
 
+    Deliberately absent: `notes`. It has no counterpart on ClientRecord and
+    is never folded into `extra` below — a staff-only catch-all must never
+    reach the embedding text or the score, exactly like ClientRecord.notes
+    on the client side (see StructuredRequirement.notes).
+
     `phone` is required by the model and is filled with the requirement's
     own sender number. Nothing reads it on this path (no cache is keyed by
     it, no row is written for it) — it is here so the object is valid, and
@@ -630,7 +647,10 @@ def _requirement_vector(requirement: StructuredRequirement, pseudo_client: Clien
 
     Memoised as record_id -> (text, vector): a cache hit requires the text to
     be identical, so an edit re-embeds and an unrelated property arriving
-    does not."""
+    does not. A cache miss also persists the fresh vector to
+    BrokerRequirementRow.embedding (requirement_store.save_requirement_embedding)
+    — a no-op if no database is configured, and otherwise one small write per
+    new-or-changed requirement, never per read."""
     text = client_requirement_text_builder.build_requirement_text(pseudo_client)
     if not text:
         return []
@@ -641,6 +661,7 @@ def _requirement_vector(requirement: StructuredRequirement, pseudo_client: Clien
     if len(_vector_cache) >= _MAX_CACHED_VECTORS:
         _vector_cache.pop(next(iter(_vector_cache)), None)
     _vector_cache[requirement.record_id] = (text, vector)
+    requirement_store.save_requirement_embedding(requirement.record_id, vector)
     return vector
 
 

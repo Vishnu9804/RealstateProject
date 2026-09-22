@@ -1257,8 +1257,15 @@ function RequirementDetailDialog({
 
           {requirement.description && (
             <div className="detail__block">
-              <div className="detail__k">Description &amp; other details</div>
+              <div className="detail__k">Additional requirements</div>
               <div className="detail__v">{requirement.description}</div>
+            </div>
+          )}
+
+          {requirement.notes && (
+            <div className="detail__block">
+              <div className="detail__k">Notes</div>
+              <div className="detail__v">{requirement.notes}</div>
             </div>
           )}
 

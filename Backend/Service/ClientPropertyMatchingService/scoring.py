@@ -25,10 +25,11 @@ client who named a type or a purpose the overwhelming majority of the
 property list costs two dictionary lookups and nothing else. Someone who
 asked to RENT is never shown something for sale; someone who asked for a
 FLAT is never shown a bungalow or a plot, however perfectly the area, the
-budget and the size line up; a listing far over a stated maximum is gone;
-a BHK the client ruled out is gone. What eligibility may NEVER do is turn an
-UNSTATED preference into a filter — a client who gave only a budget has
-ruled nothing out, so nothing is ruled out on their behalf.
+budget and the size line up; a listing priced well outside a stated budget
+is gone — too expensive OR too cheap, both by the same ratio of the client's
+own target band; a BHK the client ruled out is gone. What eligibility may
+NEVER do is turn an UNSTATED preference into a filter — a client who gave
+only a budget has ruled nothing out, so nothing is ruled out on their behalf.
 
 STAGE 2 — FIELD SCORES. Each requirement the CLIENT STATED is scored in
 [0, 1] on its own: budget against a target band (a ceiling is a target, not
@@ -134,6 +135,7 @@ class ClientBrief:
         "budget_lo",
         "budget_hi",
         "budget_hard_max",
+        "budget_hard_min",
         "budget_stated",
         "area_tokens",
         "bhk_stated",
@@ -179,9 +181,7 @@ class ClientBrief:
         self.budget_max = client.budget_max_inr
         self.budget_stated = self.budget_min is not None or self.budget_max is not None
         self.budget_lo, self.budget_hi = _budget_bounds(self.budget_min, self.budget_max)
-        self.budget_hard_max = (
-            self.budget_max * (1.0 + config.BUDGET_OVER_TOLERANCE) if self.budget_max else None
-        )
+        self.budget_hard_max, self.budget_hard_min = _budget_hard_bounds(self.budget_lo, self.budget_hi)
 
         self.area_tokens = normalization.client_area_tokens(client.preferred_areas)
 
@@ -355,15 +355,22 @@ def is_eligible(prop: EmbeddedProperty, brief: ClientBrief) -> bool:
             # rejected rather than guessed at in either direction.
             return False
 
-    # Budget — a hard filter in ONE direction only. Clearly too expensive is
-    # out; cheaper is never rejected for being cheap (it loses score on the
-    # under-budget curve instead).
-    if (
-        brief.budget_hard_max is not None
-        and prop.price_amount_inr is not None
-        and prop.price_amount_inr > brief.budget_hard_max
-    ):
-        return False
+    # Budget — a hard filter on BOTH sides of the client's target band now,
+    # by the same ratio of it each way (config.BUDGET_OVER_TOLERANCE and
+    # BUDGET_UNDER_TOLERANCE). Clearly too expensive is out, and so is
+    # clearly too cheap: a ₹39L listing against a ₹1cr brief is not a bargain
+    # for that buyer, it is a different kind of property, and it was
+    # occupying a slot on a hundred-row shortlist that a real match then
+    # could not get into.
+    #
+    # A listing with NO price is untouched by either bound — that is an
+    # unknown (priced as one by config.UNKNOWN_FIELD_SCORE), never a
+    # rejection.
+    if prop.price_amount_inr is not None:
+        if brief.budget_hard_max is not None and prop.price_amount_inr > brief.budget_hard_max:
+            return False
+        if brief.budget_hard_min is not None and prop.price_amount_inr < brief.budget_hard_min:
+            return False
 
     # BHK — in bedrooms, not in score. A property may never buy its way past
     # an unacceptable number of bedrooms with price or location.
@@ -765,17 +772,50 @@ def _type_field_score(gate: float, property_type: Optional[str]) -> Optional[flo
 def _budget_bounds(budget_min: Optional[float], budget_max: Optional[float]) -> Tuple[float, float]:
     """The range a property's price is scored against.
 
+    Full marks inside it, easing down outside — and, past
+    config.BUDGET_UNDER_TOLERANCE / BUDGET_OVER_TOLERANCE, not eligible at
+    all (see _budget_hard_bounds).
+
     A client who gave both ends is used exactly as written. A client who gave
-    only a ceiling gets a target BAND below it (config.BUDGET_TARGET_BAND)
-    rather than a floor of zero: "up to ₹1cr" is a target, not merely a
-    limit, and a ₹20L listing is a different kind of property rather than a
-    bargain."""
-    hi = budget_max if budget_max is not None else float("inf")
+    only ONE end gets a band inferred on the other side of it, because a
+    single figure says where somebody is shopping and is not an open-ended
+    instruction:
+
+      "up to 1cr"     -> 65L to 1cr      (config.BUDGET_TARGET_BAND)
+      "at least 1cr"  -> 1cr to 1.40cr   (config.BUDGET_OPEN_TOP_BAND)
+
+    Both are RATIOS of what the client said, so one rule fits a 30L brief and
+    a 5cr one. Without the second of them a floor-only brief had no top at
+    all: every listing above it scored a perfect 1.0 on budget, so "at least
+    1cr" called a 6cr bungalow an ideal price match.
+
+    A zero or negative figure is treated as no bound at all rather than as a
+    real one — it is bad data, and inferring a band from it would turn one
+    unusable number into a filter that rejects everything."""
+    if budget_min is not None and budget_max is not None:
+        # Written the wrong way round (real data does this): read it as the
+        # range the two numbers describe rather than as an empty one, which
+        # with a hard floor beneath the low end would now match nothing.
+        return min(budget_min, budget_max), max(budget_min, budget_max)
     if budget_min is not None:
-        return budget_min, hi
+        return budget_min, (budget_min * config.BUDGET_OPEN_TOP_BAND if budget_min > 0 else float("inf"))
     if budget_max is not None:
-        return budget_max * config.BUDGET_TARGET_BAND, hi
-    return 0.0, hi
+        return budget_max * config.BUDGET_TARGET_BAND, budget_max
+    return 0.0, float("inf")
+
+
+def _budget_hard_bounds(lo: float, hi: float) -> Tuple[Optional[float], Optional[float]]:
+    """(highest, lowest) price still ELIGIBLE against that band — None on a
+    side the brief does not really bound.
+
+    Each tolerance is a fraction of the band's own end, so "10% over" means
+    the same thing to every brief whatever it can spend. Neither is ever
+    derived from a zero or an infinite bound: a brief with no usable figure
+    on that side filters nothing there, exactly as it did before this pair of
+    limits existed."""
+    hard_max = hi * (1.0 + config.BUDGET_OVER_TOLERANCE) if 0.0 < hi < float("inf") else None
+    hard_min = lo * (1.0 - config.BUDGET_UNDER_TOLERANCE) if lo > 0.0 else None
+    return hard_max, hard_min
 
 
 def _budget_score(lo: float, hi: float, price: Optional[float]) -> Optional[float]:

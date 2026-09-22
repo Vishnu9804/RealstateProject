@@ -76,13 +76,35 @@ REJECT_NON_RESIDENTIAL_FOR_BHK = True
 BHK_MAX_DISTANCE = 1.0
 BHK_STRICT_MAX_DISTANCE = 0.0
 
-# How far over a stated MAXIMUM budget a property may still be eligible.
-# 0.25 = a ₹1cr ceiling still considers ₹1.25cr, and rejects ₹1.4cr.
+# How far over the top of the target band a property may still be eligible.
+# 0.10 = a ₹1cr ceiling still considers ₹1.10cr, and rejects ₹1.11cr.
 #
-# Deliberately one-sided: a cheaper property is never rejected for being
-# cheap (it simply scores lower on the budget curve the further below the
-# client's target band it sits — see BUDGET_TARGET_BAND).
-BUDGET_OVER_TOLERANCE = 0.25
+# Was 0.25, which is a quarter of a client's whole budget: against 1,600
+# listings a ₹1cr brief was keeping everything up to ₹1.25cr, and budget is
+# the heaviest field there is — passing it was most of what it took to reach
+# the shortlist, so almost every brief filled its hundred slots. Somebody who
+# says "up to ₹1cr" will stretch a little for the right property; they will
+# not stretch by a quarter.
+BUDGET_OVER_TOLERANCE = 0.10
+
+# The same, BELOW the bottom of the target band — and the half that did not
+# exist at all until now.
+#
+# A budget used to be a one-sided filter: too expensive was rejected, too
+# cheap never was, on the reasoning that a cheaper property is not a worse
+# property. In a small database that is true. In this one it meant a ₹1cr
+# brief kept ₹39L listings — a different kind of property in a different part
+# of town for a different buyer — and they are not a bargain, they are noise
+# sitting in a hundred-row shortlist that a real match then cannot get into.
+#
+# Applied to the BAND, not to the raw number, so it means the same thing
+# whichever way the brief was written:
+#   "up to ₹1cr"        -> band ₹65L–₹1cr, eligible from ₹58.5L to ₹1.10cr
+#   "at least ₹1cr"     -> band ₹1cr–₹1.40cr, eligible from ₹90L to ₹1.54cr
+#   "₹80L to ₹1cr"      -> band as written, eligible from ₹72L to ₹1.10cr
+# Every figure above is a RATIO of what the client said, so it scales with
+# the brief instead of being a rupee amount tuned for one price bracket.
+BUDGET_UNDER_TOLERANCE = 0.10
 
 
 # =========================================================================
@@ -95,10 +117,29 @@ BUDGET_OVER_TOLERANCE = 0.25
 # =========================================================================
 
 MATCH_WEIGHTS: Dict[str, float] = {
-    "budget": 0.40,
+    # 0.35, down from 0.40. Budget is still the heaviest single field and
+    # should be — but it was heavy enough that clearing its (very wide)
+    # tolerance was most of what a property needed to reach the shortlist.
+    # The real fix is the narrower band above; this is the smaller half of
+    # it, and it is deliberately small: a budget miss must still hurt.
+    "budget": 0.35,
     "location": 0.30,
     "bhk": 0.20,
-    "semantic": 0.10,
+    # 0.16, up from 0.10. Both sides of this comparison carry real prose now
+    # — a brief's "additional requirements" and a listing's description are
+    # embedded into the vectors compared here — and the people writing the
+    # briefs are putting more and more into that box, so the field has to
+    # count for more than a rounding error. Raised, not promoted: it is still
+    # smaller than budget, location and BHK, it still sits behind the
+    # eligibility gate, and it still cannot rescue an incompatible property.
+    #
+    # The ceiling on this number is that a property meeting every structured
+    # requirement must stay a High match even when its description has
+    # nothing in common with the brief. With the weights around it that holds
+    # up to ~0.16 and stops holding above it, which is why it is 0.16 and not
+    # 0.20 (see tests/test_matching_engine.py's "it stays a low weight
+    # signal").
+    "semantic": 0.16,
     # Property type is primarily a HARD compatibility check (TYPE_HARD_FLOOR
     # above) — anything incompatible is gone before scoring starts. This
     # small weight only separates an exact type from a compatible one when
@@ -128,28 +169,46 @@ UNKNOWN_FIELD_SCORE = 0.5
 # Where the target band starts when a client gives a ceiling and no floor —
 # the overwhelmingly common case on both the requirements form and the
 # WhatsApp extraction. "Up to ₹1cr" does not mean "anything under ₹1cr":
-# someone shopping there is looking in roughly ₹60L–₹1cr, and a ₹20L listing
-# is a different kind of property, not a bargain. A SOFT floor: below it a
-# property is still scored and can still match, it just stops outranking the
-# ones the client is actually shopping for. A client who gave their own
+# someone shopping there is looking in roughly ₹65L–₹1cr, and a ₹39L listing
+# is a different kind of property, not a bargain. A client who gave their own
 # minimum never reaches this.
-BUDGET_TARGET_BAND = 0.60
+#
+# No longer a purely soft floor: BUDGET_UNDER_TOLERANCE now puts a hard edge
+# a little way below it (₹58.5L against a ₹1cr ceiling), so the band is both
+# where a property scores full marks AND, plus that tolerance, how far down
+# the engine will look at all.
+BUDGET_TARGET_BAND = 0.65
+
+# The mirror of BUDGET_TARGET_BAND for a brief that gives a floor and no
+# ceiling ("at least ₹1cr", "3 BHK above ₹80L"). Without it such a brief had
+# NO top at all: every listing above the floor scored a perfect 1.0 on
+# budget, so a ₹1cr minimum was treating a ₹6cr bungalow as an ideal price
+# match and ranking it above a ₹1.1cr flat. "At least ₹1cr" describes a
+# bracket, not an open-ended appetite — the ones worth showing are ₹1cr to
+# roughly ₹1.4cr.
+BUDGET_OPEN_TOP_BAND = 1.40
 
 # The budget curve, as (how far outside the band, as a fraction of the
 # nearest bound -> score) anchor points, linearly interpolated between.
 # Inside the band is 1.0.
+#
+# Both curves are now steep and SHORT, because both sides of the band end in
+# a hard edge a tenth of the way out (BUDGET_OVER_TOLERANCE /
+# BUDGET_UNDER_TOLERANCE) — nothing further out than the last anchor can
+# reach scoring at all. The old curves ran out to 60% over and 100% under,
+# which is what let a badly-priced property still score 0.65 on the field
+# that matters most.
 BUDGET_OVER_ANCHORS: Tuple[Tuple[float, float], ...] = (
     (0.0, 1.0),
-    (0.05, 0.85),
-    (0.15, 0.55),
-    (0.30, 0.25),
-    (0.60, 0.05),
+    (0.02, 0.90),
+    (0.05, 0.72),
+    (0.10, 0.45),
 )
 BUDGET_UNDER_ANCHORS: Tuple[Tuple[float, float], ...] = (
     (0.0, 1.0),
-    (0.15, 0.85),
-    (0.40, 0.65),
-    (1.0, 0.5),
+    (0.02, 0.90),
+    (0.05, 0.72),
+    (0.10, 0.45),
 )
 
 # --- a missed core requirement puts a ceiling on the whole match ----------
@@ -217,6 +276,18 @@ LOCATION_OTHER = 0.30  # both sides have a location and they are unrelated
 # Minimum difflib ratio for LOCATION_FUZZY. High on purpose: "Pal" and
 # "Palanpur" are not the same place.
 LOCATION_FUZZY_RATIO = 0.85
+
+# Shortest word that may be matched FUZZILY at all. A near-spelling test is
+# only meaningful on a word long enough for one changed letter to be a small
+# fraction of it: "Piplod"/"Pipplod" is obviously the same place, but at
+# three and four letters a single letter is a quarter of the word and the
+# ratio above stops separating a typo from a different locality — "Pal" and
+# "Pali" score 0.86 and are two real, different areas.
+#
+# Deliberately higher than AREA_MIN_WORD_LENGTH: a short area name still
+# matches EXACTLY and still counts as a distinctive word (LOCATION_PARTIAL).
+# All that is withheld from it is the guess.
+LOCATION_FUZZY_MIN_WORD_LENGTH = 4
 
 # Words that carry no locality of their own — a shared "road" or "gam" must
 # never read as a shared AREA. Anything here is dropped before two area

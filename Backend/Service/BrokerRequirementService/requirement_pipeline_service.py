@@ -80,14 +80,16 @@ _in_flight_lock = threading.Lock()
 _in_flight_fingerprints: Set[str] = set()
 
 # The editable requirement fields no score is built from — the broker's own
-# name and number. Every other editable field reaches the scored text (see
+# name and number, and the staff-only `notes` catch-all (StructuredRequirement.
+# notes — see requirement_matching_service._as_pseudo_client, which never
+# reads it). Every other editable field reaches the scored text (see
 # requirement_matching_service._as_pseudo_client and
 # client_requirement_text_builder.build_requirement_text), so changing one
 # genuinely changes what this requirement asks for and its matches are
-# re-scored. These two do not, so an edit confined to them leaves the stored
+# re-scored. These do not, so an edit confined to them leaves the stored
 # shortlist exactly as it stands. The listing-side twin of this rule lives in
 # match_invalidation_service.MATCH_NEUTRAL_FIELDS.
-MATCH_NEUTRAL_REQUIREMENT_FIELDS = frozenset({"contact_name", "contact_phones"})
+MATCH_NEUTRAL_REQUIREMENT_FIELDS = frozenset({"contact_name", "contact_phones", "notes"})
 
 
 @cpu_usage_service.tracked("Requirement batch — LLM structuring, save & matching", "WhatsApp → Requirements")

@@ -80,6 +80,8 @@ class RequirementUpdateRequest(BaseModel):
     # contact_phones above, and nothing downstream ever stores it.
     contact_phone: Optional[str] = None
     description: Optional[str] = None
+    # Staff-only catch-all, never matched — see StructuredRequirement.notes.
+    notes: Optional[str] = None
 
     @field_validator("contact_phones")
     @classmethod

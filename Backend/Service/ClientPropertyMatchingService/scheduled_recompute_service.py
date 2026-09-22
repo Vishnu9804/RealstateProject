@@ -68,7 +68,7 @@ _BUILDER_PROJECT_INTRODUCTION_DELAY_SECONDS = 120
 # fingerprint that already names the engine (see BrokerRequirementService/
 # requirement_matching_service._ENGINE_MARKER), so each requirement
 # re-scores itself the next time it is read or caught up.
-_MATCHING_ENGINE_KEY = "client_matching_engine_v3"
+_MATCHING_ENGINE_KEY = "client_matching_engine_v4"
 
 
 def start_daily_recompute_in_background() -> None:

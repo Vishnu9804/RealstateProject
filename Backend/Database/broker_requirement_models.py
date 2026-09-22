@@ -16,27 +16,32 @@ both belong to the whatsappDataFetching feature, both are created from
 Database/session.py's init_db, and both read/write through the same
 `get_session`.
 
-Two things these tables deliberately do NOT have, and why:
-  - no `embedding` column. Requirements are never vector-searched (see
-    Service/BrokerRequirementService/requirement_pipeline_service.py's
-    docstring), so there is nothing to
-    store and no pgvector dependency here. The only duplicate check a
-    requirement gets is the exact-text fingerprint lookup on
-    BrokerRequirementOriginalMessageRow, before the LLM stage.
+One thing this table deliberately does NOT have, and why:
   - no `review_status` / `needs_review` / landing-page columns. There is no
     Main/Outsider split and no review queue for a requirement — it is
     stored, shown, editable and deletable, and that is the whole lifecycle.
+
+`embedding` IS a column here (below), even though a requirement is never
+vector-SEARCHED (the only duplicate check a requirement gets is the
+exact-text fingerprint lookup on BrokerRequirementOriginalMessageRow, before
+the LLM stage). It exists purely as durable storage for the vector
+requirement_matching_service already computes to score this requirement
+against properties — see that module's _requirement_vector, which is the
+only writer, and BrokerRequirementRow.embedding's own comment for why this
+does not change how scoring reads it.
 """
 
 from __future__ import annotations
 
 from datetime import datetime
-from typing import Optional
+from typing import List, Optional
 
+from pgvector.sqlalchemy import Vector
 from sqlalchemy import JSON, DateTime, Float, ForeignKey, String, Text, func
 from sqlalchemy.orm import Mapped, mapped_column, relationship
 
 from Database.models import Base
+from Service.WhatsAppDataFetchingService.embedding_service import EMBEDDING_DIMENSIONS
 
 
 class BrokerRequirementOriginalMessageRow(Base):
@@ -168,6 +173,26 @@ class BrokerRequirementRow(Base):
     # disagree with this one.
     contact_phones: Mapped[list] = mapped_column(JSON, nullable=False, default=list, server_default="[]")
     description: Mapped[Optional[str]] = mapped_column(Text, nullable=True)
+    # Free-form staff notes — see StructuredRequirement.notes. Editable, but
+    # deliberately NOT read by requirement_matching_service, so it never
+    # reaches the embedding text or the score.
+    notes: Mapped[Optional[str]] = mapped_column(Text, nullable=True)
+
+    # The requirement's own vector, built by requirement_matching_service
+    # from the same canonical text (client_requirement_text_builder) and the
+    # same free local embedding model a property's and a client's vector are
+    # (Service/WhatsAppDataFetchingService/embedding_service.py). Written
+    # only by that module's _requirement_vector whenever it computes a fresh
+    # one; never read back into the scoring pass itself (which always has
+    # the just-computed vector already in hand), so a stale value here can
+    # never feed a stale score. Nullable: a requirement not yet scored, or
+    # with nothing to embed, has none. deferred=True for the same cost
+    # reason as ClientRow.requirement_embedding: this is ~6 KB of text over
+    # the wire per row and nothing on the Broker Requirements page ever
+    # displays it.
+    embedding: Mapped[Optional[List[float]]] = mapped_column(
+        Vector(EMBEDDING_DIMENSIONS), nullable=True, deferred=True
+    )
 
     # --- known for certain from WhatsApp itself, not from the LLM: see
     # BrokerRequirementOriginalMessageRow above (this table used to carry

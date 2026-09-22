@@ -1292,6 +1292,21 @@ def init_db() -> None:
         # sorting, filtering or matching. Nullable, no default: catalog-only.
         connection.execute(text("ALTER TABLE properties ADD COLUMN IF NOT EXISTS area_vaar_max FLOAT"))
 
+        # A broker requirement's own staff-only catch-all — the demand-side
+        # twin of clients.notes above, same nullable/no-default/no-backfill
+        # shape and never read by matching (see
+        # requirement_pipeline_service.MATCH_NEUTRAL_REQUIREMENT_FIELDS).
+        connection.execute(text("ALTER TABLE broker_requirements ADD COLUMN IF NOT EXISTS notes TEXT"))
+        # A broker requirement's own match vector — the demand-side twin of
+        # builder_projects.embedding above (see BrokerRequirementRow.embedding
+        # for why this table now stores one). Nullable with no backfill:
+        # every existing requirement gets one the next time it is scored
+        # (requirement_matching_service._requirement_vector), exactly like a
+        # builder project's does.
+        connection.execute(
+            text(f"ALTER TABLE broker_requirements ADD COLUMN IF NOT EXISTS embedding vector({EMBEDDING_DIMENSIONS})")
+        )
+
     _add_agent_phone_unique_index(engine)
 
     _retire_extra_requirement_columns(engine)

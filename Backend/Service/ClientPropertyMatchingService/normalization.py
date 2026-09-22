@@ -443,6 +443,44 @@ def furnishing_distance_score(wanted: int, offered: int) -> float:
 
 _AREA_WORD_RE = re.compile(r"[a-z0-9]+")
 
+# Everything that is not part of a word, in ANY script — commas, dots,
+# hyphens, slashes, runs of spaces. Unicode-aware on purpose: area names are
+# written in Gujarati and Hindi as often as in Latin here, and a class that
+# only knew [a-z0-9] would erase such a name entirely rather than split it.
+_NON_WORD_RE = re.compile(r"[^\w]+", re.UNICODE)
+
+
+def word_sequence(text: str) -> str:
+    """`text` reduced to its words, separated by single spaces and PADDED
+    with one at each end — the form two area names are compared in.
+
+    The padding is the whole point. Testing one padded string inside another
+    is a whole-word containment test with no regex per call:
+
+        " pal "      in " pal gam "            -> True   (the same place)
+        " pal "      in " palanpur patiya "    -> False  (two places)
+        " sarthana " in " sarthana jakatnaka " -> True   (the same place)
+
+    That middle line is the bug this exists for. A plain substring test — what
+    the location tiers used to do — reads "Pal" inside "Palanpur" and hands a
+    Palanpur listing the top location tier for a Pal brief, which is a
+    different part of the city. Dropping substring matching altogether would
+    have broken the line under it, because "Sarthana" really is inside
+    "Sarthana Jakatnaka" and really is the same neighbourhood. The difference
+    between the two is a word boundary, and this is it."""
+    return " " + " ".join(_NON_WORD_RE.sub(" ", text).split()) + " "
+
+
+# The same thing for the CLIENT's side of the comparison, memoised by value.
+# The listing's text is already memoised whole (_parse_location), but a
+# client's own area names are re-padded once per listing without this — a few
+# areas times a few thousand listings times a few hundred clients per nightly
+# run, every call returning the identical string. Bounded, and one entry per
+# distinct area name anyone has ever asked for, so it cannot become a leak.
+@lru_cache(maxsize=4096)
+def _area_sequence(area: str) -> str:
+    return word_sequence(area)
+
 # One entry per distinct listing location text. Comfortably above the number
 # of live listings, so a full rescore parses each one once; bounded so it can
 # never become a leak.
@@ -476,6 +514,10 @@ def _parse_location(written: str) -> Tuple[str, frozenset, Dict[str, List[str]]]
     """One listing's location text, reduced to the three forms the tiers
     compare against — memoised BY VALUE, which is what keeps this affordable.
 
+    The first of the three is the word_sequence form above (padded words,
+    single-spaced), NOT the raw text: an area name is looked for in it as a
+    run of whole words, so "Pal" no longer matches "Palanpur".
+
     A full rescore compares every client against every listing, so without
     this cache the same listing's address would be lowercased, split and
     bucketed once per client: a few thousand listings times a few hundred
@@ -487,7 +529,7 @@ def _parse_location(written: str) -> Tuple[str, frozenset, Dict[str, List[str]]]
     hundred kilobytes at this scale."""
     haystack = normalize_token(written)
     words = _significant_words(haystack)
-    return haystack, frozenset(words), _by_prefix(words)
+    return word_sequence(haystack), frozenset(words), _by_prefix(words)
 
 
 def _by_prefix(words: List[str]) -> Dict[str, List[str]]:
@@ -543,7 +585,10 @@ def _area_tier(
     city_only: bool,
 ) -> float:
     is_city = area in config.CITY_NAMES
-    if area and area in haystack:
+    # Whole words, not a raw substring — see word_sequence. "Pal" and
+    # "Palanpur" share five letters and are two different places; "Sarthana"
+    # and "Sarthana Jakatnaka" share a whole word and are one.
+    if area and _area_sequence(area) in haystack:
         return config.LOCATION_EXACT if (city_only or not is_city) else config.LOCATION_SAME_CITY
     if is_city:
         # The client named this city and the listing does not mention it.
@@ -554,13 +599,19 @@ def _area_tier(
     if any(word in hay_set for word in words):
         return config.LOCATION_PARTIAL
     for word in words:
+        # Short words are not guessed at: one letter in a three-letter name is
+        # a quarter of it, and difflib cannot tell that kind of "typo" from a
+        # different locality ("Pal" vs "Pali"). See
+        # config.LOCATION_FUZZY_MIN_WORD_LENGTH.
+        if len(word) < config.LOCATION_FUZZY_MIN_WORD_LENGTH:
+            continue
         for candidate in hay_buckets.get(word[:2], ()):
             if abs(len(candidate) - len(word)) <= 2 and difflib.SequenceMatcher(None, word, candidate).ratio() >= (
                 config.LOCATION_FUZZY_RATIO
             ):
                 return config.LOCATION_FUZZY
     for neighbour in config.NEARBY_AREAS.get(area, ()):
-        if normalize_token(neighbour) in haystack:
+        if _area_sequence(normalize_token(neighbour)) in haystack:
             return config.LOCATION_NEARBY
     return config.LOCATION_OTHER
 

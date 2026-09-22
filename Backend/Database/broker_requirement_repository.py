@@ -46,6 +46,7 @@ EDITABLE_CONTENT_FIELDS = (
     # any more (see this table's model) and must not be written back.
     "contact_phones",
     "description",
+    "notes",
 )
 
 _COLUMNS = (
@@ -71,6 +72,7 @@ _COLUMNS = (
     # any more (see this table's model) and must not be written back.
     "contact_phones",
     "description",
+    "notes",
 )
 
 # The WhatsApp-message fields StructuredRequirement still carries flat
@@ -281,6 +283,17 @@ def get_requirements_version() -> Tuple[int, Optional[datetime]]:
             select(func.count(), func.max(BrokerRequirementRow.updated_at))
         ).one()
         return count, latest
+
+
+def save_requirement_embedding(record_id: str, embedding: List[float]) -> None:
+    """Persists the whole-requirement vector computed by
+    Service/BrokerRequirementService/requirement_matching_service.py's
+    _requirement_vector. A no-op if the row doesn't exist (shouldn't happen
+    in practice, but this is a pure storage write, not the place to raise)."""
+    with get_session() as session:
+        row = _find_row(session, record_id)
+        if row is not None:
+            row.embedding = embedding
 
 
 def update_requirement(record_id: str, content_updates: Dict[str, Any]) -> Optional[StructuredRequirement]:

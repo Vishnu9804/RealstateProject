@@ -32,6 +32,8 @@ export interface RequirementContentFields {
    *  `contact_phone` scalar has been removed from the API. */
   contact_phones?: string[];
   description?: string | null;
+  /** Staff-only catch-all — never matched against properties. */
+  notes?: string | null;
 }
 
 export const requirementApi = {

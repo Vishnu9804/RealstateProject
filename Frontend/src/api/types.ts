@@ -826,8 +826,12 @@ export interface BrokerRequirementRecord {
   contact_phones: string[];
   /** A short summary plus every other stated detail that has no field of
    *  its own — furnishing, size, location detail, who it is for, food,
-   *  possession, urgency, token ready, "vaya". */
+   *  possession, urgency, token ready, "vaya". Shown as "Additional
+   *  requirements" — this is matched against properties. */
   description: string | null;
+  /** Free-form staff notes — a catch-all, unlike `description` above.
+   *  Staff-only: never matched against properties. */
+  notes: string | null;
   group_name: string;
   chat_type: "group" | "personal";
   sender_name: string;

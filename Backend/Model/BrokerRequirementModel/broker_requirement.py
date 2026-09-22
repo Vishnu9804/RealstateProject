@@ -150,8 +150,18 @@ class StructuredRequirement(BaseModel):
     # from the model, from every API response and from the database.
     contact_phones: List[str] = Field(default_factory=list)
     # A short summary plus every stated detail that has no field of its own
-    # (see the class docstring).
+    # (see the class docstring). This is what feeds the semantic half of the
+    # score (client_requirement_text_builder, via _as_pseudo_client's
+    # additional_requirements) — everything typed here is matched.
     description: Optional[str] = None
+    # Free-form staff notes — a catch-all, unlike description above. Same
+    # staff-only rule as ClientRecord.notes: set only from the Broker
+    # Requirements page's own Add/Edit dialog, NEVER embedded and NEVER
+    # scored (see requirement_matching_service._as_pseudo_client, which never
+    # reads this field, and requirement_pipeline_service.
+    # MATCH_NEUTRAL_REQUIREMENT_FIELDS, which keeps an edit confined to this
+    # field from re-running matching).
+    notes: Optional[str] = None
 
     # --- known for certain from WhatsApp itself, not from the LLM ---
     group_name: str

@@ -221,7 +221,15 @@ class EligibilityBhkTest(unittest.TestCase):
 
 
 class EligibilityBudgetTest(unittest.TestCase):
-    """§2's budget hard filter — one-sided, tolerant, and configurable."""
+    """§2's budget hard filter — TWO-sided now, narrow, and configurable.
+
+    It used to reject only the too-expensive, on the reasoning that a cheaper
+    property is not a worse one. With 1,600 listings that reasoning stopped
+    holding: a ₹1cr brief kept everything from nothing up to ₹1.25cr, which
+    is most of the database, and budget is the heaviest field there is — so
+    almost every brief filled its hundred-row shortlist with properties
+    nobody would ever call about. Both edges are now a ratio of the client's
+    own target band, so they mean the same thing at every price."""
 
     def setUp(self):
         self.client = make_client(budget_max_inr=1 * CRORE)
@@ -230,15 +238,18 @@ class EligibilityBudgetTest(unittest.TestCase):
         self.assertIsNotNone(score(self.client, make_property(price_amount_inr=95 * LAKH)))
 
     def test_slightly_over_budget_stays_eligible(self):
-        self.assertIsNotNone(score(self.client, make_property(price_amount_inr=1.10 * CRORE)))
+        """Somebody who says "up to ₹1cr" will stretch a little for the right
+        property. A tenth is a little; a quarter, which is what this used to
+        allow, is a different budget."""
+        self.assertIsNotNone(score(self.client, make_property(price_amount_inr=1.08 * CRORE)))
 
     def test_at_the_tolerance_boundary_is_still_eligible(self):
         """§2's boundary case, asserted where it belongs — on the eligibility
         gate. Whether such a property is then worth SHOWING is a separate
         question the match score answers (and for a client whose only stated
-        requirement is the budget, a price 25% over it is most of what there
-        was to judge on, so it can rank below the display floor). Eligibility
-        and worth-showing are deliberately two decisions."""
+        requirement is the budget, a price over it is most of what there was
+        to judge on, so it can rank below the display floor). Eligibility and
+        worth-showing are deliberately two decisions."""
         brief = scoring.build_brief(self.client, CLIENT_VECTOR)
         at_boundary = 1 * CRORE * (1 + config.BUDGET_OVER_TOLERANCE)
         self.assertTrue(scoring.is_eligible(make_property(price_amount_inr=at_boundary), brief))
@@ -249,26 +260,56 @@ class EligibilityBudgetTest(unittest.TestCase):
         self.assertIsNone(score(self.client, make_property(price_amount_inr=1.40 * CRORE)))
 
     def test_over_budget_is_tolerated_when_the_rest_of_the_brief_is_met(self):
-        """The same 25%-over price, for a client who told us more: budget is
-        then one requirement among several that this property meets, so it
-        stays on the list at the bottom rather than being discarded."""
+        """An over-budget price inside the tolerance, for a client who told us
+        more: budget is then one requirement among several that this property
+        meets, so it stays on the list at the bottom rather than being
+        discarded."""
         client = make_client(purpose="buy", property_type="Flat", bhk="3 BHK",
                              preferred_areas="Vesu", budget_max_inr=1 * CRORE)
         result = score(client, make_property(property_type="Flat", bhk="3 BHK", area_name="Vesu",
-                                            price_amount_inr=1.25 * CRORE))
+                                            price_amount_inr=1.08 * CRORE))
         self.assertIsNotNone(result)
         self.assertEqual(result.bucket, MatchBucket.MEDIUM)
 
-    def test_a_cheaper_property_is_never_rejected_for_being_cheap(self):
-        """§2: "Do not reject cheaper properties simply because they are
-        cheaper." It scores lower, and stays on the list."""
-        cheap = score(self.client, make_property(price_amount_inr=20 * LAKH))
+    def test_a_slightly_cheaper_property_is_not_rejected_for_being_cheap(self):
+        """The half of §2 that still stands: just under the target band is a
+        real option, priced a little keenly. It scores lower, and it stays."""
+        cheap = score(self.client, make_property(price_amount_inr=62 * LAKH))
         self.assertIsNotNone(cheap)
         self.assertLess(cheap.field_scores["budget"], 1.0)
 
-    def test_the_tolerance_is_configurable(self):
+    def test_a_far_cheaper_property_is_rejected(self):
+        """The half that had to change, and the case that prompted it: a ₹39L
+        listing against a ₹1cr brief is not a bargain for that buyer, it is a
+        different kind of property in a different part of town — and every one
+        of them was taking a slot on a hundred-row shortlist that a real match
+        then could not get into."""
+        brief = scoring.build_brief(self.client, CLIENT_VECTOR)
+        self.assertFalse(scoring.is_eligible(make_property(price_amount_inr=39 * LAKH), brief))
+        self.assertIsNone(score(self.client, make_property(price_amount_inr=39 * LAKH)))
+
+    def test_the_floor_is_a_ratio_of_the_band_not_a_rupee_amount(self):
+        """So one rule fits a ₹30L brief and a ₹5cr one. Both edges sit the
+        same fraction outside the band at every price."""
+        for ceiling in (30 * LAKH, 1 * CRORE, 5 * CRORE):
+            with self.subTest(ceiling=ceiling):
+                brief = scoring.build_brief(make_client(budget_max_inr=ceiling), CLIENT_VECTOR)
+                floor = ceiling * config.BUDGET_TARGET_BAND * (1 - config.BUDGET_UNDER_TOLERANCE)
+                self.assertTrue(scoring.is_eligible(make_property(price_amount_inr=floor * 1.01), brief))
+                self.assertFalse(scoring.is_eligible(make_property(price_amount_inr=floor * 0.99), brief))
+
+    def test_an_unpriced_listing_is_never_rejected_by_either_edge(self):
+        """Unknown is not "too cheap" and not "too expensive" — it is unknown,
+        and §10 prices it as one rather than filtering it out."""
+        brief = scoring.build_brief(self.client, CLIENT_VECTOR)
+        self.assertTrue(scoring.is_eligible(make_property(), brief))
+        self.assertIsNone(score(self.client, make_property()).field_scores["budget"])
+
+    def test_the_tolerances_are_configurable(self):
         with mock.patch.object(config, "BUDGET_OVER_TOLERANCE", 0.0):
             self.assertIsNone(score(self.client, make_property(price_amount_inr=1.01 * CRORE)))
+        with mock.patch.object(config, "BUDGET_UNDER_TOLERANCE", 1.0):
+            self.assertIsNotNone(score(self.client, make_property(price_amount_inr=20 * LAKH)))
 
 
 class BudgetCurveTest(unittest.TestCase):
@@ -276,25 +317,49 @@ class BudgetCurveTest(unittest.TestCase):
 
     def test_a_ceiling_only_brief_reads_a_target_band_below_it(self):
         client = make_client(budget_max_inr=1 * CRORE)
-        prices = [95 * LAKH, 85 * LAKH, 70 * LAKH, 50 * LAKH, 20 * LAKH]
+        prices = [95 * LAKH, 70 * LAKH, 64 * LAKH, 62 * LAKH, 60 * LAKH]
         scores = [score(client, make_property(price_amount_inr=p)).field_scores["budget"] for p in prices]
         # Strictly decreasing as the price falls away from the band, exactly
         # as §4's worked list says: very strong, strong, moderate, weaker, poor.
         self.assertEqual(scores, sorted(scores, reverse=True))
         self.assertEqual(scores[0], 1.0)
+        self.assertEqual(scores[1], 1.0)   # ₹70L is INSIDE the band, not below it
         self.assertLess(scores[-1], 0.7)
 
     def test_a_stated_minimum_is_used_as_written(self):
-        """A client who gave both ends never gets the inferred band."""
+        """A client who gave both ends never gets an inferred band on either
+        side — their own two numbers are the band."""
         client = make_client(budget_min_inr=40 * LAKH, budget_max_inr=1 * CRORE)
-        # 50L is below the 60% band a ceiling-only brief would have inferred,
-        # and inside this client's own stated range.
+        # 50L is below the band a ceiling-only brief would have inferred, and
+        # inside this client's own stated range.
         self.assertEqual(score(client, make_property(price_amount_inr=50 * LAKH)).field_scores["budget"], 1.0)
+        # ...and their own floor is what the hard edge is measured from.
+        brief = scoring.build_brief(client, CLIENT_VECTOR)
+        self.assertTrue(scoring.is_eligible(make_property(price_amount_inr=38 * LAKH), brief))
+        self.assertFalse(scoring.is_eligible(make_property(price_amount_inr=30 * LAKH), brief))
+
+    def test_a_floor_only_brief_reads_a_target_band_above_it(self):
+        """The mirror image, and the half that did not exist. "At least ₹1cr"
+        used to have no top at all, so a ₹6cr bungalow scored a perfect 1.0 on
+        budget and outranked the ₹1.1cr flat the client actually wanted."""
+        client = make_client(budget_min_inr=1 * CRORE)
+        self.assertEqual(score(client, make_property(price_amount_inr=1.3 * CRORE)).field_scores["budget"], 1.0)
+        brief = scoring.build_brief(client, CLIENT_VECTOR)
+        self.assertTrue(scoring.is_eligible(make_property(price_amount_inr=92 * LAKH), brief))
+        self.assertFalse(scoring.is_eligible(make_property(price_amount_inr=80 * LAKH), brief))
+        self.assertFalse(scoring.is_eligible(make_property(price_amount_inr=6 * CRORE), brief))
+
+    def test_a_reversed_range_is_read_as_the_range_it_describes(self):
+        """Real data writes min and max the wrong way round. Read literally
+        that is an empty band, and with a hard floor beneath its low end it
+        would now match nothing at all."""
+        client = make_client(budget_min_inr=1 * CRORE, budget_max_inr=80 * LAKH)
+        self.assertEqual(score(client, make_property(price_amount_inr=90 * LAKH)).field_scores["budget"], 1.0)
 
     def test_over_budget_loses_score_gradually(self):
         client = make_client(budget_max_inr=1 * CRORE)
         just_over = score(client, make_property(price_amount_inr=1.02 * CRORE)).field_scores["budget"]
-        well_over = score(client, make_property(price_amount_inr=1.20 * CRORE)).field_scores["budget"]
+        well_over = score(client, make_property(price_amount_inr=1.09 * CRORE)).field_scores["budget"]
         self.assertGreater(just_over, well_over)
         self.assertGreater(just_over, 0.8)
 
@@ -331,6 +396,37 @@ class LocationTest(unittest.TestCase):
 
     def test_a_near_spelling_is_a_fuzzy_hit(self):
         self.assertEqual(self.tier("Piplod", area_name="Pipplod"), config.LOCATION_FUZZY)
+
+    def test_an_area_name_inside_a_longer_WORD_is_not_a_hit(self):
+        """The case from the real data: "Pal" and "Palanpur Patiya" are two
+        different parts of the city, and a plain substring test called them
+        the same place and handed it the TOP tier — the one thing location
+        scoring must never get wrong."""
+        self.assertEqual(self.tier("Pal", area_name="Palanpur Patiya"), config.LOCATION_OTHER)
+        self.assertEqual(self.tier("Pal", address="Palanpur Jakatnaka, Surat"), config.LOCATION_OTHER)
+
+    def test_an_area_name_that_is_a_whole_word_of_a_longer_NAME_is_a_hit(self):
+        """...and the reason the fix is a word boundary rather than dropping
+        substring matching: "Sarthana" really is inside "Sarthana Jakatnaka"
+        and really is the same neighbourhood. Both halves of this pair have to
+        hold, or one of them breaks the other."""
+        self.assertEqual(self.tier("Sarthana", area_name="Sarthana Jakatnaka"), config.LOCATION_EXACT)
+        self.assertEqual(self.tier("Pal", area_name="Pal Gam"), config.LOCATION_EXACT)
+        self.assertEqual(self.tier("Pal", address="Adajan Pal Road, Surat"), config.LOCATION_EXACT)
+
+    def test_punctuation_does_not_decide_whether_two_places_are_the_same(self):
+        """Words, not characters: the two sides may be spaced and punctuated
+        however whoever typed them felt like."""
+        self.assertEqual(self.tier("A.K. Road", area_name="A K Road, Surat"), config.LOCATION_EXACT)
+        self.assertEqual(self.tier("Vesu-Abhva", area_name="Vesu Abhva"), config.LOCATION_EXACT)
+
+    def test_a_short_area_name_is_never_matched_by_near_spelling(self):
+        """"Pal" and "Pali" are 0.86 alike and are two real, different areas.
+        A near-spelling guess is only meaningful on a word long enough for one
+        letter to be a small part of it."""
+        self.assertEqual(self.tier("Pal", area_name="Pali"), config.LOCATION_OTHER)
+        # ...and the long ones still get the benefit of the doubt.
+        self.assertEqual(self.tier("Adajan", area_name="Adajann"), config.LOCATION_FUZZY)
 
     def test_a_shared_filler_word_is_not_a_location_match(self):
         """"Adajan Gam" and "Pal Gam" share a word and are different places.
@@ -531,10 +627,21 @@ class SoftMatchScoreTest(unittest.TestCase):
         self.assertEqual(bare.score, detailed.score)
 
     def test_default_weights_match_the_specification(self):
-        self.assertEqual(config.MATCH_WEIGHTS["budget"], 0.40)
+        self.assertEqual(config.MATCH_WEIGHTS["budget"], 0.35)
         self.assertEqual(config.MATCH_WEIGHTS["location"], 0.30)
         self.assertEqual(config.MATCH_WEIGHTS["bhk"], 0.20)
-        self.assertEqual(config.MATCH_WEIGHTS["semantic"], 0.10)
+        self.assertEqual(config.MATCH_WEIGHTS["semantic"], 0.16)
+
+    def test_the_weights_keep_their_documented_order(self):
+        """The calibration contract, so a later tweak to one number cannot
+        quietly reorder what this engine thinks matters. Budget stays the
+        heaviest single field; semantic stays behind all three of the
+        structured ones however much it is raised."""
+        weights = config.MATCH_WEIGHTS
+        self.assertGreater(weights["budget"], weights["location"])
+        self.assertGreater(weights["location"], weights["bhk"])
+        self.assertGreater(weights["bhk"], weights["semantic"])
+        self.assertGreater(weights["semantic"], weights["property_type"])
 
     def test_property_type_cannot_overpower_the_score(self):
         """§11 — it stays primarily a hard compatibility check. A compatible
@@ -632,11 +739,24 @@ class CoreRequirementCeilingTest(unittest.TestCase):
         self.assertIsNotNone(result)
         self.assertNotEqual(result.bucket, MatchBucket.HIGH)
 
-    def test_well_over_budget_cannot_be_a_high_match(self):
+    def test_over_budget_cannot_be_a_high_match(self):
+        """As over budget as a property may now be and still be eligible at
+        all — everything else about it perfect."""
         client = make_client(property_type="Flat", bhk="3 BHK", preferred_areas="Vesu",
                              budget_max_inr=1 * CRORE)
         result = score(client, make_property(property_type="Flat", bhk="3 BHK", area_name="Vesu",
-                                            price_amount_inr=1.2 * CRORE))
+                                            price_amount_inr=1.09 * CRORE))
+        self.assertIsNotNone(result)
+        self.assertNotEqual(result.bucket, MatchBucket.HIGH)
+
+    def test_under_budget_cannot_be_a_high_match_either(self):
+        """The same rule on the side that used to have no rule: a price at the
+        bottom edge of what is still eligible is a missed requirement, and a
+        perfect area, type and BHK may not pay for it."""
+        client = make_client(property_type="Flat", bhk="3 BHK", preferred_areas="Vesu",
+                             budget_max_inr=1 * CRORE)
+        result = score(client, make_property(property_type="Flat", bhk="3 BHK", area_name="Vesu",
+                                            price_amount_inr=60 * LAKH))
         self.assertIsNotNone(result)
         self.assertNotEqual(result.bucket, MatchBucket.HIGH)
 

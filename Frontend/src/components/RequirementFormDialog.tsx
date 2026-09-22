@@ -79,6 +79,8 @@ interface FormState {
   // see ContactPhonesField.
   contact_phone_boxes: string[];
   description: string;
+  /** Staff-only catch-all — never matched against properties. */
+  notes: string;
 }
 
 /** The short form ("45L") only when it reads back as EXACTLY the stored
@@ -116,6 +118,7 @@ function toFormState(requirement?: BrokerRequirementRecord): FormState {
     contact_name: requirement?.contact_name ?? "",
     contact_phone_boxes: toPhoneBoxes(phoneList(requirement).map(toTypedNumber)),
     description: requirement?.description ?? "",
+    notes: requirement?.notes ?? "",
   };
 }
 
@@ -160,6 +163,7 @@ function toPayload(form: FormState): RequirementContentFields {
       .filter(Boolean)
       .map((box) => toStoredNumber(box) ?? box),
     description: text(form.description),
+    notes: text(form.notes),
   };
 }
 
@@ -671,8 +675,8 @@ export default function RequirementFormDialog({
             </div>
 
             <Field
-              label="Description & other details"
-              hint="Size, location detail, who it is for, food, possession, urgency, token ready, vaya — anything else the broker asked for. The broker's own furnishing wording belongs here too; the field above holds only the level."
+              label="Additional requirements"
+              hint="Size, location detail, who it is for, food, possession, urgency, token ready, vaya — anything else the broker asked for. The broker's own furnishing wording belongs here too; the field above holds only the level. Matched against properties, like every field above."
             >
               <textarea
                 className="textarea"
@@ -680,6 +684,17 @@ export default function RequirementFormDialog({
                 value={form.description}
                 onChange={(e) => set("description", e.target.value)}
                 placeholder="e.g. Fully furnished, veg family, possession 1-15 Sep, 1 vaya"
+              />
+            </Field>
+
+            <Field label="Notes" hint="Optional — anything else worth keeping on file about this requirement. Never matched against properties.">
+              <textarea
+                className="textarea"
+                rows={3}
+                value={form.notes}
+                onChange={(e) => set("notes", e.target.value)}
+                placeholder="e.g. Prefers evening calls, referred by Mehta Realty…"
+                maxLength={2000}
               />
             </Field>
 

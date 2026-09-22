@@ -133,6 +133,16 @@ def update_requirement(record_id: str, content_updates: Dict[str, Any]) -> Optio
     return None
 
 
+def save_requirement_embedding(record_id: str, embedding: List[float]) -> None:
+    """Persists the vector requirement_matching_service just computed for
+    this requirement. A no-op in the in-memory fallback: that backend has
+    nothing durable to write it to, and the in-process vector cache already
+    covers reuse for the lifetime of that fallback (a dev-only mode; a real
+    deployment always has DATABASE_URL set)."""
+    if is_database_configured():
+        broker_requirement_repository.save_requirement_embedding(record_id, embedding)
+
+
 def delete_requirement(record_id: str) -> bool:
     if is_database_configured():
         return broker_requirement_repository.delete_requirement(record_id)

@@ -10,6 +10,10 @@ import type { BrokerRequirementRecord } from "./types";
  *  rewrite it. */
 export interface RequirementContentFields {
   requirement_type?: string | null;
+  /** The size asked for against each picked type, keyed by the type exactly
+   *  as it appears in `requirement_type` and carrying its own unit
+   *  ("1000-1500 sqft", "150 var"). null clears every one. */
+  property_sizes?: Record<string, string> | null;
   bhk?: string | null;
   area_name?: string | null;
   preferred_areas?: string[];

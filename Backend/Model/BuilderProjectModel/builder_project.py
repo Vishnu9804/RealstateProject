@@ -2,13 +2,13 @@ import uuid
 from datetime import datetime
 from typing import List, Literal, Optional
 
-from pydantic import BaseModel, Field, model_validator
+from pydantic import BaseModel, Field, field_validator, model_validator
 
-from Model import phone_numbers
+from Model import field_validation, phone_numbers
 
 
 class BuilderProject(BaseModel):
-    """One builder project — a property entered BY HAND on the Builder
+    """One builder project â€” a property entered BY HAND on the Builder
     Projects page, never captured from WhatsApp.
 
     Deliberately the same content fields as a property
@@ -25,7 +25,7 @@ class BuilderProject(BaseModel):
     own rather than as rows in `properties`.
     """
 
-    # Generated once, here, and never regenerated — the frontend's row key,
+    # Generated once, here, and never regenerated â€” the frontend's row key,
     # exactly like StructuredProperty.record_id.
     record_id: str = Field(default_factory=lambda: uuid.uuid4().hex)
 
@@ -35,7 +35,7 @@ class BuilderProject(BaseModel):
     society_name: Optional[str] = None
     area_name: Optional[str] = None
     address: Optional[str] = None
-    # Two separate columns, one per unit, never converted into one another —
+    # Two separate columns, one per unit, never converted into one another â€”
     # see StructuredProperty.area_sqft/area_vaar.
     area_sqft: Optional[float] = None
     area_vaar: Optional[float] = None
@@ -46,7 +46,7 @@ class BuilderProject(BaseModel):
     listing_type: Literal["Sale", "Rent"] = "Sale"
     contact_name: Optional[str] = None
     # EVERY contact number on this project, each one canonical "+91" plus 10
-    # digits — the same field, the same rule and the same producer as
+    # digits â€” the same field, the same rule and the same producer as
     # StructuredProperty.contact_phones (Model/phone_numbers.py). See that
     # model for the full reasoning.
     # THE ONLY contact-number field here, exactly as on StructuredProperty:
@@ -55,10 +55,10 @@ class BuilderProject(BaseModel):
     contact_phones: List[str] = Field(default_factory=list)
     description: Optional[str] = None
     instagram_reel_url: Optional[str] = None
-    # Data URLs, in display order; the first is the cover — the same
+    # Data URLs, in display order; the first is the cover â€” the same
     # contract as StructuredProperty.image_urls.
     image_urls: List[str] = Field(default_factory=list)
-    # Internal only, exactly as on a property — see
+    # Internal only, exactly as on a property â€” see
     # StructuredProperty.location_url. A builder project is never published
     # to the public site at all, so there is no outbound shape to keep it out
     # of; the rule still holds if one is ever added.
@@ -69,9 +69,17 @@ class BuilderProject(BaseModel):
 
     # Assigned by Postgres (server_default / onupdate) in database mode, and
     # by Service/BuilderProjectService/builder_project_store.py for the
-    # in-memory fallback — never by the API caller.
+    # in-memory fallback â€” never by the API caller.
     created_at: Optional[datetime] = None
     updated_at: Optional[datetime] = None
+
+    # "Unknown" / "NULL" / "None" / "N/A" is not a locality — same rule, same
+    # words, as StructuredProperty's own area_name validator, so the Builder
+    # Projects page's Area filter and Localities tile stay places-only.
+    @field_validator("area_name")
+    @classmethod
+    def _v_area_name(cls, value: Optional[str]) -> Optional[str]:
+        return field_validation.blank_if_placeholder(value)
 
     @model_validator(mode="before")
     @classmethod
@@ -96,12 +104,12 @@ class BuilderProject(BaseModel):
 class BuilderProjectRecord(BuilderProject):
     """A BuilderProject as the API returns it.
 
-    `image_urls` is always [] on every response — photos are base64 and can
+    `image_urls` is always [] on every response â€” photos are base64 and can
     run to megabytes per project, so they travel only through the images
     endpoint, when someone presses Show photos. `image_count` carries the
     real number, exactly like PropertyRecord's."""
 
     # When the project was added, already formatted in IST honouring the
-    # 12h/24h display setting — so the frontend never does date maths.
+    # 12h/24h display setting â€” so the frontend never does date maths.
     formatted_timestamp: str
     image_count: int = 0

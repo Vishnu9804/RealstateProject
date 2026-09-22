@@ -29,6 +29,7 @@ import {
 } from "../lib/propertyDetailCache";
 import { useToast } from "../components/ui/Toast";
 import FilterPopover from "../components/ui/FilterPopover";
+import StickyTableHead from "../components/ui/StickyTableHead";
 import RowRail from "../components/ui/RowRail";
 import ConfirmDialog from "../components/ui/ConfirmDialog";
 import PropertyFormDialog from "../components/PropertyFormDialog";
@@ -84,6 +85,11 @@ export default function LandingPagePage() {
   const [openFilter, setOpenFilter] = useState<{ key: string; anchor: HTMLElement } | null>(null);
   const [page, setPage] = useState(1);
   const tableWrapRef = useRef<HTMLDivElement>(null);
+  const scrollRef = useRef<HTMLDivElement>(null);
+  // Where the rows start, so turning the page lands at the top of the new
+  // ones rather than wherever the old page was scrolled to — the same
+  // anchor the Properties, Inquiries and Requirements tables use.
+  const listTopRef = useRef<HTMLDivElement>(null);
 
   const [selected, setSelected] = useState<Set<string>>(new Set());
   const [confirmKind, setConfirmKind] = useState<"send" | "remove" | null>(null);
@@ -227,6 +233,41 @@ export default function LandingPagePage() {
   useEffect(() => {
     if (page > pageCount) setPage(pageCount);
   }, [page, pageCount]);
+
+  // Turning the page should put you at the top of the new rows, exactly as
+  // it does on Properties/Inquiries/Requirements. Skipped on first render,
+  // so opening the page never scrolls on its own.
+  const pagedOnce = useRef(false);
+  useEffect(() => {
+    if (!pagedOnce.current) {
+      pagedOnce.current = true;
+      return;
+    }
+    listTopRef.current?.scrollIntoView({ behavior: "smooth", block: "start" });
+  }, [page]);
+
+  // One definition, rendered both in the table and in the copy pinned under
+  // the top bar — see components/ui/StickyTableHead.tsx.
+  const headerRow = (
+    <tr>
+      {COLUMNS.map((column) => (
+        <th key={column.key} style={column.numeric ? { textAlign: "right" } : undefined}>
+          {column.filterKey ? (
+            <FilterTrigger
+              label={column.label}
+              filter={filters[column.filterKey]}
+              expanded={openFilter?.key === column.filterKey}
+              onOpen={(anchor) =>
+                setOpenFilter(openFilter?.key === column.filterKey ? null : { key: column.filterKey!, anchor })
+              }
+            />
+          ) : (
+            column.label
+          )}
+        </th>
+      ))}
+    </tr>
+  );
 
   const setColumnFilter = useCallback((key: string, next: ColumnFilter | undefined) => {
     setFilters((prev) => {
@@ -507,6 +548,7 @@ export default function LandingPagePage() {
 
       {activeList.length > 0 && (
         <>
+          <div ref={listTopRef} className="list-anchor" />
           <div className="table-with-rail" ref={tableWrapRef}>
             <RowRail containerRef={tableWrapRef} count={pageItems.length}>
               {(index) => {
@@ -528,28 +570,10 @@ export default function LandingPagePage() {
             </RowRail>
 
             <div className="table-frame anim-rise">
-              <div className="table-scroll">
+              <StickyTableHead scrollRef={scrollRef}>{headerRow}</StickyTableHead>
+              <div className="table-scroll" ref={scrollRef}>
                 <table className="table">
-                  <thead>
-                    <tr>
-                      {COLUMNS.map((column) => (
-                        <th key={column.key} style={column.numeric ? { textAlign: "right" } : undefined}>
-                          {column.filterKey ? (
-                            <FilterTrigger
-                              label={column.label}
-                              filter={filters[column.filterKey]}
-                              expanded={openFilter?.key === column.filterKey}
-                              onOpen={(anchor) =>
-                                setOpenFilter(openFilter?.key === column.filterKey ? null : { key: column.filterKey!, anchor })
-                              }
-                            />
-                          ) : (
-                            column.label
-                          )}
-                        </th>
-                      ))}
-                    </tr>
-                  </thead>
+                  <thead>{headerRow}</thead>
                   <tbody>
                     {pageItems.map((property) => (
                       <tr

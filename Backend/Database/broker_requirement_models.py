@@ -115,6 +115,14 @@ class BrokerRequirementRow(Base):
 
     # --- extracted by the LLM from the message text ---
     requirement_type: Mapped[Optional[str]] = mapped_column(String, nullable=True)
+    # {type: "1000-1500 sqft"} for the types in requirement_type — see
+    # StructuredRequirement.property_sizes. JSON rather than a join table for
+    # exactly the reason preferred_areas below is: a short dict that is read
+    # and written whole and never queried by key, the same shape and the same
+    # column type ClientRow.property_sizes already uses. NULL for every row
+    # written before this column existed, which correctly means "no size
+    # stated" and is never scored as a mismatch.
+    property_sizes: Mapped[Optional[dict]] = mapped_column(JSON, nullable=True)
     bhk: Mapped[Optional[str]] = mapped_column(String, nullable=True)
     area_name: Mapped[Optional[str]] = mapped_column(String, nullable=True)
     # Every locality the requirement named, as written. JSON rather than a

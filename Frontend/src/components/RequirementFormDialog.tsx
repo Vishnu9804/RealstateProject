@@ -3,14 +3,23 @@ import { createPortal } from "react-dom";
 import { requirementApi, type RequirementContentFields } from "../api/requirementApi";
 import type { BrokerRequirementRecord } from "../api/types";
 import { friendlyError } from "../lib/apiError";
-import { MAX_INR, amountError } from "../lib/fieldChecks";
+import { MAX_INR } from "../lib/fieldChecks";
+import { formatCompactInr, parseCompactInr } from "../lib/formatters";
 import { phoneList, toStoredNumber, toTypedNumber } from "../lib/phone";
 import ContactPhonesField, { phoneBoxesError, toPhoneBoxes } from "./ContactPhonesField";
-import { REQUIREMENT_TYPE_OPTIONS } from "../lib/requirementFilters";
+import { SIZE_HINT, splitTypes } from "../lib/propertyTypeOptions";
 import { FURNISHING_OPTIONS } from "./PropertyFormDialog";
 import { useToast } from "./ui/Toast";
 import { Button, Segmented } from "./ui/Primitives";
 import { FormIssues, hasIssue, useFocusFirstIssue, type FieldIssue } from "./ui/FormIssues";
+import {
+  PropertyTypeChips,
+  TypeSizeRows,
+  sizesToSend,
+  toTypeSizeState,
+  typeSizeIssues,
+  type TypeSizeState,
+} from "./ui/PropertyTypePicker";
 import { IconAlert, IconX } from "./ui/Icons";
 
 /**
@@ -37,7 +46,15 @@ import { IconAlert, IconX } from "./ui/Icons";
  */
 
 interface FormState {
+  /** Every type the broker will take, comma-separated ("Flat, Bungalow") —
+   *  main one first, which is the shape the backend stores and the type
+   *  gate reads (Backend/Agent/BrokerRequirementAgent/
+   *  requirement_normalization.py's canonical_requirement_type). */
   requirement_type: string;
+  /** The number/range and the unit asked for against each picked type,
+   *  held apart while they are edited and joined into the one string the
+   *  backend stores at save time. */
+  property_sizes: TypeSizeState;
   bhk: string;
   preferred_areas: string;
   society_name: string;
@@ -48,7 +65,10 @@ interface FormState {
   budget_text: string;
   budget_min_inr: string;
   budget_max_inr: string;
-  listing_type: "Sale" | "Rent";
+  /** null = nothing chosen yet, which is only ever an Add's starting state.
+   *  A stored requirement always carries one of the two, so Edit never
+   *  opens unset. */
+  listing_type: "Sale" | "Rent" | null;
   contact_name: string;
   // One box per number, holding what is TYPED (the bare ten digits) —
   // see ContactPhonesField.
@@ -56,12 +76,28 @@ interface FormState {
   description: string;
 }
 
+/** The short form ("45L") only when it reads back as EXACTLY the stored
+ *  amount — otherwise the full number, so showing a budget can never be what
+ *  changes it. Character-for-character the Inquiries page's client dialog,
+ *  because the two budget boxes are now the same box. */
+function budgetText(amount: number | null): string {
+  if (amount === null) return "";
+  const compact = formatCompactInr(amount);
+  return parseCompactInr(compact) === amount ? compact : String(amount);
+}
+
 /** An Add starts from a blank form — same shape, every field empty, and
- *  "Buy" preselected because that is the backend's own default for a
- *  requirement that states nothing either way. */
+ *  Buy/Rent UNSET rather than preselected: the form now insists on an
+ *  answer, and a pre-ticked "Buy" is the form answering on the reader's
+ *  behalf. (The backend still defaults a requirement that says nothing to
+ *  Sale; nothing saved from here says nothing any more.) */
 function toFormState(requirement?: BrokerRequirementRecord): FormState {
+  // Read through splitTypes so the chips and the stored string agree from
+  // the start, exactly as the Inquiries page's client dialog does.
+  const types = splitTypes(requirement?.requirement_type ?? "");
   return {
-    requirement_type: requirement?.requirement_type ?? "",
+    requirement_type: types.join(", "),
+    property_sizes: toTypeSizeState(types, requirement?.property_sizes),
     bhk: requirement?.bhk ?? "",
     // Edited as one comma-separated line rather than a list widget: these
     // are short free-text localities copied from the message, and typing
@@ -70,9 +106,12 @@ function toFormState(requirement?: BrokerRequirementRecord): FormState {
     society_name: requirement?.society_name ?? "",
     furnishing: requirement?.furnishing ?? "",
     budget_text: requirement?.budget_text ?? "",
-    budget_min_inr: requirement?.budget_min_inr?.toString() ?? "",
-    budget_max_inr: requirement?.budget_max_inr?.toString() ?? "",
-    listing_type: requirement?.listing_type ?? "Sale",
+    // Shown the way the broker would say it ("85L", "1.2cr") — see
+    // budgetText, and see the Budget field below for why this box stopped
+    // being a bare digits-only number box.
+    budget_min_inr: budgetText(requirement?.budget_min_inr ?? null),
+    budget_max_inr: budgetText(requirement?.budget_max_inr ?? null),
+    listing_type: requirement?.listing_type ?? null,
     contact_name: requirement?.contact_name ?? "",
     contact_phone_boxes: toPhoneBoxes(phoneList(requirement).map(toTypedNumber)),
     description: requirement?.description ?? "",
@@ -83,13 +122,21 @@ function toFormState(requirement?: BrokerRequirementRecord): FormState {
  *  the value server-side, not overwrite it with an empty string. */
 function toPayload(form: FormState): RequirementContentFields {
   const text = (value: string) => (value.trim() ? value.trim() : null);
-  const num = (value: string) => (value.trim() ? Number(value) : null);
+  // "85 L" -> 8500000. The boxes accept what a broker would say, so what is
+  // SENT has to be the rupee figure they meant — validationIssues has
+  // already refused anything parseCompactInr cannot read, so a null here is
+  // an empty box and nothing else.
+  const num = (value: string) => (value.trim() ? parseCompactInr(value) : null);
   const areas = form.preferred_areas
     .split(",")
     .map((area) => area.trim())
     .filter(Boolean);
   return {
     requirement_type: text(form.requirement_type),
+    // One per picked type, each carrying the unit picked beside it
+    // ("1000-1500 sqft", "150 var"). null when none are filled in, which is
+    // how the backend is told there is nothing to keep.
+    property_sizes: sizesToSend(splitTypes(form.requirement_type), form.property_sizes),
     bhk: text(form.bhk),
     preferred_areas: areas,
     // area_name is the primary locality and is never edited on its own —
@@ -101,7 +148,9 @@ function toPayload(form: FormState): RequirementContentFields {
     budget_text: text(form.budget_text),
     budget_min_inr: num(form.budget_min_inr),
     budget_max_inr: num(form.budget_max_inr),
-    listing_type: form.listing_type,
+    // Never null on the wire — the API type has no third value, and
+    // validationIssues has already refused an unset one.
+    listing_type: form.listing_type ?? "Sale",
     contact_name: text(form.contact_name),
     contact_phones: form.contact_phone_boxes
       .map((box) => box.trim())
@@ -124,9 +173,18 @@ function toPayload(form: FormState): RequirementContentFields {
  *    client form has always used. The structuring stage still silently
  *    swaps a reversed pair from the LLM, which is right for a model with no
  *    one to ask — but a person typing here can simply be told;
- *  - a requirement with no type, no area and no budget has nothing to
- *    compare properties against. Saving one used to produce a card reading
- *    "— / —" with a hundred meaningless "Low" matches behind it.
+ *  - FOUR THINGS ARE NOT OPTIONAL: at least one property type, Buy or Rent,
+ *    at least one of the two ₹ budget boxes, and at least one contact
+ *    number. A requirement is a thing to match properties against and a
+ *    broker to ring when one matches; without those it is neither. This
+ *    replaces the older, looser "type OR area OR budget" rule, which let a
+ *    card be saved reading "— / —" with a hundred meaningless "Low" matches
+ *    behind it — the new rules are strictly stronger, so nothing that would
+ *    have been refused before is accepted now.
+ *
+ *    Note the budget rule names the two ₹ boxes only: "Budget (as written)"
+ *    is wording, and the matcher reads the rupee figures — which is exactly
+ *    why the wording alone does not satisfy it.
  *
  * Returns EVERY problem it finds rather than only the first, so a form
  * with two mistakes in it takes one Save to discover both. Each entry names
@@ -138,34 +196,74 @@ function validationIssues(form: FormState): FieldIssue[] {
   const add = (field: string, message: string | null) => {
     if (message) issues.push({ field, message });
   };
-  for (const [key, label] of [
-    ["budget_min_inr", "Budget from"],
-    ["budget_max_inr", "Budget to"],
-  ] as const) {
-    add(key, amountError(form[key], label, MAX_INR));
+  // Collected in the order the boxes appear in the form, so the bar reads
+  // top-to-bottom and focusFirstIssue lands on the first thing wrong.
+  if (splitTypes(form.requirement_type).length === 0) {
+    add("requirement_type", "Pick at least one property type.");
   }
-  const min = form.budget_min_inr.trim() ? Number(form.budget_min_inr) : null;
-  const max = form.budget_max_inr.trim() ? Number(form.budget_max_inr) : null;
+  // A size box per picked type: a number or a range, and — once anything is
+  // typed in one — which unit that is. The same two rules the client dialog
+  // and the public form apply, from the same place.
+  for (const issue of typeSizeIssues(splitTypes(form.requirement_type), form.property_sizes)) {
+    add(issue.field, issue.message);
+  }
+  if (form.listing_type === null) {
+    add("listing_type", "Choose whether the broker wants to Buy or to Rent.");
+  }
+  // "85 L", "1.2cr", "8500000" — all read by parseCompactInr, the same
+  // function the Inquiries page's client dialog reads its two budget boxes
+  // with. Anything it cannot read is refused here rather than being sent as
+  // a NaN.
+  const amounts: Record<"budget_min_inr" | "budget_max_inr", number | null> = {
+    budget_min_inr: null,
+    budget_max_inr: null,
+  };
+  // How many problems were already found before the budget boxes were
+  // read — the reversed-pair check below needs to know whether either BOX
+  // was itself refused, not whether the form has any other fault at all.
+  // (It used to test `issues.length === 0`, which was the same thing while
+  // the budget boxes were the first thing checked and is not any more.)
+  const beforeBudget = issues.length;
+  for (const [key, label] of [
+    ["budget_min_inr", "minimum"],
+    ["budget_max_inr", "maximum"],
+  ] as const) {
+    const raw = form[key].trim();
+    if (!raw) continue;
+    const amount = parseCompactInr(raw);
+    if (amount === null) {
+      add(key, `The ${label} budget isn't an amount — try 45L, 1.2cr or 4500000.`);
+      continue;
+    }
+    if (amount > MAX_INR) {
+      add(key, `That ${label} budget is too large — check the figure.`);
+      continue;
+    }
+    amounts[key] = amount;
+  }
+  const min = amounts.budget_min_inr;
+  const max = amounts.budget_max_inr;
   // Raised against the MAXIMUM box: with two boxes and one relationship
   // between them, the second is the one the reader was last in and the one
   // they will change. Only when neither box is separately wrong, so a
   // reversed pair does not also complain about being reversed.
-  if (issues.length === 0 && min !== null && max !== null && min > max) {
+  if (issues.length === beforeBudget && min !== null && max !== null && min > max) {
     add("budget_max_inr", "The minimum budget is above the maximum.");
   }
-  add("contact_phone_boxes", phoneBoxesError(form.contact_phone_boxes));
-
-  const statesSomething =
-    form.requirement_type.trim() ||
-    form.preferred_areas.trim() ||
-    form.budget_text.trim() ||
-    form.budget_min_inr.trim() ||
-    form.budget_max_inr.trim();
-  if (!statesSomething) {
-    // No single box to point at -- it is a rule about the form as a whole,
-    // so it carries no field and nothing is scrolled to or marked red.
-    add("", "Fill in at least one of Property type, Preferred areas or Budget — a requirement with none of them has nothing to match properties against.");
+  // Either box satisfies it, so the same message is raised against BOTH —
+  // both go red, and the bar de-duplicates by message, so it is said once
+  // and shown wherever the answer can go.
+  if (!form.budget_min_inr.trim() && !form.budget_max_inr.trim()) {
+    const message = "Add a budget — a minimum or a maximum, at least one of the two.";
+    add("budget_min_inr", message);
+    add("budget_max_inr", message);
   }
+  // Missing first, then malformed: an empty field cannot also be badly
+  // typed, and phoneBoxesError has nothing to say about empty boxes.
+  if (!form.contact_phone_boxes.some((box) => box.trim())) {
+    add("contact_phone_boxes", "Add at least one contact number.");
+  }
+  add("contact_phone_boxes", phoneBoxesError(form.contact_phone_boxes));
   return issues;
 }
 
@@ -187,6 +285,7 @@ function Field({
   span,
   field,
   invalid,
+  required,
   children,
 }: {
   label: string;
@@ -198,6 +297,9 @@ function Field({
   field?: string;
   /** A save was just refused over this box. */
   invalid?: boolean;
+  /** This box has to be filled in — marks the label with a red asterisk, so
+   *  the rule is visible before Save rather than only after it. */
+  required?: boolean;
   children: React.ReactNode;
 }) {
   return (
@@ -208,6 +310,11 @@ function Field({
     >
       <label className="field__hint" style={{ fontWeight: 560, color: invalid ? undefined : "var(--ink-2)" }}>
         {label}
+        {required && (
+          <span style={{ color: "var(--bad)", marginLeft: 3 }} title="Required" aria-hidden>
+            *
+          </span>
+        )}
       </label>
       {children}
       {hint &&
@@ -263,6 +370,28 @@ export default function RequirementFormDialog({
     setForm((prev) => ({ ...prev, [key]: value }));
   }
 
+  /** Blur: show the short form ("85L") when that is exact — see budgetText.
+   *  Leaves an unreadable box exactly as typed, so the reader still sees
+   *  what they wrote beside the message explaining it. */
+  function onBudgetBlur(key: "budget_min_inr" | "budget_max_inr") {
+    const amount = parseCompactInr(form[key]);
+    if (amount !== null) set(key, budgetText(amount));
+  }
+
+  /** Ticks or unticks a type, keeping the order they were picked in — the
+   *  first is this requirement's main one. A size typed against a type
+   *  survives it being unticked (ticking it again brings it back) but only
+   *  picked types are ever sent. */
+  function toggleType(type: string) {
+    setForm((prev) => {
+      const picked = splitTypes(prev.requirement_type);
+      const next = picked.some((existing) => existing.toLowerCase() === type.toLowerCase())
+        ? picked.filter((existing) => existing.toLowerCase() !== type.toLowerCase())
+        : [...picked, type];
+      return { ...prev, requirement_type: next.join(", ") };
+    });
+  }
+
   async function handleSave() {
     if (saving) return;
     const found = validationIssues(form);
@@ -299,6 +428,11 @@ export default function RequirementFormDialog({
       ? "Add a requirement"
       : [requirement?.bhk, requirement?.requirement_type].filter(Boolean).join(" ") || "Requirement";
 
+  // The chips add any stored type that isn't one of the offered options
+  // (PropertyTypeChips' withStored), so opening Edit on a requirement
+  // structured with an older name never drops it.
+  const pickedTypes = splitTypes(form.requirement_type);
+
   return createPortal(
     <div className="modal-scrim" onMouseDown={(event) => event.target === event.currentTarget && !saving && onClose()}>
       <div
@@ -312,8 +446,9 @@ export default function RequirementFormDialog({
             <div className="detail-modal__eyebrow">{mode === "add" ? "New requirement" : "Edit requirement"}</div>
             <h2 className="detail-modal__title cell-truncate">{title}</h2>
             <div className="detail-modal__sub">
-              Fill in only what the broker actually asked for — at least the property type, an area or a budget,
-              so there is something to match properties against.
+              Fill in what the broker actually asked for. Fields marked * are required — a property type, Buy or
+              Rent, a budget and one contact number, so there is something to match properties against and someone
+              to ring when they do.
             </div>
           </div>
           <button type="button" className="toast__close" onClick={onClose} disabled={saving} aria-label="Close">
@@ -323,21 +458,43 @@ export default function RequirementFormDialog({
 
         <div className="detail-modal__body" ref={bodyRef}>
           <div className="stack stack-4">
-            <div style={GRID_STYLE}>
-              <Field label="Property type wanted" hint="Several accepted? Separate them with commas, main one first.">
-                <input
-                  className="input"
-                  list="requirement-type-options"
-                  value={form.requirement_type}
-                  onChange={(e) => set("requirement_type", e.target.value)}
-                  placeholder="e.g. Flat, Bungalow, Plot"
+            {/* Chips, not free text: a broker who will take a flat OR a
+                bungalow says both, each is scored on its own, and nothing
+                depends on remembering to separate them with commas. The
+                first one picked stays this requirement's main type. */}
+            <Field
+              label="Property type wanted"
+              field="requirement_type"
+              invalid={hasIssue(issues, "requirement_type")}
+              required
+              hint="Pick every type they'd take — the first one is the main one."
+            >
+              <PropertyTypeChips
+                picked={pickedTypes}
+                onToggle={toggleType}
+                disabled={saving}
+                ariaLabel="Property type wanted"
+              />
+            </Field>
+
+            {/* One optional box per picked type, with both units beside it.
+                A bare number is ambiguous — 200 sqft and 200 var are not the
+                same property — so a box with anything typed in it has to say
+                which. Empty is fine: it only nudges the matching. */}
+            {pickedTypes.length > 0 && (
+              <Field label="Size wanted (optional)" hint={SIZE_HINT} keyHint>
+                <TypeSizeRows
+                  picked={pickedTypes}
+                  state={form.property_sizes}
+                  onChange={(next) => set("property_sizes", next)}
+                  issues={issues}
+                  disabled={saving}
+                  idPrefix="requirement-form"
                 />
-                <datalist id="requirement-type-options">
-                  {REQUIREMENT_TYPE_OPTIONS.map((option) => (
-                    <option key={option} value={option} />
-                  ))}
-                </datalist>
               </Field>
+            )}
+
+            <div style={GRID_STYLE}>
               <Field label="BHK" hint="e.g. 2 BHK, or 4 BHK, 5 BHK">
                 <input className="input" value={form.bhk} onChange={(e) => set("bhk", e.target.value)} placeholder="e.g. 2 BHK" />
               </Field>
@@ -389,7 +546,13 @@ export default function RequirementFormDialog({
                   ))}
                 </select>
               </Field>
-              <Field label="Buy or Rent">
+              {/* Nothing selected until somebody chooses — see toFormState. */}
+              <Field
+                label="Buy or Rent"
+                field="listing_type"
+                invalid={hasIssue(issues, "listing_type")}
+                required
+              >
                 <Segmented
                   ariaLabel="Buy or Rent"
                   value={form.listing_type}
@@ -401,15 +564,17 @@ export default function RequirementFormDialog({
                 />
               </Field>
 
-              {/* The two numeric boxes below are what filtering and matching
+              {/* The two rupee boxes below are what filtering and matching
                   read. This one is the broker's own wording, and its numbers
-                  are only worked out when BOTH of those are left empty (see
-                  requirement_structurer._fill_missing_budget_amounts) — said
-                  here in the hint, because a form that quietly ignores what
+                  are only ever worked out when BOTH of those are left empty
+                  (see requirement_structurer._fill_missing_budget_amounts)
+                  — which, since one of them is now required, never happens
+                  to anything saved from this form. So the hint says plainly
+                  that this box is wording: a form that quietly ignores what
                   someone typed reads as a bug. */}
               <Field
                 label="Budget (as written)"
-                hint="Wording only — read as the budget just when both ₹ boxes are empty."
+                hint="Wording only — the ₹ boxes below are what filtering and matching actually read."
                 keyHint
               >
                 <input
@@ -419,39 +584,58 @@ export default function RequirementFormDialog({
                   placeholder="e.g. 80L-1cr"
                 />
               </Field>
+              {/* One Budget field with two boxes, identical to the
+                  Inquiries page's client dialog — same legend, same
+                  placeholders, same parser (parseCompactInr) and the same
+                  tidy-up on blur. It used to be two separate "digits only"
+                  number boxes, which asked the reader to expand "80L" into
+                  8000000 in their head before they could type it; now the
+                  boxes take the wording and do the arithmetic. What is
+                  STORED is unchanged — a plain rupee figure in each column.
+                  Spans the row because the pair belongs together. */}
               <Field
-                field="budget_min_inr"
-                invalid={hasIssue(issues, "budget_min_inr")}
-                label="Budget from (₹)"
-                hint="Digits only — 8000000, not &quot;80L&quot;."
-                keyHint
+                label="Budget (₹)"
+                required
+                hint="At least one of the two. Write it the way they'd say it — 2.5 cr, 85 L, or 25 K a month to rent."
+                span
               >
-                <input
-                  className="input"
-                  type="number"
-                  inputMode="decimal"
-                  min={0}
-                  value={form.budget_min_inr}
-                  onChange={(e) => set("budget_min_inr", e.target.value)}
-                  placeholder="e.g. 8000000"
-                />
-              </Field>
-              <Field
-                field="budget_max_inr"
-                invalid={hasIssue(issues, "budget_max_inr")}
-                label="Budget to (₹)"
-                hint="Digits only — 10000000, not &quot;1cr&quot;."
-                keyHint
-              >
-                <input
-                  className="input"
-                  type="number"
-                  inputMode="decimal"
-                  min={0}
-                  value={form.budget_max_inr}
-                  onChange={(e) => set("budget_max_inr", e.target.value)}
-                  placeholder="e.g. 10000000"
-                />
+                {/* The key, before the boxes — it answers "how do I write
+                    this?" before anyone has to wonder. */}
+                <div className="budget-units">
+                  <span>
+                    <b>cr</b> crore
+                  </span>
+                  <span>
+                    <b>L</b> lakh
+                  </span>
+                  <span>
+                    <b>K</b> thousand
+                  </span>
+                </div>
+                <div style={{ display: "grid", gridTemplateColumns: "repeat(2, minmax(0, 1fr))", gap: 10 }}>
+                  <input
+                    data-field="budget_min_inr"
+                    className={`input${hasIssue(issues, "budget_min_inr") ? " input--bad" : ""}`}
+                    inputMode="decimal"
+                    aria-label="Minimum budget"
+                    value={form.budget_min_inr}
+                    onChange={(e) => set("budget_min_inr", e.target.value)}
+                    onBlur={() => onBudgetBlur("budget_min_inr")}
+                    placeholder="Min — e.g. 80 L"
+                    maxLength={20}
+                  />
+                  <input
+                    data-field="budget_max_inr"
+                    className={`input${hasIssue(issues, "budget_max_inr") ? " input--bad" : ""}`}
+                    inputMode="decimal"
+                    aria-label="Maximum budget"
+                    value={form.budget_max_inr}
+                    onChange={(e) => set("budget_max_inr", e.target.value)}
+                    onBlur={() => onBudgetBlur("budget_max_inr")}
+                    placeholder="Max — e.g. 1.2 cr"
+                    maxLength={20}
+                  />
+                </div>
               </Field>
 
               <Field label="Contact name">
@@ -466,7 +650,8 @@ export default function RequirementFormDialog({
                 field="contact_phone_boxes"
                 invalid={hasIssue(issues, "contact_phone_boxes")}
                 label="Contact numbers"
-                hint="10 digits per box — the +91 is added for you."
+                required
+                hint="At least one. 10 digits per box — the +91 is added for you."
                 keyHint
               >
                 <ContactPhonesField

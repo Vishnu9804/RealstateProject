@@ -293,6 +293,61 @@ def _tables_with_legacy_contact_phone(connection) -> List[str]:
     return [table for table in _CONTACT_PHONE_TABLES if table in present]
 
 
+def _clear_placeholder_area_names(engine) -> int:
+    """Nulls every stored area_name that is a placeholder rather than a place
+    — "Unknown", "NULL", "None", "N/A" and the rest of
+    Model/field_validation.py's _NOT_A_VALUE. Returns how many rows changed.
+
+    One UPDATE per table, each a single statement the database evaluates
+    itself: no rows travel to the application and back. The comparison
+    mirrors blank_if_placeholder exactly — trim, drop the same surrounding
+    punctuation, case-fold — so the SQL here and the Python that keeps NEW
+    values out can never disagree about what counts as a placeholder.
+
+    Idempotent: after the first run every one of these is already NULL, so
+    the WHERE matches nothing. It is flag-gated anyway (see init_db), so on a
+    normal startup it does not run at all."""
+    from sqlalchemy import text
+
+    from Model.field_validation import _NOT_A_VALUE
+
+    # The three tables that store a locality typed or extracted as free text.
+    # broker_requirements.preferred_areas is deliberately NOT here: it is a
+    # JSON array, the requirement side never offered its contents as filter
+    # options, and rewriting JSON in SQL is not worth the risk for that.
+    tables = ("properties", "builder_projects", "broker_requirements")
+    words = sorted(_NOT_A_VALUE)
+    placeholders = ", ".join(f":w{index}" for index in range(len(words)))
+    parameters = {f"w{index}": word for index, word in enumerate(words)}
+
+    changed = 0
+    with engine.begin() as connection:
+        for table in tables:
+            # Skip a table this database does not have rather than letting the
+            # UPDATE raise — init_db runs against databases at several ages.
+            exists = connection.execute(
+                text(
+                    "SELECT 1 FROM information_schema.columns "
+                    "WHERE table_schema = current_schema() "
+                    "AND table_name = :table AND column_name = 'area_name'"
+                ),
+                {"table": table},
+            ).first()
+            if not exists:
+                continue
+            result = connection.execute(
+                text(
+                    f"UPDATE {table} SET area_name = NULL "  # noqa: S608 - table names are the literal tuple above
+                    "WHERE area_name IS NOT NULL "
+                    "AND lower(btrim(btrim(area_name), ' .,;:!?\"''()[]')) "
+                    f"IN ({placeholders})"
+                ),
+                parameters,
+            )
+            changed += result.rowcount or 0
+    return changed
+
+
 def _drop_legacy_contact_phone_columns(engine) -> List[str]:
     """Removes the retired single-value `contact_phone` column from every
     table that still has one, and returns the tables it dropped it from.
@@ -590,6 +645,30 @@ def init_db() -> None:
             text(f"ALTER TABLE clients ADD COLUMN IF NOT EXISTS requirement_embedding vector({EMBEDDING_DIMENSIONS})")
         )
         connection.execute(text("ALTER TABLE users ADD COLUMN IF NOT EXISTS session_epoch INTEGER NOT NULL DEFAULT 0"))
+    with engine.begin() as connection:
+        # A listing's bedroom/unit configuration used to be a column called
+        # "bhk", which is why PropertyRow still calls the ATTRIBUTE bhk — the
+        # attribute name is what several hundred lines of scoring, filtering
+        # and serialisation read, and renaming those would be a large edit for
+        # no behavioural gain. The COLUMN is "configuration" because the field
+        # no longer only holds "3 BHK": values like "4 BHK, G+2" are stored
+        # verbatim now (field_validation no longer rewrites it).
+        #
+        # RENAME preserves every stored value and is a catalog-only change on
+        # Postgres. Guarded by the catalog rather than IF EXISTS so it is a
+        # true no-op on a database that has already been renamed and on a
+        # brand-new one (create_all above made "configuration" directly).
+        # It has to run HERE, before anything in init_db reads the table
+        # through the ORM, or that read would ask for a column that is still
+        # called bhk.
+        needs_configuration_rename = connection.execute(
+            text(
+                "SELECT 1 FROM information_schema.columns "
+                "WHERE table_name = 'properties' AND column_name = 'bhk'"
+            )
+        ).first()
+        if needs_configuration_rename:
+            connection.execute(text("ALTER TABLE properties RENAME COLUMN bhk TO configuration"))
     with engine.begin() as connection:
         # The human-entered "Super built" area (StructuredProperty.super_built).
         # Nullable, no default: a metadata-only change on Postgres, and every
@@ -919,6 +998,16 @@ def init_db() -> None:
         # this existed (those cards simply show on every tab).
         connection.execute(
             text("ALTER TABLE broker_requirement_matches ADD COLUMN IF NOT EXISTS matched_type VARCHAR")
+        )
+        # The size wanted per requested type on a broker requirement — the
+        # demand-side twin of clients.property_sizes above, in the same shape,
+        # read by the same parser and stored as the same JSON column type (see
+        # BrokerRequirementRow.property_sizes). Nullable, no default, no
+        # backfill: catalog-only in Postgres, and NULL already means exactly
+        # what every existing row should say — "no size stated", which is
+        # never scored as a mismatch.
+        connection.execute(
+            text("ALTER TABLE broker_requirements ADD COLUMN IF NOT EXISTS property_sizes JSON")
         )
         # The stored, indexed E.164 number on landing-page leads -- see
         # LandingLeadRow.phone_e164. The index is what turns the repeat-
@@ -1304,3 +1393,29 @@ def init_db() -> None:
             f"Backfilled the canonical phone number on {stamped} landing-page lead(s) — repeat-enquiry "
             "checks for them are now a single indexed lookup."
         )
+
+    # One-time clean-up of area_name values that were never a place:
+    # "Unknown", "NULL", "None", "N/A" and the rest of
+    # Model/field_validation.py's _NOT_A_VALUE. They came from the LLM (and
+    # from the client's own spreadsheets) meaning "the message didn't say",
+    # and being stored as text made each one a locality: an option in the
+    # Area filter, and a count in the Localities tile.
+    #
+    # Reading code no longer trusts them either (StructuredProperty._v_area_name
+    # blanks one on the way out of the database), so this pass is about the
+    # stored rows themselves rather than about what is on screen. Gated by an
+    # app_settings flag for the same reason every clean-up above is: without
+    # one, three tables would be scanned on every startup to prove there is
+    # nothing left to do.
+    #
+    # updated_at is deliberately left alone — this is a repair, not an edit,
+    # and bumping it would reorder the Properties table for no reason.
+    placeholder_area_key = "placeholder_area_cleanup_v1"
+    if not settings_repository.get_value(placeholder_area_key):
+        cleared_areas = _clear_placeholder_area_names(engine)
+        settings_repository.set_value(placeholder_area_key, {"done": True})
+        if cleared_areas:
+            step_logger.info(
+                f"Cleared a placeholder area name (\"Unknown\", \"NULL\", \"N/A\", …) on {cleared_areas} "
+                "stored record(s) — none of them is offered as a locality any more."
+            )

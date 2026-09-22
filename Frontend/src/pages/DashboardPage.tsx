@@ -35,6 +35,7 @@ import {
 } from "../lib/propertyFilters";
 import { useToast } from "../components/ui/Toast";
 import FilterPopover, { type SortControl } from "../components/ui/FilterPopover";
+import StickyTableHead from "../components/ui/StickyTableHead";
 import ConfirmDialog from "../components/ui/ConfirmDialog";
 import RowRail from "../components/ui/RowRail";
 import PropertyFormDialog from "../components/PropertyFormDialog";
@@ -155,14 +156,14 @@ export const COLUMNS: Column[] = [
   { key: "unitNo", label: "Unit / Flat no." },
   { key: "locality", label: "Area", sort: "locality", filterKey: "locality" },
   { key: "address", label: "Address" },
-  { key: "bhk", label: "BHK", filterKey: "bhk" },
+  { key: "bhk", label: "Configuration", filterKey: "bhk" },
   { key: "type", label: "Type", filterKey: "type" },
   { key: "listingType", label: "Sale/Rent", filterKey: "listingType" },
   // Two columns, not one: sqft and vaar are different measurements and a
   // single combined column could only be sorted or bounded by converting one
   // into the other — see lib/propertyFilters.ts.
   { key: "areaSqft", label: "Area (sqft)", sort: "areaSqft", numeric: true, filterKey: "areaSqft" },
-  { key: "areaVaar", label: "Area (vaar)", sort: "areaVaar", numeric: true, filterKey: "areaVaar" },
+  { key: "areaVaar", label: "Area (var)", sort: "areaVaar", numeric: true, filterKey: "areaVaar" },
   // Free text a person typed ("1850 sq ft") — see PropertyRecord.super_built.
   // No filter or sort: like Society/Address it is near-unique text, and the
   // search box already searches it.
@@ -1373,6 +1374,43 @@ function PropertyTable({
   onOpenFilter: (key: string, anchor: HTMLElement) => void;
 }) {
   const tableWrapRef = useRef<HTMLDivElement>(null);
+  const scrollRef = useRef<HTMLDivElement>(null);
+  // One definition, rendered both in the table and in the copy pinned under
+  // the top bar — see components/ui/StickyTableHead.tsx.
+  const headerRow = (
+    <tr>
+      {COLUMNS.map((column) => {
+        const sorted = column.sort && column.sort === sortKey;
+        return (
+          <th
+            key={column.key}
+            aria-sort={sorted ? (sortDir === "asc" ? "ascending" : "descending") : undefined}
+            style={column.numeric ? { textAlign: "right" } : undefined}
+          >
+            {column.filterKey ? (
+              // Filterable columns open their dialog on click; the
+              // sort lives inside it, so one heading never has to
+              // mean two different things depending on where you hit.
+              <FilterTrigger
+                label={column.label}
+                filter={filters[column.filterKey]}
+                expanded={openFilterKey === column.filterKey}
+                onOpen={(anchor) => onOpenFilter(column.filterKey!, anchor)}
+              />
+            ) : column.sort ? (
+              <button type="button" onClick={() => toggleSort(column.sort!)} title={`Sort by ${column.label}`}>
+                {column.label}
+                <IconChevron size={12} className="sort-caret" />
+              </button>
+            ) : (
+              column.label
+            )}
+          </th>
+        );
+      })}
+      <th style={{ textAlign: "right" }}>Actions</th>
+    </tr>
+  );
   return (
     <div className="table-with-rail" ref={tableWrapRef}>
       <RowRail containerRef={tableWrapRef} count={properties.length} className="anim-rise" ariaHidden>
@@ -1382,42 +1420,10 @@ function PropertyTable({
         }}
       </RowRail>
       <div className="table-frame anim-rise">
-      <div className="table-scroll">
+      <StickyTableHead scrollRef={scrollRef}>{headerRow}</StickyTableHead>
+      <div className="table-scroll" ref={scrollRef}>
         <table className="table">
-          <thead>
-            <tr>
-              {COLUMNS.map((column) => {
-                const sorted = column.sort && column.sort === sortKey;
-                return (
-                  <th
-                    key={column.key}
-                    aria-sort={sorted ? (sortDir === "asc" ? "ascending" : "descending") : undefined}
-                    style={column.numeric ? { textAlign: "right" } : undefined}
-                  >
-                    {column.filterKey ? (
-                      // Filterable columns open their dialog on click; the
-                      // sort lives inside it, so one heading never has to
-                      // mean two different things depending on where you hit.
-                      <FilterTrigger
-                        label={column.label}
-                        filter={filters[column.filterKey]}
-                        expanded={openFilterKey === column.filterKey}
-                        onOpen={(anchor) => onOpenFilter(column.filterKey!, anchor)}
-                      />
-                    ) : column.sort ? (
-                      <button type="button" onClick={() => toggleSort(column.sort!)} title={`Sort by ${column.label}`}>
-                        {column.label}
-                        <IconChevron size={12} className="sort-caret" />
-                      </button>
-                    ) : (
-                      column.label
-                    )}
-                  </th>
-                );
-              })}
-              <th style={{ textAlign: "right" }}>Actions</th>
-            </tr>
-          </thead>
+          <thead>{headerRow}</thead>
           <tbody>
             {properties.map((property) => {
               const flagged = property.needs_review;

@@ -5,7 +5,7 @@ import { inquiryClientApi, type ClientDetailsBody } from "../api/inquiryClientAp
 import type { InquiryClientRecord } from "../api/types";
 import { friendlyError } from "../lib/apiError";
 import { loadClientPhoto, setCachedClientPhoto } from "../lib/clientPhotoCache";
-import { sizeRangeError } from "../lib/fieldChecks";
+import { SIZE_HINT, splitTypes } from "../lib/propertyTypeOptions";
 import { formatCompactInr, parseCompactInr } from "../lib/formatters";
 import { fileToClientPhoto } from "../lib/imageProcessing";
 import { formatPhone, phoneFieldError, toStoredNumber, toTypedNumber } from "../lib/phone";
@@ -14,7 +14,15 @@ import { FURNISHING_OPTIONS } from "./PropertyFormDialog";
 import { useToast } from "./ui/Toast";
 import { Button, Note } from "./ui/Primitives";
 import { FormIssues, hasIssue, useFocusFirstIssue, type FieldIssue } from "./ui/FormIssues";
-import { IconAlert, IconCheck, IconImage, IconPlus, IconTrash, IconX } from "./ui/Icons";
+import {
+  PropertyTypeChips,
+  TypeSizeRows,
+  sizesToSend as sizesToSendFor,
+  toTypeSizeState,
+  typeSizeIssues,
+  type TypeSizeState,
+} from "./ui/PropertyTypePicker";
+import { IconAlert, IconImage, IconPlus, IconTrash, IconX } from "./ui/Icons";
 
 /**
  * The Inquiries page's own Add / Edit client dialog — one tall,
@@ -23,6 +31,20 @@ import { IconAlert, IconCheck, IconImage, IconPlus, IconTrash, IconX } from "./u
  * leave this page, no form link is minted, and nothing is sent to the
  * client (see Backend/Service/WhatsAppInquiryHandlingService/
  * manual_client_service.py).
+ *
+ * FIVE THINGS ARE NOT OPTIONAL HERE (marked * on their labels):
+ *  - the WhatsApp number, which is the client's identity in this system;
+ *  - their name;
+ *  - whether they want to Buy or Rent;
+ *  - at least one property type;
+ *  - at least one of the two budget boxes.
+ * The last three are the requirement fields, and they are checked only
+ * while those fields are actually editable: when the client has properties
+ * out with an agent their requirements are LOCKED (see `requirementsLocked`
+ * below), the boxes are disabled, and insisting on a value nobody can type
+ * would trap a name or photo edit in a dialog with no way out. The number
+ * is likewise checked on Add only — on Edit its box is disabled and always
+ * already holds one.
  *
  * Edit opens pre-filled with everything on file, photo included, and saves
  * ONLY the fields that actually changed. That is what lets an untouched
@@ -42,68 +64,20 @@ const PURPOSES = [
   { value: "buy", label: "Buy" },
   { value: "rent", label: "Rent" },
 ];
-const PROPERTY_TYPES = [
-  "Flat",
-  "Penthouse",
-  "Row House",
-  "Bungalow",
-  "Farm House",
-  "Shop",
-  "Office",
-  "Land/Plot",
-  "Warehouse",
-  "Other",
-];
-
-/** Types whose size is given in vaar (square yards) — land, or a home that
- *  comes with its own plot. Every other type is asked in sq ft. The same
- *  rule the public form applies, and the same one the matcher reads a bare
- *  number by (Backend/Service/ClientPropertyMatchingService/
- *  normalization.py's default_size_unit). */
-const VAAR_TYPE_RE = /bungalow|land|plot|farm/i;
-
-function sizeUnitOf(type: string): "vaar" | "sq ft" {
-  return VAAR_TYPE_RE.test(type) ? "vaar" : "sq ft";
-}
-
-/** The stored comma-separated types ("Flat, Bungalow") back into chips, in
- *  the order they were picked. A value that isn't one of the options (an
- *  older free-text one, or one typed on the public form) is kept as a chip
- *  of its own rather than silently dropped on the next save. */
-function splitTypes(raw: string): string[] {
-  const picked: string[] = [];
-  for (const part of raw.split(",")) {
-    const label = part.trim().replace(/\s+/g, " ");
-    if (!label) continue;
-    const type = PROPERTY_TYPES.find((option) => option.toLowerCase() === label.toLowerCase()) ?? label;
-    if (!picked.some((existing) => existing.toLowerCase() === type.toLowerCase())) picked.push(type);
-  }
-  return picked;
-}
-
-/** Saved sizes re-keyed onto the chips they belong to. */
-function matchSizes(types: string[], sizes: Record<string, string> | null | undefined): Record<string, string> {
-  const matched: Record<string, string> = {};
-  for (const [key, value] of Object.entries(sizes ?? {})) {
-    const type = types.find((candidate) => candidate.toLowerCase() === key.trim().toLowerCase());
-    if (type && value) matched[type] = value;
-  }
-  return matched;
-}
 
 /** The sizes worth sending: one per picked type, in the order picked, blanks
  *  left out — null when none are left, which is how the backend is told
  *  there is nothing to keep. A size typed for a type that is then un-ticked
  *  stays in the boxes (ticking it again brings it back) but is never sent;
  *  the backend applies the identical rule on the way in (see
- *  manual_client_service._apply_size_rule). */
+ *  manual_client_service._apply_size_rule).
+ *
+ *  Each value carries the unit picked on its capsule ("1000-1500 sqft",
+ *  "150 var"), which is what the matcher reads it by — see
+ *  components/ui/PropertyTypePicker and Backend/Service/
+ *  ClientPropertyMatchingService/normalization.py's parse_size_requirement. */
 function sizesToSend(form: FormState): Record<string, string> | null {
-  const sizes: Record<string, string> = {};
-  for (const type of splitTypes(form.property_type)) {
-    const size = (form.property_sizes[type] ?? "").trim();
-    if (size) sizes[type] = size;
-  }
-  return Object.keys(sizes).length > 0 ? sizes : null;
+  return sizesToSendFor(splitTypes(form.property_type), form.property_sizes);
 }
 
 /** The boxes as the backend stores them: "+91" back on the front of each
@@ -144,9 +118,11 @@ interface FormState {
   /** Every picked type, comma-separated ("Flat, Bungalow") — the shape the
    *  backend stores and the matcher reads one type at a time. */
   property_type: string;
-  /** Free text per picked type, keyed by the type exactly as it appears in
-   *  `property_type`. Sent as `property_sizes`, never as text. */
-  property_sizes: Record<string, string>;
+  /** The number/range and the unit typed for each picked type, held apart
+   *  while they are being edited and joined into the one string the backend
+   *  stores at save time (see sizesToSend). Keyed by the type exactly as it
+   *  appears in `property_type`. Sent as `property_sizes`, never as text. */
+  property_sizes: TypeSizeState;
   bhk: string;
   /** One of FURNISHING_OPTIONS, or "" for no preference — the same three
    *  values a property's own furnishing uses, which is what lets the matcher
@@ -194,7 +170,7 @@ const BLANK_FORM: FormState = {
   additional_phones: [],
   purpose: "",
   property_type: "",
-  property_sizes: {},
+  property_sizes: { texts: {}, units: {} },
   bhk: "",
   furnishing: "",
   budget_min_inr: "",
@@ -230,7 +206,7 @@ function toFormState(client: InquiryClientRecord): FormState {
     additional_phones: (client.additional_phones ?? []).map(toTypedNumber),
     purpose: client.purpose ?? "",
     property_type: types.join(", "),
-    property_sizes: matchSizes(types, client.property_sizes),
+    property_sizes: toTypeSizeState(types, client.property_sizes),
     bhk: client.bhk ?? "",
     furnishing: client.furnishing ?? "",
     budget_min_inr: budgetText(client.budget_min_inr),
@@ -311,13 +287,15 @@ function buildBody(
   }
 
   if (changed("email") && form.email.trim() && !EMAIL_PATTERN.test(form.email.trim())) {
-    add("email", "That email address doesn't look right — it should read like name@example.com.");
+    add("email", "That email doesn't look right — try name@example.com.");
   }
 
-  // A size box per picked type. Checked in the unit that type is actually
-  // asked in, so the example in the message matches the box it is under.
-  for (const type of splitTypes(form.property_type)) {
-    add(sizeFieldKey(type), sizeRangeError(form.property_sizes[type] ?? "", sizeUnitOf(type)));
+  // A size box per picked type: what is typed has to be a number or a
+  // range, and a box with anything in it has to say whether that is sqft or
+  // var. Both rules live with the picker itself, so this dialog, the Broker
+  // Requirements dialog and the public form can never drift apart on them.
+  for (const issue of typeSizeIssues(splitTypes(form.property_type), form.property_sizes)) {
+    add(issue.field, issue.message);
   }
 
   for (const key of TEXT_KEYS) {
@@ -345,12 +323,6 @@ function buildBody(
   return { body, issues };
 }
 
-/** The `data-field` a per-type size box carries. Derived from the type
- *  name the same way its input id is, so the two can never disagree. */
-function sizeFieldKey(type: string): string {
-  return `size-${type.toLowerCase().replace(/[^a-z0-9]+/g, "-")}`;
-}
-
 /** Same two kinds of hint PropertyFormDialog's Field draws, for the same
  *  reason and with the same styling — see that component's comment.
  *  `keyHint` marks a box whose value is read by machinery rather than only
@@ -363,12 +335,16 @@ function Field({
   keyHint,
   field,
   invalid,
+  required,
   children,
 }: {
   label: string;
   htmlFor?: string;
   hint?: React.ReactNode;
   keyHint?: boolean;
+  /** This box has to be filled in — marks the label with a red asterisk, so
+   *  the rule is visible before Save rather than only after it. */
+  required?: boolean;
   /** The key this box raises its issues under -- written out as
    *  `data-field` so focusFirstIssue can find it. */
   field?: string;
@@ -380,6 +356,11 @@ function Field({
     <div className={`field${invalid ? " field--bad" : ""}`} data-field={field}>
       <label className="field__hint" htmlFor={htmlFor} style={{ fontWeight: 560, color: invalid ? undefined : "var(--ink-2)" }}>
         {label}
+        {required && (
+          <span style={{ color: "var(--bad)", marginLeft: 3 }} title="Required" aria-hidden>
+            *
+          </span>
+        )}
       </label>
       {children}
       {hint &&
@@ -552,12 +533,6 @@ export default function ClientFormDialog({
   async function handleSave() {
     if (saving) return;
     const typedPhone = form.phone.trim();
-    if (mode === "add" && !typedPhone) {
-      const missing = [{ field: "phone", message: "Enter the client's WhatsApp number — it's what every message and match is tied to." }];
-      setIssues(missing);
-      setFormError(null);
-      return;
-    }
     // The same ten-digit rule every other phone box in the application now
     // applies, checked here rather than only by the backend so the answer
     // arrives in the dialog the box is in.
@@ -570,7 +545,10 @@ export default function ClientFormDialog({
     // editable in both modes, so they are checked in both.
     const phoneIssues: FieldIssue[] = [];
     if (mode === "add") {
-      const bad = phoneFieldError(typedPhone);
+      // Missing and malformed are one box's two ways of being wrong.
+      // Raised together with everything else rather than returned on the
+      // spot, so an Add with no number AND no name is told both at once.
+      const bad = typedPhone ? phoneFieldError(typedPhone) : "Enter the client's WhatsApp number.";
       if (bad) phoneIssues.push({ field: "phone", message: bad });
     }
     form.additional_phones.forEach((extra, index) => {
@@ -583,10 +561,36 @@ export default function ClientFormDialog({
     // showing one spelling of one number.
     const phone = toStoredNumber(typedPhone) ?? typedPhone;
     const { body, issues: bodyIssues } = buildBody(form, initial, mode, client);
+
+    // A client with no name is a row nobody can recognise in a list of
+    // rows. Checked in BOTH modes — the box is editable in both.
+    const nameIssues: FieldIssue[] = [];
+    if (!form.name.trim()) nameIssues.push({ field: "name", message: "Enter the client's name." });
+
+    // The three requirement must-haves — skipped entirely while those
+    // fields are locked, because their boxes are disabled and there would
+    // be no way to satisfy them. See the note at the top of this file.
+    const requirementIssues: FieldIssue[] = [];
+    if (!requirementsLocked) {
+      if (!form.purpose.trim()) {
+        requirementIssues.push({ field: "purpose", message: "Choose whether they want to Buy or Rent." });
+      }
+      if (splitTypes(form.property_type).length === 0) {
+        requirementIssues.push({ field: "property_type", message: "Pick at least one property type." });
+      }
+      // Either box satisfies it, so the same message is raised against BOTH
+      // — both go red, and the bar de-duplicates by message, so it is said
+      // once and shown wherever the answer can go.
+      if (!form.budget_min_inr.trim() && !form.budget_max_inr.trim()) {
+        const message = "Add a budget — a minimum or a maximum, at least one of the two.";
+        requirementIssues.push({ field: "budget_min_inr", message }, { field: "budget_max_inr", message });
+      }
+    }
+
     // The phone boxes first: they are the top of the form, so this is the
     // order the reader meets the problems in, which is the order
     // focusFirstIssue should travel in.
-    const found = [...phoneIssues, ...bodyIssues];
+    const found = [...phoneIssues, ...nameIssues, ...bodyIssues, ...requirementIssues];
     setIssues(found);
     if (found.length > 0) {
       setFormError(null);
@@ -633,10 +637,10 @@ export default function ClientFormDialog({
     FURNISHING_OPTIONS.map((option) => ({ value: option, label: option })),
     form.furnishing,
   );
-  // Every option, plus any stored type that isn't one of them — the chips'
-  // equivalent of withCurrent above, so opening Edit never drops a type.
+  // The chips themselves add any stored type that isn't one of the offered
+  // options (PropertyTypeChips' withStored), which is the equivalent of
+  // withCurrent above: opening Edit never drops a type.
   const pickedTypes = splitTypes(form.property_type);
-  const typeChoices = [...PROPERTY_TYPES, ...pickedTypes.filter((type) => !PROPERTY_TYPES.includes(type))];
   const frameClass = [
     "client-photo__frame",
     photo && "client-photo__frame--filled",
@@ -659,8 +663,8 @@ export default function ClientFormDialog({
             <h2 className="detail-modal__title cell-truncate">{title}</h2>
             <div className="detail-modal__sub">
               {mode === "add"
-                ? "Filled in here, on the dashboard — nothing is sent to the client."
-                : "Pre-filled with everything on file. Only what you change is saved."}
+                ? "Filled in here, on the dashboard — nothing is sent to the client. Fields marked * are required."
+                : "Pre-filled with everything on file. Only what you change is saved. Fields marked * are required."}
             </div>
           </div>
           <button type="button" className="toast__close" onClick={onClose} disabled={saving} aria-label="Close">
@@ -753,6 +757,7 @@ export default function ClientFormDialog({
               htmlFor="client-form-phone"
               field="phone"
               invalid={hasIssue(issues, "phone")}
+              required={mode === "add"}
               hint={
                 mode === "add"
                   ? "10 digits — this can never be changed later."
@@ -806,7 +811,13 @@ export default function ClientFormDialog({
               </div>
             </Field>
 
-            <Field label="Name" htmlFor="client-form-name">
+            <Field
+              label="Name"
+              htmlFor="client-form-name"
+              field="name"
+              invalid={hasIssue(issues, "name")}
+              required
+            >
               <input
                 id="client-form-name"
                 className="input"
@@ -878,7 +889,13 @@ export default function ClientFormDialog({
               Requirements
             </div>
 
-            <Field label="Wants to" htmlFor="client-form-purpose">
+            <Field
+              label="Wants to"
+              htmlFor="client-form-purpose"
+              field="purpose"
+              invalid={hasIssue(issues, "purpose")}
+              required={!requirementsLocked}
+            >
               <select
                 id="client-form-purpose"
                 className="select"
@@ -900,74 +917,37 @@ export default function ClientFormDialog({
                 requirements form lets them say it. Stored as one
                 comma-separated string, which is how the matcher reads it —
                 each picked type scored on its own. */}
-            <Field label="Property type" hint="Pick every type they'd consider — as many as you like.">
-              <div className="type-chips" role="group" aria-label="Property type">
-                {typeChoices.map((type) => {
-                  const active = pickedTypes.some((picked) => picked.toLowerCase() === type.toLowerCase());
-                  return (
-                    <button
-                      key={type}
-                      type="button"
-                      className={`type-chip${active ? " type-chip--on" : ""}`}
-                      onClick={() => toggleType(type)}
-                      aria-pressed={active}
-                      disabled={requirementsLocked || saving}
-                    >
-                      {active && <IconCheck size={13} />}
-                      {type}
-                    </button>
-                  );
-                })}
-              </div>
+            <Field
+              label="Property type"
+              field="property_type"
+              invalid={hasIssue(issues, "property_type")}
+              required={!requirementsLocked}
+              hint="Pick every type they'd consider — as many as you like."
+            >
+              <PropertyTypeChips
+                picked={pickedTypes}
+                onToggle={toggleType}
+                disabled={requirementsLocked || saving}
+              />
             </Field>
 
-            {/* One optional box per picked type, in the unit people actually
-                use for it. Free text on purpose — "about 1200", "150–250"
-                both read fine (Backend/Service/ClientPropertyMatchingService/
-                normalization.py's parse_size_requirement) — and it only ever
-                nudges the matching, never rules a property out. */}
+            {/* One optional box per picked type, with BOTH units offered
+                beside it rather than one guessed from the type. A number
+                on its own is ambiguous — 200 sqft and 200 var are not the
+                same property — so a box with anything typed in it cannot be
+                saved until the unit is picked (typeSizeIssues). An empty
+                box stays perfectly fine: a size is optional, and it only
+                ever nudges the matching, never rules a property out. */}
             {pickedTypes.length > 0 && (
-              <Field
-                label="Preferred size (optional)"
-                hint="A number or a range — smaller first. Nothing else is stored."
-                keyHint
-              >
-                <div className="size-rows">
-                  {pickedTypes.map((type) => {
-                    const unit = sizeUnitOf(type);
-                    const inputId = `client-form-size-${type.toLowerCase().replace(/[^a-z0-9]+/g, "-")}`;
-                    return (
-                      <div className="size-row" key={type}>
-                        <label className="size-row__type" htmlFor={inputId}>
-                          {type}
-                        </label>
-                        <div className="size-row__box">
-                          <input
-                            id={inputId}
-                            // Marked on the CONTROL, not on the Field: this
-                            // one field holds a box per picked type, and
-                            // marking the field would point at all of them.
-                            data-field={sizeFieldKey(type)}
-                            className={`input${hasIssue(issues, sizeFieldKey(type)) ? " input--bad" : ""}`}
-                            value={form.property_sizes[type] ?? ""}
-                            onChange={(event) =>
-                              setForm((prev) => ({
-                                ...prev,
-                                property_sizes: { ...prev.property_sizes, [type]: event.target.value },
-                              }))
-                            }
-                            placeholder={unit === "vaar" ? "e.g. 200 or 150–250" : "e.g. 1200 or 1000–1500"}
-                            disabled={requirementsLocked || saving}
-                            maxLength={80}
-                          />
-                          <span className="size-row__unit" aria-hidden="true">
-                            {unit}
-                          </span>
-                        </div>
-                      </div>
-                    );
-                  })}
-                </div>
+              <Field label="Preferred size (optional)" hint={SIZE_HINT} keyHint>
+                <TypeSizeRows
+                  picked={pickedTypes}
+                  state={form.property_sizes}
+                  onChange={(next) => setForm((prev) => ({ ...prev, property_sizes: next }))}
+                  issues={issues}
+                  disabled={requirementsLocked || saving}
+                  idPrefix="client-form"
+                />
               </Field>
             )}
 
@@ -1018,7 +998,11 @@ export default function ClientFormDialog({
               </select>
             </Field>
 
-            <Field label="Budget (₹)" hint="Write it the way they'd say it — 2.5 cr, 85 L, or 25 K a month to rent.">
+            <Field
+              label="Budget (₹)"
+              required={!requirementsLocked}
+              hint="At least one of the two. Write it the way they'd say it — 2.5 cr, 85 L, or 25 K a month to rent."
+            >
               {/* The key, before the boxes — it answers "how do I write
                   this?" before anyone has to wonder, as the public form
                   does. */}

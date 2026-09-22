@@ -19,6 +19,7 @@ import { getCachedBuilderProjectList, setCachedBuilderProjectList } from "../lib
 import { useToast } from "../components/ui/Toast";
 import ConfirmDialog from "../components/ui/ConfirmDialog";
 import FilterPopover, { type SortControl } from "../components/ui/FilterPopover";
+import StickyTableHead from "../components/ui/StickyTableHead";
 import RowRail from "../components/ui/RowRail";
 import PropertyFormDialog, { type ContentFormApi } from "../components/PropertyFormDialog";
 import { ContactPhoneDetails, ContactPhoneSummary } from "../components/ui/ContactPhones";
@@ -115,7 +116,7 @@ const COLUMNS: Column[] = [
   { key: "type", label: "Type", filterKey: "type" },
   { key: "listingType", label: "Sale/Rent", filterKey: "listingType" },
   { key: "areaSqft", label: "Area (sqft)", sort: "areaSqft", numeric: true, filterKey: "areaSqft" },
-  { key: "areaVaar", label: "Area (vaar)", sort: "areaVaar", numeric: true, filterKey: "areaVaar" },
+  { key: "areaVaar", label: "Area (var)", sort: "areaVaar", numeric: true, filterKey: "areaVaar" },
   { key: "superBuilt", label: "Super built" },
   { key: "furnishing", label: "Furnishing", filterKey: "furnishing" },
   { key: "price", label: "Price", sort: "price", numeric: true, filterKey: "price" },
@@ -667,6 +668,12 @@ export default function BuilderProjectsPage() {
           property={formDialog.project}
           api={BUILDER_PROJECT_FORM_API}
           noun="builder project"
+          // The Properties dialog's must-haves (an area or address, a type,
+          // Sale/Rent, a price, one contact number) are rules about a
+          // LISTING. A builder project is the project itself — often with no
+          // asking price and no broker's number of its own — so this form
+          // stays as it has always been: everything optional.
+          requireCoreFields={false}
           onClose={() => setFormDialog(null)}
           onSaved={handleSaved}
         />
@@ -773,6 +780,40 @@ function BuilderProjectTable({
   onOpenFilter: (key: string, anchor: HTMLElement) => void;
 }) {
   const tableWrapRef = useRef<HTMLDivElement>(null);
+  const scrollRef = useRef<HTMLDivElement>(null);
+  // One definition, rendered both in the table and in the copy pinned under
+  // the top bar — see components/ui/StickyTableHead.tsx.
+  const headerRow = (
+    <tr>
+      {COLUMNS.map((column) => {
+        const sorted = column.sort && column.sort === sortKey;
+        return (
+          <th
+            key={column.key}
+            aria-sort={sorted ? (sortDir === "asc" ? "ascending" : "descending") : undefined}
+            style={column.numeric ? { textAlign: "right" } : undefined}
+          >
+            {column.filterKey ? (
+              <FilterTrigger
+                label={column.label}
+                filter={filters[column.filterKey]}
+                expanded={openFilterKey === column.filterKey}
+                onOpen={(anchor) => onOpenFilter(column.filterKey!, anchor)}
+              />
+            ) : column.sort ? (
+              <button type="button" onClick={() => toggleSort(column.sort!)} title={`Sort by ${column.label}`}>
+                {column.label}
+                <IconChevron size={12} className="sort-caret" />
+              </button>
+            ) : (
+              column.label
+            )}
+          </th>
+        );
+      })}
+      <th style={{ textAlign: "right" }}>Actions</th>
+    </tr>
+  );
   return (
     <div className="table-with-rail" ref={tableWrapRef}>
       {/* The same photo/reel chips the Properties table shows in its gutter. */}
@@ -783,39 +824,10 @@ function BuilderProjectTable({
         }}
       </RowRail>
       <div className="table-frame anim-rise">
-        <div className="table-scroll">
+        <StickyTableHead scrollRef={scrollRef}>{headerRow}</StickyTableHead>
+        <div className="table-scroll" ref={scrollRef}>
           <table className="table">
-            <thead>
-              <tr>
-                {COLUMNS.map((column) => {
-                  const sorted = column.sort && column.sort === sortKey;
-                  return (
-                    <th
-                      key={column.key}
-                      aria-sort={sorted ? (sortDir === "asc" ? "ascending" : "descending") : undefined}
-                      style={column.numeric ? { textAlign: "right" } : undefined}
-                    >
-                      {column.filterKey ? (
-                        <FilterTrigger
-                          label={column.label}
-                          filter={filters[column.filterKey]}
-                          expanded={openFilterKey === column.filterKey}
-                          onOpen={(anchor) => onOpenFilter(column.filterKey!, anchor)}
-                        />
-                      ) : column.sort ? (
-                        <button type="button" onClick={() => toggleSort(column.sort!)} title={`Sort by ${column.label}`}>
-                          {column.label}
-                          <IconChevron size={12} className="sort-caret" />
-                        </button>
-                      ) : (
-                        column.label
-                      )}
-                    </th>
-                  );
-                })}
-                <th style={{ textAlign: "right" }}>Actions</th>
-              </tr>
-            </thead>
+            <thead>{headerRow}</thead>
             <tbody>
               {projects.map((project) => (
                 <tr

@@ -81,7 +81,7 @@ export function formatPrice(priceText: string | null, priceAmountInr: number | n
 
 /**
  * A property's size, in whichever unit the listing actually recorded it —
- * "3856 sqft", "155 vaar", or both when a listing quoted both.
+ * "3856 sqft", "155 var", or both when a listing quoted both.
  *
  * Never converted between the two, and that is the whole point: the number
  * is only ever comparable to another number in the *same* unit, so showing
@@ -93,7 +93,7 @@ export function formatPrice(priceText: string | null, priceAmountInr: number | n
 export function formatArea(areaSqft: number | null, areaVaar: number | null): string {
   const parts: string[] = [];
   if (areaSqft !== null) parts.push(`${Math.round(areaSqft)} sqft`);
-  if (areaVaar !== null) parts.push(`${Math.round(areaVaar)} vaar`);
+  if (areaVaar !== null) parts.push(`${Math.round(areaVaar)} var`);
   return parts.length > 0 ? parts.join(" · ") : "—";
 }
 

@@ -1565,6 +1565,19 @@
   font-size: 12.5px;
   color: var(--text-faint);
 }
+/* A hint that is a RULE, not a nicety — the shapes a size box can actually
+   be written in. Skipping it doesn't fail quietly, it stops the form being
+   sent, so it is worth more than the faint grey an ordinary hint gets. */
+.field__hint--key {
+  display: block;
+  margin-top: 8px;
+  padding: 9px 12px;
+  border-radius: 12px;
+  border: 1px solid var(--hairline-strong);
+  border-left: 2px solid var(--gold-200);
+  background: rgba(255, 255, 255, 0.03);
+  color: var(--text-soft);
+}
 
 .lead-form__note,
 .req-form__note {
@@ -1712,22 +1725,57 @@
   font-weight: 500;
   color: var(--text-soft);
 }
-.req-form__size-box {
-  position: relative;
+/* The unit is CHOSEN, not printed: two small pills beside the box rather
+   than a label inside it (the old .req-form__size-box / -unit treatment).
+   Guessing the unit from the type meant a bungalow quoted in sq ft was
+   stored as a bare number under a "vaar" label and then read as nine times
+   the size. They wrap under the box on a narrow phone rather than squeezing
+   the number out of view. */
+.req-form__size-entry {
+  display: flex;
+  align-items: center;
+  gap: 8px;
+  min-width: 0;
+  flex-wrap: wrap;
 }
-.req-form__size-box input {
-  padding-right: 72px;
+.req-form__size-entry input {
+  flex: 1 1 150px;
+  min-width: 0;
 }
-.req-form__size-unit {
-  position: absolute;
-  top: 50%;
-  right: 16px;
-  transform: translateY(-50%);
-  font-size: 11.5px;
-  letter-spacing: 0.12em;
-  text-transform: uppercase;
-  color: var(--gold-200);
-  pointer-events: none;
+.unit-caps {
+  display: inline-flex;
+  flex: 0 0 auto;
+  gap: 4px;
+  padding: 3px;
+  border-radius: var(--r-pill);
+  background: rgba(0, 0, 0, 0.32);
+  border: 1px solid var(--hairline-strong);
+}
+/* Something typed, no unit tapped yet. Not an error — nothing has been
+   sent — just visibly unanswered. */
+.unit-caps--needed {
+  border-color: var(--gold-200);
+  box-shadow: 0 0 0 2px rgba(214, 178, 103, 0.18);
+}
+.unit-caps__opt {
+  border: 0;
+  background: transparent;
+  color: var(--text-soft);
+  padding: 8px 16px;
+  border-radius: var(--r-pill);
+  font-size: 13px;
+  font-weight: 600;
+  white-space: nowrap;
+  transition:
+    color var(--t-fast) linear,
+    background-color var(--t-fast) linear;
+}
+.unit-caps__opt:hover {
+  color: var(--text);
+}
+.unit-caps__opt.is-on {
+  color: #16120a;
+  background-image: var(--accent-text);
 }
 @media (max-width: 480px) {
   .req-form__size {

@@ -495,20 +495,14 @@
 .size-rows { display: grid; gap: 10px; }
 .size-row { display: grid; grid-template-columns: minmax(96px, 1fr) minmax(0, 2fr); align-items: center; gap: 12px; }
 .size-row__type { min-width: 0; font-size: 13px; font-weight: 560; color: var(--ink-2); }
-/* The unit sits inside the box rather than after it, so "1200" and "sq ft"
-   read as one value however narrow the dialog gets. */
-.size-row__box { position: relative; min-width: 0; }
-.size-row__box .input { padding-right: 58px; }
-.size-row__unit {
-  position: absolute;
-  right: 12px;
-  top: 50%;
-  transform: translateY(-50%);
-  font-size: 12px;
-  font-weight: 600;
-  color: var(--ink-4);
-  pointer-events: none;
-}
+/* The unit is now CHOSEN, not printed: the capsule sits beside the box as a
+   pair of buttons rather than as a label inside it (the old .size-row__box /
+   .size-row__unit treatment), because a bungalow quoted in sq ft used to be
+   stored as a bare number under a "vaar" label and then read as nine times
+   the size. It wraps under the box on a narrow dialog rather than squeezing
+   the number out of view. */
+.size-row__entry { display: flex; align-items: center; gap: 8px; min-width: 0; flex-wrap: wrap; }
+.size-row__entry .input { flex: 1 1 130px; min-width: 0; }
 
 /* The cr / L / K key above the budget boxes — same key, same words as the
    public form's, so a budget is written the same way on both. */
@@ -1012,6 +1006,35 @@
    wraps are taller than their neighbours, and a uniform stride drifted
    further out of alignment with every such row, leaving the toggles near
    the bottom of a page sitting between two rows instead of beside one. */
+/* ---- pinned column headings (components/ui/StickyTableHead.tsx) --------
+   A copy of a table's heading row, held just under the fixed top bar while
+   the page is scrolled through the rows. Its top/left/width are set inline
+   from the real table's measured geometry; everything visual is here.
+
+   `overflow: hidden` is what lets it sit over a table that is also scrolled
+   sideways: the copy inside is as wide as the whole table and shifted left
+   by however far the table is scrolled, and this box clips it to exactly
+   the width of the visible table area.
+
+   z-index 30 is deliberately under .topbar (40), the filter popovers (70)
+   and every dialog scrim (90+), so the thing it follows always covers it
+   and no dialog is ever painted under it. */
+.sticky-head {
+  position: fixed;
+  z-index: 30;
+  overflow: hidden;
+  border: 1px solid var(--rim);
+  border-bottom: 0;
+  border-radius: var(--r-lg) var(--r-lg) 0 0;
+  background: var(--surface);
+  box-shadow: var(--elev-3);
+}
+.sticky-head__table {
+  table-layout: fixed;
+  /* The copy has no body rows, so the heading cells must not collapse the
+     bottom rule the real table draws under its own heading row. */
+  border-bottom: 1px solid var(--rim-strong);
+}
 .table-with-rail { position: relative; }
 .row-icon-rail {
   position: absolute;
@@ -1131,6 +1154,30 @@
   grid-template-columns: repeat(auto-fit, minmax(200px, 1fr));
   gap: 12px;
 }
+/* A block that runs the whole width of the grid instead of taking one
+   column — used for the free-text fields (Notes, Additional requirements)
+   that read badly in a narrow column. */
+.detail__block--full { grid-column: 1 / -1; }
+/* Free text of any length, kept inside its own box. Without the cap, one
+   long note (an Excel import pastes the whole source row into it) stretched
+   its grid cell to the height of the dialog and pushed every other field
+   out of sight. `pre-wrap` keeps the writer's own line breaks;
+   `overflow-wrap: anywhere` stops an unbroken URL or a long number widening
+   the block past its column. */
+.detail__note {
+  margin-top: 4px;
+  max-height: 128px;
+  overflow-y: auto;
+  overscroll-behavior: contain;
+  padding-right: 8px;
+  font-size: 13.5px;
+  line-height: 1.55;
+  color: var(--ink-2);
+  white-space: pre-wrap;
+  overflow-wrap: anywhere;
+}
+.detail__note--tall { max-height: 190px; }
+
 .detail__block {
   padding: 12px 14px;
   border-radius: var(--r-sm);
@@ -1968,6 +2015,14 @@ mark.hl {
   font-size: 12px;
   color: var(--ink-2);
 }
+/* The same row, holding its space open on a card that is not ticked. It is
+   laid out exactly as the real one (so ticking cannot change the card's
+   height, its grid row's height, or the position of anything below it) and
+   only made invisible. `visibility: hidden` rather than `opacity: 0` on
+   purpose: it also removes the button from the tab order and from the
+   accessibility tree, so there is nothing invisible left to click or to
+   land on with the keyboard. */
+.match-card__plan--ghost { visibility: hidden; pointer-events: none; }
 .match-card__plan-text { display: inline-flex; align-items: center; gap: 6px; flex-wrap: wrap; min-width: 0; }
 .match-card__plan-text svg { flex: none; color: var(--accent); }
 .match-card__plan-text strong { color: var(--ink); font-weight: 640; }
@@ -2100,7 +2155,17 @@ button.agent-mini:hover { border-color: var(--accent); background: var(--plane-2
 .agent-mini__main { display: flex; flex-direction: column; gap: 1px; min-width: 0; flex: 1; }
 .agent-mini__name { display: inline-flex; align-items: center; gap: 5px; font-size: 13.5px; font-weight: 620; }
 .agent-mini--chosen .agent-mini__name svg { color: var(--accent); }
-.agent-mini__meta { font-size: 11.5px; color: var(--ink-3); }
+/* One line, always: phone + load. An agent whose number is long must not
+   wrap this row onto a second line, because that changes the row's height
+   and moves every agent under it while someone is aiming at one. */
+.agent-mini__meta {
+  font-size: 11.5px;
+  color: var(--ink-3);
+  white-space: nowrap;
+  overflow: hidden;
+  text-overflow: ellipsis;
+  font-variant-numeric: tabular-nums;
+}
 .agent-mini__covers {
   flex: none;
   display: inline-flex;

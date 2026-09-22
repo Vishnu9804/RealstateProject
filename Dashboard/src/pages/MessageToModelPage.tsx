@@ -28,7 +28,7 @@ const PROPERTY_FIELDS: [string, string][] = [
   ["address", "Address"],
   ["unit_no", "Unit / flat no."],
   ["area_sqft", "Area (sq ft)"],
-  ["area_vaar", "Area (vaar)"],
+  ["area_vaar", "Area (var)"],
   ["furnishing", "Furnishing"],
   ["price_text", "Price"],
   ["price_amount_inr", "Price (₹)"],

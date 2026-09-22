@@ -97,7 +97,13 @@ class PropertyRow(Base):
 
     # --- extracted by the LLM from the message text ---
     property_type: Mapped[Optional[str]] = mapped_column(String, nullable=True)
-    bhk: Mapped[Optional[str]] = mapped_column(String, nullable=True)
+    # The column is "configuration", the attribute is still `bhk`. The field
+    # holds whatever the broker wrote — "3 BHK", but also "4 BHK, G+2" or
+    # "2 BHK duplex" — so the COLUMN name says configuration; the ATTRIBUTE
+    # keeps its old name because every reader of it (scoring, filters, the
+    # API payloads the browser already knows) spells it bhk. See
+    # Database/session.py's one-time RENAME.
+    bhk: Mapped[Optional[str]] = mapped_column("configuration", String, nullable=True)
     # The unit's own number within its building — see StructuredProperty.unit_no
     # for why the client's "unit_no"/"flat_no" are one column here.
     unit_no: Mapped[Optional[str]] = mapped_column(String, nullable=True)

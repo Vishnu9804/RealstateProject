@@ -27,7 +27,7 @@ const REEL_RE = /instagram\.com\/(reel|reels|p|tv)\/[A-Za-z0-9_-]+/i;
 export function urlError(value: string): string | null {
   const trimmed = value.trim();
   if (!trimmed) return null;
-  return URL_RE.test(trimmed) ? null : "That link doesn't look like a web address — it should start with https://";
+  return URL_RE.test(trimmed) ? null : "That link isn't a web address — it should start with https://";
 }
 
 /** Whether a stored value is a reel link this application can actually read
@@ -46,7 +46,7 @@ export function instagramReelError(value: string): string | null {
   if (!trimmed) return null;
   return isInstagramReelUrl(trimmed)
     ? null
-    : "That isn't an Instagram reel link — paste the full link, e.g. https://www.instagram.com/reel/XXXXXXXX/";
+    : "That isn't an Instagram reel link — paste the full reel URL.";
 }
 
 /** A rupee or area figure typed into a number box: not negative, and not a
@@ -57,7 +57,7 @@ export function amountError(value: string, label: string, max: number): string |
   const amount = Number(trimmed);
   if (!Number.isFinite(amount)) return `${label} isn't a number.`;
   if (amount < 0) return `${label} can't be negative.`;
-  if (amount > max) return `${label} is larger than any real property — check the figure.`;
+  if (amount > max) return `${label} is too large — check the figure.`;
   return null;
 }
 
@@ -92,28 +92,30 @@ const SIZE_RE =
  *  - a zero, which is not a size;
  *  - trailing or embedded text ("567-12 sqftwwr"), which the matcher drops.
  *
- * `unit` only appears in the example in the message, so each box suggests
- * the unit it is actually asked in.
+ * `unit` is the one picked on the capsule beside the box ("" while none has
+ * been). It only shapes the example in the message — whether the unit has
+ * been ANSWERED at all is a separate rule, and belongs with the capsule
+ * (components/ui/PropertyTypePicker's typeSizeIssues), not here.
  */
-export function sizeRangeError(value: string, unit: "vaar" | "sq ft"): string | null {
+export function sizeRangeError(value: string, unit: "sqft" | "var" | ""): string | null {
   const trimmed = value.trim();
   if (!trimmed) return null;
-  if (/^[-–—]/.test(trimmed)) return "A size can't be negative — enter a positive number.";
+  if (/^[-–—]/.test(trimmed)) return "A size can't be negative.";
 
   const match = SIZE_RE.exec(trimmed);
   if (!match) {
-    const example = unit === "vaar" ? "200 or 150-250" : "1200 or 1000-1500";
-    return `Sizes are numbers, so "${trimmed}" can't be stored — write a number or a range, like ${example}.`;
+    const example = unit === "var" ? "70 or 70-80" : "1200 or 1000-1500";
+    return `A size is a number or a range — e.g. ${example}.`;
   }
 
   const low = Number(match[1]);
   const high = match[2] === undefined ? null : Number(match[2]);
   if (low <= 0 || (high !== null && high <= 0)) return "A size has to be more than 0.";
   if (high !== null && low > high) {
-    return `"${trimmed}" reads as ${low} down to ${high} — put the smaller number first, like ${high}-${low}.`;
+    return `Smaller number first — write ${high}-${low}.`;
   }
   if (low > MAX_AREA || (high !== null && high > MAX_AREA)) {
-    return "That size is larger than any real property — check the figure.";
+    return "That size is too large — check the figure.";
   }
   return null;
 }

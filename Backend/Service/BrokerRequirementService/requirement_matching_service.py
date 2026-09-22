@@ -585,9 +585,15 @@ def _as_pseudo_client(requirement: StructuredRequirement) -> ClientRecord:
         the semantic half of the score (see
         client_requirement_text_builder.build_requirement_text), which is
         where an unstructured "veg family, fully furnished" belongs.
-      - a wanted size is not scored — the same as for a client, who has
-        nowhere to state one either — which is why a requirement no longer
-        stores it as numbers at all; it stays readable in the description.
+      - property_sizes: the size wanted against each requested type, passed
+        straight through. It is the same shape, keyed the same way and read
+        by the same parser as a client's own (see
+        StructuredRequirement.property_sizes), so a size a broker stated
+        scores exactly as a size a client stated does — no second code path,
+        no second set of rules. Only the Add/Edit dialog ever fills it; a
+        size a broker wrote in WhatsApp still lives in the description and
+        still reaches the score through the semantic half, exactly as
+        before.
 
     `phone` is required by the model and is filled with the requirement's
     own sender number. Nothing reads it on this path (no cache is keyed by
@@ -603,6 +609,7 @@ def _as_pseudo_client(requirement: StructuredRequirement) -> ClientRecord:
         name=requirement.contact_name or requirement.sender_saved_name or requirement.sender_name,
         purpose="rent" if requirement.listing_type == "Rent" else "buy",
         property_type=requirement.requirement_type,
+        property_sizes=requirement.property_sizes,
         bhk=requirement.bhk,
         furnishing=requirement.furnishing,
         budget_min_inr=requirement.budget_min_inr,

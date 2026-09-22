@@ -2,9 +2,9 @@ import uuid
 from datetime import datetime
 from typing import List, Literal, Optional
 
-from pydantic import BaseModel, Field, model_validator
+from pydantic import BaseModel, Field, field_validator, model_validator
 
-from Model import phone_numbers
+from Model import field_validation, phone_numbers
 from Model.record_source import SOURCE_WHATSAPP
 
 
@@ -216,6 +216,21 @@ class StructuredProperty(BaseModel):
     # by. Set whenever an edit adds photos or a reel link, never touched by
     # the Landing Page page's own Send/Remove actions.
     qualified_at: Optional[datetime] = None
+
+    # A locality is a place. "Unknown", "NULL", "None", "N/A" and the rest of
+    # field_validation._NOT_A_VALUE are the LLM (or a spreadsheet) saying the
+    # message never named one — storing them made "Unknown" show up as a real
+    # option in the Area filter and as a real place in the Localities count.
+    #
+    # Runs on the way IN from the LLM and also on every read out of Postgres
+    # (every StructuredProperty is rebuilt from its row), so a placeholder
+    # already stored stops being treated as an area straight away, before the
+    # one-time clean-up in Database/session.py has even run. It is a strip, a
+    # casefold and a set lookup — cheap enough for the whole snapshot.
+    @field_validator("area_name")
+    @classmethod
+    def _v_area_name(cls, value: Optional[str]) -> Optional[str]:
+        return field_validation.blank_if_placeholder(value)
 
     @model_validator(mode="before")
     @classmethod

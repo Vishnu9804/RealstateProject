@@ -149,5 +149,5 @@ export function phoneFieldError(typed: string): string | null {
   if (!trimmed) return null;
   return toStoredNumber(trimmed)
     ? null
-    : "A contact number must be the 10 digits of an Indian number (no +91, no spaces or symbols) — correct it or clear the box.";
+    : "A contact number is 10 digits — fix it or clear the box.";
 }

@@ -137,11 +137,11 @@ export function formatPrice(priceText: string | null, priceAmountInr: number | n
 export function formatArea(areaSqft: number | null, areaVaar: number | null): string | null {
   const parts: string[] = [];
   if (areaSqft !== null && areaSqft !== undefined) parts.push(`${Math.round(areaSqft)} sqft`);
-  if (areaVaar !== null && areaVaar !== undefined) parts.push(`${Math.round(areaVaar)} vaar`);
+  if (areaVaar !== null && areaVaar !== undefined) parts.push(`${Math.round(areaVaar)} var`);
   return parts.length > 0 ? parts.join(" · ") : null;
 }
 
-/** The short chips under a card's title: "3 BHK", "Apartment", "155 vaar". */
+/** The short chips under a card's title: "3 BHK", "Apartment", "155 var". */
 export function propertyChips(property: {
   bhk: string | null;
   property_type: string | null;

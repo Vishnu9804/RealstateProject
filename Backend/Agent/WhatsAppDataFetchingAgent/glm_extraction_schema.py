@@ -49,14 +49,21 @@ class GLMPropertyListing(BaseModel):
         description='The property\'s area IN SQUARE FEET, as a plain number, ONLY if the message states it in '
         'square feet ("1200 sqft", "1200 sq ft", "1200 sq.ft", "1200 square feet" -> 1200.0). Copy the bare '
         "number exactly as written. NEVER convert an area given in any other unit into this field, never "
-        "estimate it from the BHK, and never guess when no area is stated.",
+        "estimate it from the BHK, and never guess when no area is stated. ONE exception, and only this "
+        'one: a size written as DIMENSIONS ("18x40", "18 X 40", "18*40", "20 by 42.3") is a length and a '
+        "breadth in feet — multiply them and put the product here (18x40 -> 720.0, 20x42.3 -> 846.0). Two "
+        'numbers joined by a comma, a dash or "to" are a RANGE, not a multiplication ("70, 80 vaar" is '
+        "70-80 vaar, never 5600) — never multiply those.",
     )
     area_vaar: Optional[float] = Field(
         default=None,
         description='The property\'s area IN VAAR, as a plain number, ONLY if the message states it in vaar or '
         'one of its synonyms — "vaar", "var", "gaj", "sq yard", "square yard" ("500 vaar" -> 500.0). Copy the '
         "bare number exactly as written. NEVER convert square feet (or any other unit) into vaar, and never "
-        "guess. area_sqft and area_vaar are two different measurements: fill the ONE the message actually "
+        "guess — the sqft/vaar conversion is done for you deterministically after extraction, so reporting "
+        'what the message said is the whole job. A range ("70, 80 vaar", "70-80 vaar") is an approximate '
+        "size: take the FIRST (smaller) number, 70, and never multiply the two. "
+        "area_sqft and area_vaar are two different measurements: fill the ONE the message actually "
         "used, and fill both only when the message itself quotes both separately. If the area is given in a "
         "unit that is neither of these (e.g. vigha, guntha, acre, square metres), leave BOTH null — the "
         "figure stays readable in `description` and in the original message.",

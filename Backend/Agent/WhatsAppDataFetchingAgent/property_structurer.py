@@ -52,6 +52,7 @@ from Agent.WhatsAppDataFetchingAgent.price_scales import (
 )
 from Config.settings import get_settings
 from Middleware import step_logger
+from Model import field_validation
 from Model.record_source import SOURCE_WHATSAPP
 from Model.WhatsAppDataFetchingModel.structured_property import StructuredProperty
 from Model.WhatsAppDataFetchingModel.whatsapp_message import WhatsAppChatMessage
@@ -1041,13 +1042,33 @@ def _build_system_prompt(area_knowledge_supplied: bool = False) -> str:
             "Fill the ONE field matching the unit the message actually used, with the bare "
             "number exactly as written. NEVER convert between the two — 1200 sqft is not 133 "
             "vaar as far as you are concerned, and writing a sqft figure into area_vaar (or the "
-            "reverse) makes a flat and a plot read as the same size. Fill BOTH only in the one "
-            "case where the message itself separately quotes both. Leave both null when no area "
-            "is stated — never estimate an area from the BHK — and also leave both null when the "
-            "area is given in some OTHER unit entirely (vigha, guntha, acre, square metres): "
-            "there is no field for those, and the figure still reaches a human through "
-            "description and the original message text, which is far better than a number "
-            "silently filed under the wrong unit.",
+            "reverse) makes a flat and a plot read as the same size. (Converting sqft to vaar "
+            "and back is done for you afterwards, deterministically, once you have reported "
+            "what the message actually said — so reporting it faithfully is the whole of your "
+            "job here, and a conversion you do yourself can only corrupt it.) Fill BOTH only "
+            "in the one case where the message itself separately quotes both. Leave both null "
+            "when no area is stated — never estimate an area from the BHK — and also leave both "
+            "null when the area is given in some OTHER unit entirely (vigha, guntha, acre, "
+            "square metres): there is no field for those, and the figure still reaches a human "
+            "through description and the original message text, which is far better than a "
+            "number silently filed under the wrong unit.",
+            "",
+            "AREA WRITTEN AS DIMENSIONS — a size written as two numbers multiplied together "
+            "(\"18x40\", \"18 X 40\", \"18*40\", \"20 by 42.3\", \"plot size 30x60\") is the "
+            "property's LENGTH and BREADTH IN FEET, not two separate sizes and not a range. "
+            "MULTIPLY them and put the product in area_sqft: \"18x40\" -> area_sqft 720; "
+            "\"20x42.3\" -> area_sqft 846; \"30x60 plot\" -> area_sqft 1800. Leave area_vaar "
+            "null in that case — do NOT divide by nine yourself. If the message ALSO states the "
+            "vaar figure alongside the dimensions (\"20x42.3, 94 vaar\"), fill area_vaar with "
+            "the figure it states (94) and area_sqft with the product (846); the two are the "
+            "same size written twice, not two properties and not a range.",
+            "",
+            "A RANGE IS NOT A MULTIPLICATION — two numbers separated by a comma, a dash or the "
+            "word \"to\" and followed by a unit (\"70, 80 vaar\", \"70-80 vaar\", \"1000 to "
+            "1200 sqft\") is a RANGE, an approximate size. Never multiply those. Put the FIRST "
+            "(smaller) number in the matching area field and leave it at that — 70 in "
+            "area_vaar for \"70, 80 vaar\", never 5600. Only the \"x\" / \"*\" / \"by\" shapes "
+            "in the paragraph above are a multiplication, and they always mean feet.",
             "",
             "FURNISHING — set furnishing only when the message says how furnished the property "
             "is, normalized to exactly one of \"Unfurnished\", \"Semi furnished\" or \"Fully "
@@ -1659,6 +1680,25 @@ def _to_structured_property(
     _fill_missing_price(structured, rate)
     if single_property_message:
         _sanitize_listing_type(structured)
+        # Only for a single-property message: a dimension found anywhere in
+        # the text can only safely be attributed to THIS property when the
+        # message held exactly one. Same restriction, same reason, as
+        # _sanitize_listing_type and _recover_total_price_from_text.
+        #
+        # And deliberately AFTER _fill_missing_price rather than before it,
+        # even though an area recovered first could feed "total = area x
+        # rate": this recovery reads a pattern out of raw text, so it must
+        # only ever ADD an area nobody had. Letting it reach the price would
+        # let a pattern match decide a rupee figure, and a wrong price is
+        # far more damaging than a missing one.
+        _recover_area_from_dimensions(structured)
+    # LAST of the area/price work, and after both of the above: until here,
+    # exactly one of the two area fields being filled is load-bearing —
+    # _rate_unit reads it to decide which unit an unqualified rate is quoted
+    # in, and _fill_missing_price then multiplies by it. Filling the other
+    # side any earlier would make every unqualified rate ambiguous and stop
+    # a total being derived at all.
+    _fill_missing_area_unit(structured)
     # Last, deliberately: the derivations above can fill in a price or an
     # area the LLM left null, and a property is judged on what actually
     # ended up stored, not on the raw extraction.
@@ -1952,6 +1992,104 @@ _UNIT_PHRASE_PATTERNS = {
 _NUMBER_SCALE_PATTERN = (
     r"(?P<num>\d[\d,]*(?:\.\d+)?)\s*(?P<scale>" + _SCALE_WORD_PATTERN + r")?\b"
 )
+
+
+# A vaar (gaj, square yard) is exactly nine square feet. Not an estimate and
+# not a convention — a yard is three feet, so a square yard is nine square
+# feet — which is why this conversion is safe to do deterministically here
+# and is deliberately kept OUT of the LLM's hands (see the AREA section of
+# _build_system_prompt: the model reports what the message said, and the
+# arithmetic happens once, here, where it cannot be hallucinated).
+_SQFT_PER_VAAR = 9.0
+
+# What a plot's length x breadth can plausibly be, in feet. A dimension is
+# only read out of the raw message text as a LAST resort (both area fields
+# empty), so these bounds exist to keep something that merely looks like
+# "NxN" — a model number, a date written 18x40, a count — from being stored
+# as an area. A 3ft or a 2000ft side is not a plot.
+_MIN_DIMENSION_FT = 3.0
+_MAX_DIMENSION_FT = 2000.0
+# "18x40", "18 X 40", "18*40", "20 by 42.3", "18 × 40". A decimal on either
+# side is ordinary ("20x42.3"). Commas are NOT a separator here: "70, 80
+# vaar" is a range, not a multiplication (see the prompt's own rule).
+_DIMENSION_RE = re.compile(
+    r"(?<![\d.])(\d{1,4}(?:\.\d+)?)\s*(?:x|×|\*|by)\s*(\d{1,4}(?:\.\d+)?)(?![\d.])",
+    re.IGNORECASE,
+)
+# A dimension that is immediately qualified as something else entirely —
+# "2x3 BHK", "18x40 units" — is not an area.
+_DIMENSION_NOT_AREA_RE = re.compile(r"\s*(?:bhk|rk|bed|unit|flat|shop|floor|nos?\b|no\.)", re.IGNORECASE)
+
+
+def _recover_area_from_dimensions(prop: StructuredProperty) -> None:
+    """A size written as length x breadth ("18x40", "20 by 42.3") turned into
+    square feet, when the LLM reported no area at all.
+
+    The prompt asks for this directly (see the AREA WRITTEN AS DIMENSIONS
+    section), so this is a safety net, not the mechanism — which is exactly
+    why it only ever runs when BOTH area fields came back empty. A property
+    the model DID give an area for is left completely alone: its transcription
+    of the message is better evidence than a pattern match over the raw text,
+    and second-guessing it is how a correct 1200 sqft would become a wrong
+    720.
+
+    Nothing is invented: the numbers are read straight out of the broker's own
+    message, multiplied, and stored in sqft — the unit dimensions are always
+    written in. area_vaar is left for _fill_missing_area_unit to derive.
+    Ambiguity is answered with silence: more than one distinct dimension in
+    the text (two plots quoted in one line) is not resolved, it is skipped."""
+    if prop.area_sqft is not None or prop.area_vaar is not None:
+        return
+    text = prop.message_text or ""
+    products = []
+    for match in _DIMENSION_RE.finditer(text):
+        if _DIMENSION_NOT_AREA_RE.match(text[match.end() :]):
+            continue
+        length, breadth = float(match.group(1)), float(match.group(2))
+        if not (_MIN_DIMENSION_FT <= length <= _MAX_DIMENSION_FT):
+            continue
+        if not (_MIN_DIMENSION_FT <= breadth <= _MAX_DIMENSION_FT):
+            continue
+        product = round(length * breadth, 2)
+        if 0 < product <= field_validation.MAX_AREA and product not in products:
+            products.append(product)
+    if len(products) == 1:
+        prop.area_sqft = products[0]
+
+
+def _fill_missing_area_unit(prop: StructuredProperty) -> None:
+    """The property's size in BOTH units whenever it is known in one.
+
+    A message quotes a size in whichever unit its writer thinks in — a flat
+    in sqft, a plot in vaar — so a listing has historically carried exactly
+    one of the two, and the other stayed empty. That empty column is not a
+    fact about the property: a 1,200 sqft flat IS 133.33 vaar. Leaving it
+    null cost that listing every Area (var) filter, every Area (var) sort,
+    and made two listings of the same size look incomparable side by side on
+    the page.
+
+    So the missing one is derived, at exactly 9 sq ft to the vaar. Neither
+    value is ever overwritten: a message that quoted both is quoting the
+    broker's own two figures, and those stand even when they disagree
+    slightly with each other (rounding in the original, carpet vs built-up).
+    A zero or negative figure is not a size and derives nothing.
+
+    Run LAST in _to_structured_property — see the note there on why filling
+    the second field any earlier would break rate-based price derivation."""
+    sqft, vaar = prop.area_sqft, prop.area_vaar
+    if (sqft is not None) == (vaar is not None):
+        # Both known (nothing to do) or neither (nothing to do it from).
+        return
+    if sqft is not None:
+        if sqft > 0:
+            derived = round(sqft / _SQFT_PER_VAAR, 2)
+            if 0 < derived <= field_validation.MAX_AREA:
+                prop.area_vaar = derived
+        return
+    if vaar is not None and vaar > 0:
+        derived = round(vaar * _SQFT_PER_VAAR, 2)
+        if 0 < derived <= field_validation.MAX_AREA:
+            prop.area_sqft = derived
 
 
 def _rate_unit(rate_text: Optional[str], prop: StructuredProperty) -> Optional[str]:

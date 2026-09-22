@@ -33,6 +33,7 @@ import { CLIENT_FILTER_DEF_BY_KEY, CLIENT_FILTER_DEFS } from "../lib/clientFilte
 import { formatPhone } from "../lib/phone";
 import { useToast } from "../components/ui/Toast";
 import FilterPopover from "../components/ui/FilterPopover";
+import StickyTableHead from "../components/ui/StickyTableHead";
 import ClientMatchesDialog, { type DialogView } from "../components/ClientMatchesDialog";
 import ClientFormDialog from "../components/ClientFormDialog";
 import ClientDetailDialog, { formatBudgetRange } from "../components/ClientDetailDialog";
@@ -1106,35 +1107,41 @@ function ClientTable({
   // server-side regardless; hiding the button here is purely so an
   // employee never sees one that would fail with a 403.
   const { isAdmin } = useAuth();
+  const scrollRef = useRef<HTMLDivElement>(null);
+  // Written once and rendered twice — in the real <thead> and in the copy
+  // StickyTableHead pins under the top bar — so the two can never drift
+  // apart and the filter buttons behave identically in both.
+  const headerRow = (
+    <tr>
+      <th>Name</th>
+      <th>Phone</th>
+      {/* The five columns drawn from a vocabulary the data itself
+          supplies open the Properties page's filter dialog on click
+          — same popover, same chips, same "values seen so far". */}
+      {COLUMN_FILTERS.map((column) => (
+        <th key={column.key} style={column.numeric ? { textAlign: "right" } : undefined}>
+          <FilterTrigger
+            label={column.label}
+            filter={filters[column.key]}
+            expanded={openFilterKey === column.key}
+            onOpen={(anchor) => onOpenFilter(column.key, anchor)}
+          />
+        </th>
+      ))}
+      <th>Last follow-up</th>
+      <th>Updated</th>
+      <th>Matches</th>
+      <th>Completed</th>
+      <th className="cell-pipeline">Status</th>
+      <th>Actions</th>
+    </tr>
+  );
   return (
     <div className="table-frame anim-rise">
-      <div className="table-scroll">
+      <StickyTableHead scrollRef={scrollRef}>{headerRow}</StickyTableHead>
+      <div className="table-scroll" ref={scrollRef}>
         <table className="table">
-          <thead>
-            <tr>
-              <th>Name</th>
-              <th>Phone</th>
-              {/* The five columns drawn from a vocabulary the data itself
-                  supplies open the Properties page's filter dialog on click
-                  — same popover, same chips, same "values seen so far". */}
-              {COLUMN_FILTERS.map((column) => (
-                <th key={column.key} style={column.numeric ? { textAlign: "right" } : undefined}>
-                  <FilterTrigger
-                    label={column.label}
-                    filter={filters[column.key]}
-                    expanded={openFilterKey === column.key}
-                    onOpen={(anchor) => onOpenFilter(column.key, anchor)}
-                  />
-                </th>
-              ))}
-              <th>Last follow-up</th>
-              <th>Updated</th>
-              <th>Matches</th>
-              <th>Completed</th>
-              <th className="cell-pipeline">Status</th>
-              <th>Actions</th>
-            </tr>
-          </thead>
+          <thead>{headerRow}</thead>
           <tbody>
             {clients.map((client) => {
               const isOpen = expandedPhone === client.phone;

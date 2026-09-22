@@ -86,7 +86,7 @@ export default function CommandPalette({
         hint: "Everything captured so far",
         group: "Navigate",
         icon: <IconGrid size={16} />,
-        run: () => navigate("/dashboard"),
+        run: () => navigate("/properties"),
       },
       {
         id: "nav-requirements",
@@ -228,7 +228,7 @@ export default function CommandPalette({
             lastGroup = command.group;
             const isCurrent =
               (command.id === "nav-connection" && location.pathname === "/") ||
-              (command.id === "nav-dashboard" && location.pathname === "/dashboard") ||
+              (command.id === "nav-dashboard" && location.pathname === "/properties") ||
               (command.id === "nav-settings" && location.pathname === "/settings");
             return (
               <div key={command.id}>

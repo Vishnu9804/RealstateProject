@@ -1,10 +1,10 @@
 import uuid
 from datetime import datetime
-from typing import List, Literal, Optional
+from typing import Dict, List, Literal, Optional
 
-from pydantic import BaseModel, Field, model_validator
+from pydantic import BaseModel, Field, field_validator, model_validator
 
-from Model import phone_numbers
+from Model import field_validation, phone_numbers
 from Model.record_source import SOURCE_WHATSAPP
 
 
@@ -69,6 +69,19 @@ class StructuredRequirement(BaseModel):
     # matching type gate read identically on both sides. Several acceptable
     # types are comma-separated, main one first ("Flat, Row House").
     requirement_type: Optional[str] = None
+    # The size wanted against each type in requirement_type, keyed by that
+    # type exactly as written there and carrying its own unit —
+    # {"Flat": "1000-1500 sqft", "Plot": "150 var"}. Free text, never a
+    # number: it is read by the same parser a client's own property_sizes is
+    # (Service/ClientPropertyMatchingService/normalization.py's
+    # parse_size_requirement), which is what lets a size stated by a broker
+    # score exactly as a size stated by a client does.
+    #
+    # Filled by the Broker Requirements page's Add/Edit dialog only. The LLM
+    # structuring stage does NOT fill it — a size a broker wrote in a
+    # WhatsApp message stays in `description`, in their own words, exactly
+    # as before, and is still read by the semantic half of the score.
+    property_sizes: Optional[Dict[str, str]] = None
     # Only the configuration(s), "N BHK" / "N RK", comma-separated
     # ("4 BHK, 5 BHK").
     bhk: Optional[str] = None
@@ -80,6 +93,20 @@ class StructuredRequirement(BaseModel):
     # judged against the client's selected areas.
     area_name: Optional[str] = None
     preferred_areas: List[str] = Field(default_factory=list)
+
+    # "Unknown" / "NULL" / "None" / "N/A" is the LLM saying the message named
+    # no locality — it is not a locality, so it must not become one in the
+    # Area filter or in the "Localities asked for" tile. Same rule, same
+    # words, as StructuredProperty's own area_name validator.
+    @field_validator("area_name")
+    @classmethod
+    def _v_area_name(cls, value: Optional[str]) -> Optional[str]:
+        return field_validation.blank_if_placeholder(value)
+
+    @field_validator("preferred_areas")
+    @classmethod
+    def _v_preferred_areas(cls, values: List[str]) -> List[str]:
+        return [area for area in (field_validation.blank_if_placeholder(v) for v in values or []) if area]
     # A specific building/project/society the requirement asks for by name.
     society_name: Optional[str] = None
     # How furnished the broker wants it — one of

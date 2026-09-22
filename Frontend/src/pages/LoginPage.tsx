@@ -21,7 +21,7 @@ export default function LoginPage() {
   const [busy, setBusy] = useState(false);
   const [error, setError] = useState<string | null>(null);
 
-  if (!auth.isRestoring && auth.user) return <Navigate to="/dashboard" replace />;
+  if (!auth.isRestoring && auth.user) return <Navigate to="/properties" replace />;
 
   async function signIn() {
     if (!username.trim() || !password) return;
@@ -29,7 +29,7 @@ export default function LoginPage() {
     setError(null);
     try {
       await auth.login(username.trim(), password);
-      const from = (location.state as { from?: string } | null)?.from ?? "/dashboard";
+      const from = (location.state as { from?: string } | null)?.from ?? "/properties";
       navigate(from, { replace: true });
     } catch (err) {
       setError(plainError(err));

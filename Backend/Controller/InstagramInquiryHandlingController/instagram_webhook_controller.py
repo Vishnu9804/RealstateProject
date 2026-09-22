@@ -99,9 +99,63 @@ async def receive_webhook(request: Request) -> Response:
     # is not an Instagram notification is acknowledged and dropped rather
     # than misread.
     if isinstance(payload, dict) and payload.get("object") == "instagram":
+        step_logger.info(f"Instagram webhook received: {_summarize(payload)}")
         instagram_event_service.enqueue_webhook(payload)
+    else:
+        step_logger.warn(
+            f"Instagram webhook delivery had an unexpected 'object' value: {(payload or {}).get('object')!r} "
+            "— acknowledged and dropped."
+        )
 
     return PlainTextResponse("OK", status_code=200)
+
+
+def _summarize(payload: dict) -> str:
+    """One line naming what a delivery actually contains — comments,
+    messaging events, or neither — printed BEFORE anything tries to match it
+    to a property.
+
+    This exists because "nothing replied" and "nothing arrived" look
+    identical from the outside otherwise: every downstream step (matching a
+    reel, checking the daily allowance) is deliberately silent when it finds
+    nothing to do, which is the right call for cost but leaves this line as
+    the only place in the whole pipeline that proves Meta actually reached
+    this server at all. If a comment or a shared reel produces no such line
+    in the terminal, the fault is upstream of this application entirely —
+    most commonly the sending Instagram account not having accepted an
+    Instagram Tester role on this app, which is what Meta requires before it
+    will deliver ANY webhook triggered by that account while the app is
+    still in Development mode.
+
+    Counts BOTH shapes a "messages" event can arrive in — entry.changes[]
+    with field == "messages" (what "API setup with Instagram business
+    login" actually sends, confirmed against the App Dashboard's own "Send
+    to My Server" sample) and entry.messaging[] (the Messenger-Platform
+    shape, used by Facebook Login for Business). Counting only one of them
+    is exactly what made an earlier version of this line lie: it reported
+    "0 messaging event(s)" for a delivery that, moments later, this
+    application also failed to act on for the very same reason — the
+    dispatcher and this summary must always agree on what a "messages" event
+    looks like, so the two are handled by the same enumeration below.
+    """
+    entries = payload.get("entry")
+    if not isinstance(entries, list):
+        return "no entries"
+    comments = 0
+    messages = 0
+    for entry in entries:
+        if not isinstance(entry, dict):
+            continue
+        changes = entry.get("changes") if isinstance(entry.get("changes"), list) else []
+        fields = [c.get("field") for c in changes if isinstance(c, dict)]
+        if entry.get("field"):
+            fields.append(entry.get("field"))
+        comments += fields.count("comments")
+        messages += fields.count("messages")
+        messaging = entry.get("messaging")
+        if isinstance(messaging, list):
+            messages += len(messaging)
+    return f"{comments} comment event(s), {messages} messaging event(s)"
 
 
 def _signature_ok(body: bytes, header: str | None) -> bool:

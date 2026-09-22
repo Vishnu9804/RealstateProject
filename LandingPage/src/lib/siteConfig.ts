@@ -16,8 +16,9 @@
  */
 
 export const site = {
-  brand: "Aurum",
-  brandAccent: "Estates",
+  brand: "Manibhadra",
+  brandAccent: "Real Estate",
+  tagline: "Dreams · Investments · Homes",
   city: "Surat",
 
   hero: {
@@ -28,7 +29,7 @@ export const site = {
   },
 
   stats: [
-    { value: "10+", label: "Years in the market" },
+    { value: "14+", label: "Years in the market" },
     { value: "1,200+", label: "Families settled" },
     { value: "48 hrs", label: "Typical first viewing" },
   ],

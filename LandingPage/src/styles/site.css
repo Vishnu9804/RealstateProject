@@ -72,21 +72,25 @@
   border-radius: var(--r-sm);
 }
 
+/* No border-radius and no extra CSS border here on purpose: the source
+   artwork is already a complete square badge with its own gold frame
+   drawn right up to its edge. Rounding the corners in CSS was clipping
+   that frame's straight lines into an arc at each corner (looked like the
+   badge was cut); showing it at its native square shape is what makes it
+   look "made to be there" instead of forced into a shape it wasn't
+   designed for. */
 .brand__mark {
-  display: grid;
-  place-items: center;
-  width: 38px;
-  height: 38px;
-  border-radius: 11px;
-  border: 1px solid var(--accent-line);
-  background: linear-gradient(150deg, rgba(217, 184, 113, 0.22), rgba(217, 184, 113, 0.04));
-  font-family: var(--font-display);
-  font-size: 19px;
-  color: var(--gold-200);
-  transition: transform var(--t-base) var(--ease-spring);
+  flex: none;
+  width: 42px;
+  height: 42px;
+  object-fit: contain;
+  transition:
+    transform var(--t-base) var(--ease-spring),
+    box-shadow var(--t-base) var(--ease-out);
 }
 .brand:hover .brand__mark {
   transform: rotate(-8deg) scale(1.06);
+  box-shadow: var(--shadow-gold);
 }
 
 .brand__text {
@@ -98,6 +102,31 @@
 .brand__text em {
   font-style: italic;
   color: var(--gold-200);
+}
+
+/* Footer-only: the wordmark stacked over the client's own tagline, next
+   to the same mark the header uses. */
+.brand__col {
+  display: flex;
+  flex-direction: column;
+  gap: 4px;
+}
+.brand__tagline {
+  font-size: 10px;
+  font-weight: 500;
+  letter-spacing: 0.14em;
+  text-transform: uppercase;
+  color: var(--text-faint);
+}
+
+/* Below this, "Real Estate" is dropped from the header wordmark so it
+   never contests the menu button for room — the mark plus "Manibhadra"
+   alone still reads the brand clearly. The footer keeps the full name;
+   it wraps freely and never sits this tight. */
+@media (max-width: 480px) {
+  .site-header .brand__text em {
+    display: none;
+  }
 }
 
 .nav {
@@ -215,8 +244,8 @@
   min-height: 100svh;
   display: flex;
   align-items: center;
-  padding-top: calc(var(--header-h) + 40px);
-  padding-bottom: 90px;
+  padding-top: calc(var(--header-h) + 20px);
+  padding-bottom: 100px;
   overflow: hidden;
 }
 
@@ -253,7 +282,9 @@
   min-height: 280px;
   bottom: -14vw;
   left: -10vw;
-  background: radial-gradient(circle at 60% 40%, rgba(94, 122, 138, 0.34), transparent 66%);
+  /* A muted wine glow rather than the gold of orb--1 — the hero's one nod
+     to the mark's maroon, kept soft enough to never compete with it. */
+  background: radial-gradient(circle at 60% 40%, rgba(122, 34, 44, 0.32), transparent 66%);
   animation: drift 34s var(--ease-inout) infinite reverse;
 }
 
@@ -272,14 +303,73 @@
   -webkit-mask-image: radial-gradient(ellipse 78% 68% at 50% 42%, #000 20%, transparent 78%);
 }
 
-.hero__inner {
+.hero__layout {
   position: relative;
   z-index: 1;
+  display: grid;
+  grid-template-columns: minmax(0, 1fr) clamp(240px, 32vw, 440px);
+  align-items: center;
+  gap: clamp(28px, 5vw, 72px);
+}
+@media (max-width: 900px) {
+  .hero__layout {
+    grid-template-columns: 1fr;
+  }
+}
+
+.hero__inner {
+  position: relative;
   width: 100%;
 }
 
 .hero h1 {
   max-width: 15ch;
+}
+
+/* The client's mark at full size — drifting on the same slow float the
+   About panel's ornamental frames use, so it reads as alive without ever
+   looking urgent. */
+.hero__medallion {
+  position: relative;
+  display: grid;
+  place-items: center;
+  aspect-ratio: 1;
+  width: 100%;
+  max-width: clamp(220px, 30vw, 440px);
+  margin-inline: auto;
+  margin-top: -150px;
+  opacity: 0;
+  animation: medallion-in 0.2s var(--ease-out) forwards;
+  animation-delay: 500ms;
+}
+@media (max-width: 900px) {
+  .hero__medallion {
+    max-width: clamp(190px, 52vw, 300px);
+    margin-top: clamp(20px, 5vw, 40px);
+  }
+}
+
+.medallion__seal {
+  position: relative;
+  width: 100%;
+  height: 100%;
+  object-fit: contain;
+  /* brightness() is the dial for how bright the medallion itself reads —
+     1 = the source art's true brightness, lower = dimmer. Edit just this
+     number to adjust it (0.85 is a gentle dim; try 0.75-0.8 for more). */
+  filter: brightness(0.75) drop-shadow(0 24px 54px rgba(0, 0, 0, 0.6)) drop-shadow(0 0 34px rgba(217, 184, 113, 0.14));
+  animation: float-slow 7.5s var(--ease-inout) infinite;
+}
+
+@keyframes medallion-in {
+  from {
+    opacity: 0;
+    transform: scale(0.82) rotate(-6deg);
+  }
+  to {
+    opacity: 1;
+    transform: none;
+  }
 }
 
 /* Each hero element enters on its own beat rather than all at once — the
@@ -314,11 +404,10 @@
 .hero__stats {
   display: flex;
   flex-wrap: wrap;
-  gap: clamp(24px, 5vw, 64px);
+  gap: clamp(20px, 4vw, 48px);
   margin-top: clamp(48px, 7vw, 86px);
   padding-top: 30px;
   border-top: 1px solid var(--hairline);
-  max-width: 700px;
 }
 
 .stat__value {
@@ -359,6 +448,54 @@
 @media (max-width: 620px) {
   .hero__hint {
     display: none;
+  }
+}
+
+/* ================================ ticker ================================ */
+
+/* A slow-scrolling line of trust markers standing in for the plain
+   hairline rule everywhere else divides sections — full-bleed (it sits
+   outside .shell on purpose) so it reads as a strip cut across the page
+   rather than another boxed panel. */
+.ticker {
+  position: relative;
+  overflow: hidden;
+  border-block: 1px solid var(--hairline);
+  background: var(--ink-900);
+}
+.ticker__track {
+  display: flex;
+  width: max-content;
+  animation: ticker-scroll 36s linear infinite;
+}
+.ticker:hover .ticker__track {
+  animation-play-state: paused;
+}
+.ticker__set {
+  display: flex;
+  align-items: center;
+  flex: none;
+}
+.ticker__set span {
+  padding-block: 16px;
+  font-family: var(--font-display);
+  font-size: 14px;
+  font-style: italic;
+  letter-spacing: 0.03em;
+  color: var(--gold-200);
+  white-space: nowrap;
+}
+.ticker__dot {
+  padding-inline: 22px;
+  font-size: 10px;
+  color: var(--text-faint);
+}
+@keyframes ticker-scroll {
+  from {
+    transform: translateX(0);
+  }
+  to {
+    transform: translateX(-50%);
   }
 }
 
@@ -694,6 +831,17 @@
 .about__art::after {
   inset: 120px 60px 44px 60px;
   animation: float-slow 11s var(--ease-inout) infinite reverse;
+}
+
+/* The client's own mark, used once more here as a small medallion rather
+   than a header icon — a quiet stamp of authenticity behind the quote it
+   sits above. It's the real seal art (same file as the hero's, just
+   small), so it already carries its own gold ring — no border needed. */
+.about__seal {
+  width: 72px;
+  height: auto;
+  margin: 0 auto 20px;
+  filter: drop-shadow(0 10px 22px rgba(0, 0, 0, 0.5));
 }
 
 .about__quote {
@@ -1911,6 +2059,18 @@
   justify-content: space-between;
   color: var(--text-faint);
   font-size: 13px;
+}
+
+/* The floating "Tell us about your requirements" button is fixed to the
+   viewport's bottom-right corner and sits on top of the footer wherever
+   the two coincide. Above 560px it shows its full label (see .cta-fab's
+   own breakpoint below) and is wide enough to cover the copyright line's
+   end — so the row gets its own reserved margin here, clear of the
+   button's footprint, rather than letting the two overlap. */
+@media (min-width: 561px) {
+  .site-footer__inner {
+    padding-right: 250px;
+  }
 }
 
 .site-footer__links {

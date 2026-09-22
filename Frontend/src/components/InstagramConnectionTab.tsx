@@ -191,11 +191,27 @@ export default function InstagramConnectionTab() {
           </div>
 
           {status.webhook_subscribed ? (
-            <Note tone="ok" icon={<IconCheck size={16} />}>
-              Comments and shared reels arrive here the moment they happen — nothing is polled, and this stays
-              connected on its own. You only need to come back here if the client removes this app from their
-              Instagram settings.
-            </Note>
+            <>
+              <Note tone="ok" icon={<IconCheck size={16} />}>
+                Comments and shared reels arrive here the moment they happen — nothing is polled, and this stays
+                connected on its own. You only need to come back here if the client removes this app from their
+                Instagram settings.
+              </Note>
+              {/* This one setting lives inside the Instagram phone app, not
+                  in anything this backend or the Meta dashboard can reach or
+                  read back — and with it off, Meta delivers no DM webhook at
+                  all and reports no error anywhere. Connected, subscribed and
+                  completely silent looks identical to a broken integration,
+                  so it is called out here rather than left to be rediscovered
+                  against a client's live account. */}
+              <Note tone="warn" icon={<IconAlert size={16} />}>
+                <strong>DMs need one switch on the phone.</strong> On <strong>@{status.username}</strong>, open the
+                Instagram app → <em>Settings and activity</em> → <em>Messages and story replies</em> →{" "}
+                <em>Message controls</em> → <em>Connected tools</em> → turn <strong>Allow access to messages</strong>{" "}
+                ON. Until that is on, shared reels never reach this server — Instagram simply does not send them,
+                and shows no error. Comment replies work either way.
+              </Note>
+            </>
           ) : (
             <Note tone="warn" icon={<IconAlert size={16} />}>
               The account is connected, but Meta is not pushing its events here yet. Check that the callback URL

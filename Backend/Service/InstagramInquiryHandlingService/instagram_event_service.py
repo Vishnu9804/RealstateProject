@@ -168,11 +168,28 @@ def _process_payload(payload: dict) -> None:
         if not isinstance(entry, dict):
             continue
 
-        # Comments arrive as entry.changes[] — and, on some app types, as a
-        # bare field/value pair on the entry itself. Both shapes are
-        # accepted rather than betting on which one this app is served,
-        # because the cost of being wrong is "the feature silently does
-        # nothing" and the cost of handling both is four lines.
+        # Both comments AND messages arrive as entry.changes[] on THIS
+        # product — "API setup with Instagram business login" — confirmed
+        # directly against the Meta App Dashboard's own "Send to My Server"
+        # sample for the messages field, which is a bare {"field":
+        # "messages", "value": {sender, recipient, message, ...}} pair, the
+        # same shape as the comments field, NOT the Messenger-Platform-style
+        # entry.messaging[] array. That array belongs to Facebook Login for
+        # Business (a Page-linked Instagram account) — a different product
+        # this app does not use.
+        #
+        # This is the one thing worth stating plainly: earlier code here
+        # only ever dispatched field == "comments" and silently dropped
+        # every "messages" change — so every DM and every shared reel was
+        # received, acknowledged with 200, and then discarded without a
+        # single log line. It looked exactly like "nothing arrived" from the
+        # terminal, which is what made it so easy to misdiagnose as a
+        # tester-role problem instead. Fixed by routing both fields.
+        #
+        # entry.messaging[] is still checked below too, and unconditionally
+        # so — a bare field/value pair also on the entry itself is a shape
+        # Meta uses on some app types, and checking a key that isn't there
+        # costs nothing.
         changes = entry.get("changes")
         if isinstance(changes, list):
             for change in changes:
@@ -191,11 +208,19 @@ def _process_payload(payload: dict) -> None:
 def _dispatch_change(change: dict) -> None:
     field = change.get("field")
     value = change.get("value")
-    if field != "comments" or not isinstance(value, dict):
+    if not isinstance(value, dict):
         return
-    _pool_handle().submit(
-        _guarded, _handle_comment_event, f"Instagram comment {value.get('id')}", value
-    )
+    if field == "comments":
+        _pool_handle().submit(
+            _guarded, _handle_comment_event, f"Instagram comment {value.get('id')}", value
+        )
+    elif field == "messages":
+        # `value` here is already shaped exactly like an entry.messaging[]
+        # element (sender/recipient/message) — see the module-level comment
+        # above — so it goes straight to the same handler, no translation
+        # needed.
+        mid = (value.get("message") or {}).get("mid") if isinstance(value.get("message"), dict) else None
+        _pool_handle().submit(_guarded, _handle_message_event, f"Instagram message {mid}", value)
 
 
 # --- comments -------------------------------------------------------------
@@ -260,6 +285,16 @@ def _handle_comment_event(value: dict) -> None:
         # unrelated post costs nothing at all.
         prop = instagram_reel_matcher.find_property_by_media_id(str(media_id))
         if prop is None:
+            # Not logged by default — this is genuinely the common case
+            # (every comment on every ordinary post the account has), and an
+            # INFO line per one of those would drown out everything else in
+            # the terminal. media_product_type is printed at DEBUG-equivalent
+            # cost (a warn only during initial setup would be too noisy
+            # here, unlike the DM side where a share is rare) — left as a
+            # deliberate asymmetry with _handle_message_event, not an
+            # oversight: see that function's _looks_like_a_share for why a
+            # DM share gets a log line and an ordinary comment does not.
+            #
             # Marked in memory only (no row written) so this exact comment is
             # never reconsidered either — nothing was sent for it, so there
             # is no duplicate reply to protect against.
@@ -361,6 +396,20 @@ def _handle_message_event(event: dict) -> None:
         # that is not about a property costs no query and writes no row.
         prop = _match_shared_reel(message)
         if prop is None:
+            if _looks_like_a_share(message):
+                # This is the one "no match" outcome worth a log line despite
+                # the cost discipline everywhere else in this module: an
+                # ordinary "hi" is silent because there is nothing to
+                # diagnose, but something that LOOKED like a content share
+                # and still matched no property is either a genuinely
+                # unrelated post/reel or a payload shape this matcher
+                # doesn't yet recognise — both worth seeing while setting
+                # this up. Printed shape only (types and payload keys, never
+                # message text), so it costs a terminal line, not a query.
+                step_logger.info(
+                    f"Instagram: a shared post/reel from user {sender_id} matched no tracked property "
+                    f"— {_describe_attachments(message)}"
+                )
             instagram_contact_store.mark_event_ignored(message_key)
             return
 
@@ -402,6 +451,37 @@ def _handle_message_event(event: dict) -> None:
             instagram_contact_store.mark_event_processed(message_key)
     finally:
         _end_event(message_key)
+
+
+def _looks_like_a_share(message: dict) -> bool:
+    """True for anything that carries real content to match against — a
+    recognised attachment type, ANY attachment at all (even one this
+    matcher doesn't recognise — that's exactly the case worth logging), or a
+    link pasted as plain text. False for a bare "hi", which is the
+    overwhelming majority of DMs and must stay silent."""
+    attachments = message.get("attachments")
+    if isinstance(attachments, list) and attachments:
+        return True
+    return bool(instagram_reel_matcher.extract_reel_code(message.get("text")))
+
+
+def _describe_attachments(message: dict) -> str:
+    """Shape only — attachment types and each payload's key names, never the
+    values (a permalink is fine to print; a lookaside CDN token or message
+    text is not something this log line needs). Enough to tell "Meta sent a
+    type this matcher's _SHARE_ATTACHMENT_TYPES doesn't include" apart from
+    "Meta sent a type it does include, but pointing at unrelated content"."""
+    attachments = message.get("attachments")
+    if not isinstance(attachments, list) or not attachments:
+        text = message.get("text")
+        return f"no attachment; text={text!r}" if text else "no attachment, no text"
+    parts = []
+    for attachment in attachments:
+        if not isinstance(attachment, dict):
+            continue
+        payload = attachment.get("payload") if isinstance(attachment.get("payload"), dict) else {}
+        parts.append(f"type={attachment.get('type')!r} payload_keys={sorted(payload.keys())}")
+    return "; ".join(parts) if parts else "an attachment list with no readable entries"
 
 
 def _match_shared_reel(message: dict) -> Optional[EmbeddedProperty]:

@@ -12,19 +12,24 @@
  * Dark-only, and that is a decision rather than an omission: every surface
  * here is a frame around a photograph, and a dark frame is what makes a
  * photograph look expensive. There is no theme toggle to keep in sync.
+ *
+ * The neutral ramp leans warm rather than cool — a near-black with the
+ * faintest oxblood undertone, echoing the client's own maroon-and-gold
+ * mark without ever putting a saturated red on screen. It reads as "rich
+ * black", not "black with a colour in it", which is the point.
  */
 
 :root {
   color-scheme: dark;
 
-  /* ---- neutral ramp (cool-leaning near-black through warm white) ---- */
-  --ink-1000: #08080a;
-  --ink-900: #0c0c0f;
-  --ink-850: #101014;
-  --ink-800: #16161b;
-  --ink-700: #1e1e25;
-  --ink-600: #2a2a33;
-  --ink-500: #3a3a46;
+  /* ---- neutral ramp (warm near-black through warm white) ---- */
+  --ink-1000: #0a0708;
+  --ink-900: #0e0a0b;
+  --ink-850: #120d0f;
+  --ink-800: #171114;
+  --ink-700: #1f171b;
+  --ink-600: #2b2026;
+  --ink-500: #3b2c34;
 
   --paper: #f4f1ea;
   --text: #ece9e2;

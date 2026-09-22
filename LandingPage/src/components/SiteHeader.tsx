@@ -1,5 +1,6 @@
 import { useEffect, useState } from "react";
 import { useLocation, useNavigate } from "react-router-dom";
+import logoMark from "../assets/manibhadra-logo.png";
 import { isHomeRoute, scrollToSection, useScrollState } from "../hooks/useScroll";
 import { site } from "../lib/siteConfig";
 import { IconClose, IconMenu } from "./Icons";
@@ -79,10 +80,9 @@ export default function SiteHeader() {
       <header className={`site-header${stuck ? " is-stuck" : ""}`}>
         <div className="site-header__inner shell">
           <button type="button" className="brand" onClick={() => goToSection("home")} aria-label={`${site.brand} ${site.brandAccent} — home`}>
-            <span className="brand__mark">{site.brand.charAt(0)}</span>
+            <img className="brand__mark" src={logoMark} alt="" />
             <span className="brand__text">
-              {site.brand}
-              <em>{site.brandAccent}</em>
+              {site.brand} <em>{site.brandAccent}</em>
             </span>
           </button>
 

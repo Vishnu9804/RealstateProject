@@ -1,10 +1,12 @@
 import { useCallback, useEffect, useMemo, useRef, useState } from "react";
 import { useLocation, useParams } from "react-router-dom";
+import sealMedallion from "../assets/manibhadra-seal.png";
 import { landingApi } from "../api/landingApi";
 import type { LandingProperty } from "../api/types";
 import { scrollToSection } from "../hooks/useScroll";
 import { getCachedPropertyList, setCachedPropertyList } from "../lib/propertyCache";
 import { site } from "../lib/siteConfig";
+import CountUp from "../components/CountUp";
 import PropertyCard from "../components/PropertyCard";
 import RequirementsForm from "../components/RequirementsForm";
 import Reveal from "../components/Reveal";
@@ -182,37 +184,49 @@ export default function HomePage() {
           <div className="hero__grid" />
         </div>
 
-        <div className="shell hero__inner hero__stagger">
-          <p className="eyebrow">
-            {site.hero.eyebrow} · {site.city}
-          </p>
-          <h1 className="display display--xl">
-            {site.hero.titleLead} <span className="gilt">{site.hero.titleAccent}</span>
-          </h1>
-          <p className="lede">{site.hero.lede}</p>
+        <div className="shell hero__layout">
+          <div className="hero__inner hero__stagger">
+            <p className="eyebrow">
+              {site.hero.eyebrow} · {site.city}
+            </p>
+            <h1 className="display display--xl">
+              {site.hero.titleLead} <span className="gilt">{site.hero.titleAccent}</span>
+            </h1>
+            <p className="lede">{site.hero.lede}</p>
 
-          <div className="hero__cta">
-            <button type="button" className="btn btn--primary" onClick={() => scrollToSection("properties")}>
-              Browse properties
-              <IconArrowRight />
-            </button>
-            {/* Deliberately worded differently from the floating button in
-                SiteFooter, which goes to the same place — two identical
-                labels on one screen read as one control that has been
-                duplicated by mistake. */}
-            <button type="button" className="btn btn--ghost" onClick={() => scrollToSection("contact")}>
-              <IconChat size={16} />
-              Tell us what you're looking for
-            </button>
+            <div className="hero__cta">
+              <button type="button" className="btn btn--primary" onClick={() => scrollToSection("properties")}>
+                Browse properties
+                <IconArrowRight />
+              </button>
+              {/* Deliberately worded differently from the floating button in
+                  SiteFooter, which goes to the same place — two identical
+                  labels on one screen read as one control that has been
+                  duplicated by mistake. */}
+              <button type="button" className="btn btn--ghost" onClick={() => scrollToSection("contact")}>
+                <IconChat size={16} />
+                Tell us what you're looking for
+              </button>
+            </div>
+
+            <div className="hero__stats">
+              {site.stats.map((stat) => (
+                <div key={stat.label}>
+                  <div className="stat__value">
+                    <CountUp value={stat.value} />
+                  </div>
+                  <div className="stat__label">{stat.label}</div>
+                </div>
+              ))}
+            </div>
           </div>
 
-          <div className="hero__stats">
-            {site.stats.map((stat) => (
-              <div key={stat.label}>
-                <div className="stat__value">{stat.value}</div>
-                <div className="stat__label">{stat.label}</div>
-              </div>
-            ))}
+          {/* The client's own mark, shown at real size exactly once on the
+              whole site — everywhere else (header, footer, the About quote)
+              it stays small and functional. This is the one place it gets
+              to be the point. */}
+          <div className="hero__medallion" aria-hidden>
+            <img className="medallion__seal" src={sealMedallion} alt="" />
           </div>
         </div>
 
@@ -222,7 +236,30 @@ export default function HomePage() {
         </div>
       </section>
 
-      <hr className="rule" />
+      {/* A slow-scrolling strip of trust markers standing in for the
+          section rule here — it already carries its own top/bottom
+          hairlines, so a second divider right above it would just be two
+          lines doing one job. Decorative and marked aria-hidden: every
+          figure in it is announced properly elsewhere (the hero stats, the
+          footer's brand name). */}
+      <div className="ticker" aria-hidden="true">
+        <div className="ticker__track">
+          {[0, 1].map((rep) => (
+            <div className="ticker__set" key={rep}>
+              <span>14+ Years in Real Estate</span>
+              <span className="ticker__dot">✦</span>
+              <span>1,200+ Families Settled</span>
+              <span className="ticker__dot">✦</span>
+              <span>100% Verified Listings</span>
+              <span className="ticker__dot">✦</span>
+              <span>
+                {site.brand} {site.brandAccent}
+              </span>
+              <span className="ticker__dot">✦</span>
+            </div>
+          ))}
+        </div>
+      </div>
 
       {/* ============================= properties ============================= */}
       <section id="properties" className="section">
@@ -367,7 +404,8 @@ export default function HomePage() {
           <Reveal delay={140}>
             <div className="about__art">
               <blockquote className="about__quote">
-                “We'd rather show you three places worth seeing than three hundred you'll never visit.”
+                <img className="about__seal" src={sealMedallion} alt="" />
+                “A home is where a family's dreams settle down — we simply help you find the right one.”
                 <span>
                   {site.brand} {site.brandAccent}
                 </span>

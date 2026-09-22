@@ -1,4 +1,5 @@
 import { useNavigate } from "react-router-dom";
+import logoMark from "../assets/manibhadra-logo.png";
 import { scrollToSection } from "../hooks/useScroll";
 import { site } from "../lib/siteConfig";
 import { SECTIONS } from "./SiteHeader";
@@ -16,10 +17,12 @@ export default function SiteFooter({ onHome }: { onHome: boolean }) {
     <footer className="site-footer">
       <div className="shell site-footer__inner">
         <div className="brand">
-          <span className="brand__mark">{site.brand.charAt(0)}</span>
-          <span className="brand__text">
-            {site.brand}
-            <em>{site.brandAccent}</em>
+          <img className="brand__mark" src={logoMark} alt="" />
+          <span className="brand__col">
+            <span className="brand__text">
+              {site.brand} <em>{site.brandAccent}</em>
+            </span>
+            <span className="brand__tagline">{site.tagline}</span>
           </span>
         </div>
 

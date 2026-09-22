@@ -360,6 +360,60 @@ class PayloadFanOut(InstagramWebhookTestCase):
         )
         self.assertEqual(len(self.private_replies), 1)
 
+    def test_a_messages_field_change_is_handled(self):
+        # THE regression this class exists to prevent. "API setup with
+        # Instagram business login" (this app's product) delivers a DM as
+        # entry.changes[{"field": "messages", "value": {sender, recipient,
+        # message}}] — confirmed against the Meta App Dashboard's own "Send
+        # to My Server" sample for the messages field — NOT as
+        # entry.messaging[], which is the Messenger-Platform/Facebook-Login-
+        # for-Business shape every other test in this file (deliberately)
+        # also covers. An earlier version of the dispatcher only recognised
+        # field == "comments" here, so every real DM this app has ever
+        # received was acknowledged with 200 and silently discarded — this
+        # pinned test is what makes that regression impossible to
+        # reintroduce without a test failing.
+        self._run(
+            {
+                "object": "instagram",
+                "entry": [
+                    {
+                        "id": OUR_IG_ID,
+                        "changes": [
+                            {
+                                "field": "messages",
+                                "value": message_event(
+                                    "m1", attachments=[{"type": "ig_reel", "payload": {"url": REEL_URL}}]
+                                ),
+                            }
+                        ],
+                    }
+                ],
+            }
+        )
+        self.assertEqual(len(self.sent_dms), 3)
+
+    def test_a_messages_field_change_with_no_attachment_is_matched_or_ignored_without_crashing(self):
+        # The literal sample the dashboard's test tool sends: plain text,
+        # no attachment. Not a share, so nothing should be sent — but it
+        # must be REACHED and evaluated, not silently dropped before ever
+        # being looked at.
+        self._run(
+            {
+                "object": "instagram",
+                "entry": [
+                    {
+                        "id": OUR_IG_ID,
+                        "changes": [
+                            {"field": "messages", "value": message_event("random_mid", text="random_text")}
+                        ],
+                    }
+                ],
+            }
+        )
+        self.assertEqual(self.sent_dms, [])
+        self.assertTrue(instagram_contact_store.is_event_processed("dm_message:random_mid"))
+
     def test_an_unknown_field_is_ignored(self):
         self._run(
             {"object": "instagram", "entry": [{"id": OUR_IG_ID, "changes": [{"field": "mentions", "value": {}}]}]}
@@ -392,6 +446,47 @@ class MessageLengthRules(unittest.TestCase):
         self.assertNotIn("the site visit line", combined)
         self.assertIn("a" * 600, combined)
         self.assertIn("b" * 600, combined)
+
+
+class WebhookReceiptSummary(unittest.TestCase):
+    """The diagnostic line printed the instant a delivery is accepted — see
+    instagram_webhook_controller._summarize's own docstring for why it has
+    to count the SAME shapes the dispatcher acts on, exactly. A mismatch
+    here is what let the messages-field bug read as "0 messaging event(s)"
+    instead of pointing straight at the dispatcher."""
+
+    def test_a_comments_change_counts_as_one_comment_event(self):
+        self.assertEqual(
+            webhook_controller._summarize(
+                {"entry": [{"changes": [{"field": "comments", "value": {}}]}]}
+            ),
+            "1 comment event(s), 0 messaging event(s)",
+        )
+
+    def test_a_messages_change_counts_as_one_messaging_event(self):
+        # The exact shape confirmed against the Meta App Dashboard's own
+        # "Send to My Server" sample for this product.
+        self.assertEqual(
+            webhook_controller._summarize(
+                {"entry": [{"changes": [{"field": "messages", "value": {}}]}]}
+            ),
+            "0 comment event(s), 1 messaging event(s)",
+        )
+
+    def test_an_entry_messaging_array_also_counts(self):
+        self.assertEqual(
+            webhook_controller._summarize({"entry": [{"messaging": [{}, {}]}]}),
+            "0 comment event(s), 2 messaging event(s)",
+        )
+
+    def test_a_bare_field_value_pair_on_the_entry_counts_too(self):
+        self.assertEqual(
+            webhook_controller._summarize({"entry": [{"field": "messages", "value": {}}]}),
+            "0 comment event(s), 1 messaging event(s)",
+        )
+
+    def test_no_entries_is_reported_plainly(self):
+        self.assertEqual(webhook_controller._summarize({}), "no entries")
 
 
 class SignatureRules(unittest.TestCase):

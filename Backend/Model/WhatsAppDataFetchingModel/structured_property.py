@@ -121,13 +121,14 @@ class StructuredProperty(BaseModel):
     # THE ONLY contact-number field on this model. There used to be a
     # derived `contact_phone` scalar beside it holding contact_phones[0];
     # it is gone, from the model, from every API response and from the
-    # database. One number has one home. The two readers that genuinely
-    # want a single string ask for it explicitly now --
-    # phone_numbers.primary_phone(prop.contact_phones) -- which is what the
-    # scalar always was, so the embedding text those readers build is
-    # byte-for-byte what it was before and stays comparable with every
-    # vector already stored (see Service/WhatsAppDataFetchingService/
-    # embedding_service.py's EMBEDDING_TEXT_FIELDS).
+    # database. One number has one home, and anything wanting a single
+    # string asks for it explicitly (phone_numbers.primary_phone).
+    #
+    # A contact number is no longer part of a listing's match vector
+    # either: it says who to call, never what the property is, so it is not
+    # in Service/WhatsAppDataFetchingService/embedding_service.py's
+    # EMBEDDING_TEXT_FIELDS and an edit to it cannot move a match score
+    # (see match_invalidation_service's MATCH_NEUTRAL_FIELDS).
     contact_phones: List[str] = Field(default_factory=list)
     description: Optional[str] = None
     # --- set by a human on the Properties page, never by the LLM ---

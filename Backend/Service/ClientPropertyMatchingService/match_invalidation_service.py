@@ -47,15 +47,13 @@ from Middleware import step_logger
 # pulling the property out of every client's and broker's shortlist to
 # re-earn its place overnight is the wrong trade for any of them.
 #
-# Three of them (unit_no, location_url, video_available, image_urls) are not
-# read by scoring.py and are not in embedding_service.EMBEDDING_TEXT_FIELDS
-# either, so no score CAN move. The contact number is the one exception: it is
-# part of the embedding text, so the semantic half of the score may shift by
-# a hair. That is accepted deliberately and it does not go uncorrected —
-# every edit still bumps the listing's updated_at, so the 6 AM incremental
-# pass re-scores it for every client and requirement (match_candidates.
-# get_changed_since) and writes the exact score back. The property simply
-# does not VANISH in the meantime, which is the whole point.
+# NONE of them is read by scoring.py and none is in embedding_service.
+# EMBEDDING_TEXT_FIELDS either, so no score CAN move for any of them. The
+# contact number used to be the one exception — it was part of the embedding
+# text, so an edit to it shifted the semantic half of the score by a hair —
+# until identifiers were taken out of that text altogether (see
+# EMBEDDING_TEXT_FIELDS for the measurement that prompted that). This list is
+# now exactly what it claims to be, with no exception to keep in mind.
 #
 # Everything ELSE is treated as match-relevant, deliberately — an edit
 # wrongly believed harmless would leave a stale match standing, while an

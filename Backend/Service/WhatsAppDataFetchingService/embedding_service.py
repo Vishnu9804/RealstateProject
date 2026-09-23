@@ -24,6 +24,14 @@ scoring, and the pgvector column definition) must stay in lock-step with —
 both import them from here rather than hardcoding a model name or a
 dimension count of their own.
 
+The same is true of WHICH WORDS go in. Changing EMBEDDING_TEXT_FIELDS
+changes what every new vector means while leaving every vector already in
+Postgres built from the old text — two kinds of vector in one column,
+scored against one client requirement, with nothing to tell them apart and
+no error anywhere to notice it. So whenever that tuple changes, the stored
+listings have to be re-embedded from it; tools/reembed_listings.py does
+exactly that in one pass and is safe to re-run.
+
 MEMORY
 
 The model is loaded on first use and released again after
@@ -61,7 +69,6 @@ from typing import TYPE_CHECKING, Any, Iterable, List, Mapping, Optional
 
 from Config.settings import get_settings
 from Middleware import step_logger
-from Model import phone_numbers
 from Model.WhatsAppDataFetchingModel.structured_property import StructuredProperty
 
 if TYPE_CHECKING:
@@ -74,20 +81,35 @@ if TYPE_CHECKING:
 EMBEDDING_MODEL_NAME = "sentence-transformers/all-MiniLM-L6-v2"
 EMBEDDING_DIMENSIONS = 384
 
-# The identifying fields a listing's vector is built from, in this fixed
+# The DESCRIPTIVE fields a listing's vector is built from, in this fixed
 # order — see build_embedding_text. Shared by a property and a builder
 # project (build_embedding_text_from_fields), so the two are embedded from
 # exactly the same kind of text and land in the same semantic space as a
 # client's requirement vector.
+#
+# WHAT IS DELIBERATELY NOT HERE: society_name, contact_name and the contact
+# number. Those IDENTIFY a listing, they do not describe it, and no client
+# requirement can express a preference about any of them — nobody asks for
+# "a flat called Rudravan Apartment", and the agent's own phone number says
+# nothing about whether a property fits.
+#
+# They were measured out, not guessed out. Against two near-identical 4 BHK
+# flats offered to one buyer — same type, same configuration, both inside her
+# budget, both for sale, so every structured field tied at 1.0 and the
+# semantic field alone separated them — a leave-one-out ablation put
+# society_name at +0.12 of the 0.10 similarity gap between them, more than
+# the whole gap it was meant to explain, while contact_name and the number
+# (the SAME strings on both listings, one agent) each still moved the score
+# by ~0.01 purely from where they sat in the sentence. That gap decided a
+# bucket: one flat read High, the other Medium. A field that can do that on
+# the strength of a proper noun is noise carrying a weight, and scoring.py's
+# semantic signal is only worth having while it reflects what a listing IS.
 EMBEDDING_TEXT_FIELDS = (
     "property_type",
     "bhk",
-    "society_name",
     "area_name",
     "address",
     "price_text",
-    "contact_name",
-    "contact_phone",
     "description",
 )
 
@@ -288,35 +310,14 @@ def _idle_sweeper_loop(generation: int) -> None:
 def build_embedding_text(prop: StructuredProperty) -> str:
     """Canonical text built field-by-field from the LLM-structured data —
     not the raw WhatsApp message. Broker chatter, greetings, and emojis in
-    the raw text are noise; embedding only the identifying fields, in a
+    the raw text are noise; embedding only the descriptive fields, in a
     fixed order, keeps the vector focused on what the property actually is.
 
     Its one consumer is the client-property matching feature's semantic
     score (Service/ClientPropertyMatchingService/scoring.py), where it acts
     as a low-weight sanity signal on top of the explicit budget/location/
     BHK scoring."""
-    return _join_parts(_property_value(prop, name) for name in EMBEDDING_TEXT_FIELDS)
-
-
-def _property_value(prop: StructuredProperty, name: str) -> Any:
-    """One EMBEDDING_TEXT_FIELDS entry off a StructuredProperty.
-
-    "contact_phone" is not an attribute on that model any more -- the
-    derived scalar was removed so a listing's number has exactly one home
-    (contact_phones). It stays an EMBEDDING FIELD NAME deliberately, and is
-    resolved to the same string the scalar always held, because the text
-    built here has to stay byte-for-byte what it was: every vector already
-    in Postgres was built from text with the primary number in this exact
-    position, and dropping it would quietly make new vectors incomparable
-    with old ones -- a matching-quality regression with no error to notice,
-    repairable only by re-embedding every listing (hours of Railway CPU).
-
-    Same resolution as _field_value below, which does this for the plain
-    column values a builder project arrives as, so the two sides still
-    produce identical text for identical details."""
-    if name == "contact_phone":
-        return phone_numbers.primary_phone(prop.contact_phones)
-    return getattr(prop, name)
+    return _join_parts(getattr(prop, name) for name in EMBEDDING_TEXT_FIELDS)
 
 
 def build_embedding_text_from_fields(fields: Mapping[str, Any]) -> str:
@@ -324,20 +325,8 @@ def build_embedding_text_from_fields(fields: Mapping[str, Any]) -> str:
     than a StructuredProperty — a builder project (Service/
     BuilderProjectService/builder_project_store.py). Same fields, same
     order, same separator, so a builder project and a property with the same
-    details produce byte-for-byte the same text and the same vector.
-
-    contact_phone is the one name that is not a field on either side any
-    more (see Model/phone_numbers.py): both are resolved to the first of
-    their contact_phones, here and in _property_value above, or two listings
-    with the same number would embed differently depending on which side
-    they came from."""
-    return _join_parts(_field_value(fields, name) for name in EMBEDDING_TEXT_FIELDS)
-
-
-def _field_value(fields: Mapping[str, Any], name: str) -> Any:
-    if name == "contact_phone":
-        return phone_numbers.primary_phone(fields.get("contact_phones")) or fields.get(name)
-    return fields.get(name)
+    details produce byte-for-byte the same text and the same vector."""
+    return _join_parts(fields.get(name) for name in EMBEDDING_TEXT_FIELDS)
 
 
 def _join_parts(parts: Iterable[Any]) -> str:

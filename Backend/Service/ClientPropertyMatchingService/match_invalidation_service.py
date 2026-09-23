@@ -66,6 +66,31 @@ MATCH_NEUTRAL_FIELDS = frozenset(
         "location_url",
         "video_available",
         "unit_no",
+        # The client's own spreadsheet "Extra" column
+        # (StructuredProperty.extra_notes) — human-only free text that the
+        # LLM never writes and that NOTHING in matching reads: it is not in
+        # embedding_service.EMBEDDING_TEXT_FIELDS and not named anywhere in
+        # scoring.py, so no score can move for it. It is the listing side's
+        # exact counterpart of ClientRecord.notes and
+        # StructuredRequirement.notes, both of which are already neutral on
+        # their own side — a staff scratchpad must never cost a listing its
+        # place in anyone's shortlist.
+        "extra_notes",
+        # The client's "AVL or Not" toggle (StructuredProperty.is_available,
+        # and the identical column on a builder project). It says whether a
+        # listing is off the market FOR NOW, and it has no bearing on
+        # matching whatsoever: nothing in scoring.py reads it, it is not in
+        # embedding_service.EMBEDDING_TEXT_FIELDS, and matching_service.
+        # is_matchable does not consult it — an unavailable listing is
+        # scored, ranked and shown exactly like any other. So flipping it
+        # must not cost the listing its place in a single shortlist; the
+        # matches dialogs simply MARK the card instead (MatchedProperty
+        # carries the live value, see matching_service._display_fields).
+        #
+        # Deliberately NOT the same thing as the Sold out tab, which removes
+        # a closed deal from the property table entirely and does take its
+        # match rows with it (Database/soldout_property_repository.py).
+        "is_available",
         # The list is what an edit moves. The old scalar is not named here
         # any more: it is not a field, not a column and not in any request
         # body by the time this runs (the controller's

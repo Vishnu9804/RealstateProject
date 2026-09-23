@@ -657,10 +657,15 @@ function RequirementMatchCard({
   const source = item.property ?? item.match;
   const title = source.society_name || source.property_type || "Property";
   const location = [source.area_name, source.address].filter(Boolean).join(" · ");
+  // Marked, never removed — the demand side's half of the same rule the
+  // client matches dialog applies. See MatchedProperty.is_available.
+  const unavailable = source.is_available === false;
 
   return (
     <div
-      className={["match-card", selected && "match-card--selected"].filter(Boolean).join(" ")}
+      className={["match-card", selected && "match-card--selected", unavailable && "match-card--unavailable"]
+        .filter(Boolean)
+        .join(" ")}
       role="button"
       tabIndex={0}
       aria-label={`View details of ${title}`}
@@ -737,6 +742,7 @@ function RequirementMatchCard({
           </Badge>
         )}
         {item.match.is_partial_match && <Badge tone="info">Partial data</Badge>}
+        {unavailable && <Badge tone="warn">Not available</Badge>}
       </div>
 
       {item.match.reason && <div className="match-card__reason">{item.match.reason}</div>}

@@ -1839,6 +1839,30 @@ mark.hl {
 }
 .match-card--completed:hover { background: color-mix(in oklab, var(--ok) 17%, var(--plane-1)); transform: none; box-shadow: none; }
 
+/* Off the market for now — the listing's own "AVL or Not" toggle, which has
+   nothing to do with matching: the card keeps its score, its bucket, its
+   position, its checkbox and its assignment, and is simply marked.
+
+   A stripe down the left edge plus a warn badge, and deliberately NOT a
+   background tint: the card's background already MEANS something here
+   (plain = a match, orange = out with an agent, green = visited, dashed
+   cyan = a re-visit, accent = ticked), so tinting it would overwrite a fact
+   instead of adding one. A stripe layers cleanly over every one of those.
+   Drawn on ::before, which .match-card does not otherwise use, and pinned
+   to the card's own border-radius so it reads as part of the edge rather
+   than as a bar sitting on top of it. */
+.match-card--unavailable::before {
+  content: "";
+  position: absolute;
+  top: -1px;
+  bottom: -1px;
+  left: -1px;
+  width: 3px;
+  border-radius: var(--r-md) 0 0 var(--r-md);
+  background: var(--warn);
+  pointer-events: none;
+}
+
 /* The checkbox sits on the card's own top-left corner rather than in a
    rail beside it — a grid of cards has no single left edge to hang one
    from, and this keeps it visually welded to the card it selects. Sitting

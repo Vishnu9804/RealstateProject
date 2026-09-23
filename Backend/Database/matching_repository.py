@@ -79,6 +79,7 @@ def merge_matches_for_client(
     considered_record_ids: Set[str],
     computed_at: datetime,
     keep_best: Optional[int] = None,
+    protected_record_ids: Collection[str] = (),
 ) -> None:
     """The incremental counterpart to replace_matches_for_client: applies
     the result of re-scoring only SOME of the properties, leaving every
@@ -107,12 +108,25 @@ def merge_matches_for_client(
     are always the highest-RANKED (match score first, then confidence — the
     same order scoring.ranking_key defines), never an arbitrary hundred.
 
+    `protected_record_ids` are the listings this client is already assigned
+    to or has completed a visit to. They are already absent from `scores` and
+    from `considered_record_ids` (the caller never scores them — see
+    matching_service.rescore_changed_properties), so the only thing left that
+    could remove one is the `keep_best` trim, and it is not allowed to: an
+    assigned or completed listing is this client's history, not a shortlist
+    entry competing for a place. Stated here as well as at the caller so the
+    guarantee holds for anything that ever calls this directly. A shortlist
+    can therefore sit a little over `keep_best` when a client has many such
+    listings — the right trade, and bounded by how many visits one client
+    actually has.
+
     Written for a database billed by compute time and transfer. The existing
     rows are read as three small columns rather than whole rows: the trim
     needs an id and a rank, not a field_scores blob and a reason sentence for
     every match this client already has. And the re-scored rows go in as ONE
     upsert instead of an ORM insert-or-mutate per row.
     """
+    protected = set(protected_record_ids)
     with get_client_session() as session:
         existing = {
             record_id: (score, confidence)
@@ -136,7 +150,7 @@ def merge_matches_for_client(
                     )
                 )
 
-        dropped = set(considered_record_ids - scored_ids)
+        dropped = set(considered_record_ids - scored_ids) - protected
         if keep_best is not None:
             # What this client will hold once the statements above land:
             # every surviving existing row at its stored rank, plus this
@@ -150,7 +164,11 @@ def merge_matches_for_client(
             surviving += [(match.score, match.confidence_score, match.record_id) for match in scores]
             if len(surviving) > keep_best:
                 surviving.sort(key=lambda row: (row[0], row[1]), reverse=True)
-                dropped.update(record_id for _, _, record_id in surviving[keep_best:])
+                dropped.update(
+                    record_id
+                    for _, _, record_id in surviving[keep_best:]
+                    if record_id not in protected
+                )
         if dropped:
             session.execute(
                 delete(ClientPropertyMatchRow).where(

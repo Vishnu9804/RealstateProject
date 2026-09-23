@@ -2291,6 +2291,11 @@ function PropertyMatchCard({
   ]
     .filter(Boolean)
     .join(" · ");
+  // The listing's own "AVL or Not" toggle. It changes NOTHING about the
+  // match — the card keeps its score, its bucket, its position and its
+  // checkbox — it only says so. `=== false` and not `!`, so a listing whose
+  // value we simply don't have (an older cached result) reads as available.
+  const unavailable = source.is_available === false;
 
   return (
     <div
@@ -2298,6 +2303,7 @@ function PropertyMatchCard({
         "match-card",
         selected && "match-card--selected",
         assigned && "match-card--assigned",
+        unavailable && "match-card--unavailable",
       ]
         .filter(Boolean)
         .join(" ")}
@@ -2414,6 +2420,11 @@ function PropertyMatchCard({
             <IconUserCheck size={11} /> Assigned to {assigned.agent.name}
           </Badge>
         )}
+        {/* Off the market for now — said plainly, and nothing more. The
+            listing is not removed from this client's matches, from the
+            Assigned tab or from the Completed tab, and its score does not
+            move; availability and matching have no relationship at all. */}
+        {unavailable && <Badge tone="warn">Not available</Badge>}
         {assigned?.active.scheduled_at && (
           <span className="fact">
             <IconClock size={12} />{" "}
@@ -2514,10 +2525,13 @@ function AssignedVisitCard({
     .join(" · ");
   const when = visit.active.scheduled_at;
   const passed = when !== null && timeOf(when) < Date.now();
+  // Same rule as on a match card: marked, never removed. A visit already
+  // out with an agent stands whether or not the listing is on the market.
+  const unavailable = source?.is_available === false;
 
   return (
     <div
-      className={`match-card match-card--assigned${revisitNumber ? " match-card--revisit" : ""}`}
+      className={`match-card match-card--assigned${revisitNumber ? " match-card--revisit" : ""}${unavailable ? " match-card--unavailable" : ""}`}
       role="button"
       tabIndex={0}
       onClick={onOpen}
@@ -2578,6 +2592,7 @@ function AssignedVisitCard({
             <IconRefresh size={11} /> Re-visit · visit #{revisitNumber}
           </Badge>
         )}
+        {unavailable && <Badge tone="warn">Not available</Badge>}
       </div>
 
       <div className="match-card__foot">
@@ -2662,10 +2677,13 @@ export function CompletedPropertyCard({
     .join(" · ");
   const single = visits.length === 1;
   const completedDate = formatCompletedDate(latest.completed_at);
+  // A visit that has already happened is permanent history — the listing
+  // going off the market cannot take it away, it can only be noted.
+  const unavailable = property?.is_available === false;
 
   return (
     <div
-      className="match-card match-card--completed"
+      className={`match-card match-card--completed${unavailable ? " match-card--unavailable" : ""}`}
       role="button"
       tabIndex={0}
       onClick={onOpen}
@@ -2737,6 +2755,7 @@ export function CompletedPropertyCard({
             <IconRefresh size={11} /> Re-visit with {activeVisit.agent.name}
           </Badge>
         )}
+        {unavailable && <Badge tone="warn">Not available</Badge>}
       </div>
 
       {single ? (
@@ -2893,6 +2912,11 @@ export function PropertyMatchDetailDialog({
                 <Badge tone="orange">
                   <IconUserCheck size={11} /> Assigned to {assignedAgent.name}
                 </Badge>
+              )}
+              {/* Carried through from the card, so opening a marked card
+                  does not lose the one thing it was marked for. */}
+              {source.is_available === false && (
+                <Badge tone="warn">Not available</Badge>
               )}
               {source.bhk && (
                 <span className="fact">

@@ -105,7 +105,9 @@ _MAX_PROPERTIES_SCORED = match_candidates.MAX_PROPERTIES
 MAX_MATCHES_PER_CLIENT = match_config.MAX_MATCHES_PER_CLIENT
 
 
-def _best_matches(scores: List[MatchScore]) -> List[MatchScore]:
+def _best_matches(
+    scores: List[MatchScore], protected_ids: Collection[str] = ()
+) -> List[MatchScore]:
     """The highest-RANKED MAX_MATCHES_PER_CLIENT of `scores` (all of them when
     there are fewer) — match score first, confidence as the tie-break, then
     exactness (see scoring.ranking_key). Never an arbitrary hundred.
@@ -113,10 +115,22 @@ def _best_matches(scores: List[MatchScore]) -> List[MatchScore]:
     heapq rather than a full sort: for a broad brief this can be a couple of
     thousand candidates, and only the top hundred are wanted. The order
     within the result is irrelevant — the dashboard sorts each bucket
-    itself."""
+    itself.
+
+    `protected_ids` are properties this client is already assigned to or has
+    completed a visit to. They are part of that client's history, not merely
+    a shortlist entry, so the ceiling is never allowed to push one of them
+    out — see PROTECTED PAIRS in rescore_changed_properties. Empty by
+    default, which is exactly the behaviour every caller had before: a full
+    recompute passes nothing here, so its trim is unchanged."""
     if len(scores) <= MAX_MATCHES_PER_CLIENT:
         return scores
-    return heapq.nlargest(MAX_MATCHES_PER_CLIENT, scores, key=scoring.ranking_key)
+    if not protected_ids:
+        return heapq.nlargest(MAX_MATCHES_PER_CLIENT, scores, key=scoring.ranking_key)
+    kept = [score for score in scores if score.record_id in protected_ids]
+    rest = [score for score in scores if score.record_id not in protected_ids]
+    room = max(MAX_MATCHES_PER_CLIENT - len(kept), 0)
+    return kept + heapq.nlargest(room, rest, key=scoring.ranking_key)
 
 
 # In-memory fallback only — untouched whenever DATABASE_URL is set.
@@ -203,6 +217,7 @@ def rescore_changed_properties(
     changed: List[EmbeddedProperty],
     computed_at: datetime,
     stored_vector: Optional[List[float]] = None,
+    protected_record_ids: Collection[str] = (),
 ) -> int:
     """Incremental rescore: only `changed` is looked at, and only those
     properties' cached rows can be affected. Returns how many of them ended
@@ -220,9 +235,43 @@ def rescore_changed_properties(
     would have triggered a full recompute at the moment it happened), so
     re-deriving the same vector — and re-saving it — every night would be
     pure waste.
+
+    PROTECTED PAIRS
+
+    `protected_record_ids` are the listings this ONE client is already
+    assigned to, or has completed a visit to. They are removed from
+    `changed` before anything is scored, which is the whole of the rule: a
+    property already out with an agent for this client, or one this client
+    has already been to see, is part of their history and has stopped being
+    a scoring question. Editing it must not move its bucket, must not change
+    its score and must not delete its row — exactly the protection
+    Database/edited_property_match_repository.py applies at the moment of the
+    edit, carried through to the nightly pass that would otherwise undo it
+    the next morning.
+
+    That is the gap the edit-time protection alone left open: property A is
+    edited from 3 BHK to 4 BHK; the edit correctly keeps A in the assigned
+    client's and the visited client's matches, but the next 6 AM pass saw A
+    in `changed` for those clients too and re-scored it — dropping it
+    outright when the new details no longer matched, and moving it to another
+    bucket when they did. It is now never looked at for them at all, and
+    their card goes on showing A's CURRENT details (every match result is
+    enriched from the live listing at read time, see _build_result) with the
+    score it was given while it was still merely a match.
+
+    Empty by default, so every existing caller behaves exactly as before.
     """
     if not has_requirements(client):
         return 0
+    if protected_record_ids:
+        protected = set(protected_record_ids)
+        changed = [prop for prop in changed if prop.record_id not in protected]
+        # Everything this client had to look at is protected for them, so
+        # there is nothing to score AND nothing to write — no upsert, no
+        # delete, not even the computed_at stamp. The cheapest possible
+        # outcome, and the correct one.
+        if not changed:
+            return 0
     vector = stored_vector if stored_vector else _embed_requirements(client)
     brief = scoring.build_brief(client, vector)
     scores = [
@@ -234,10 +283,46 @@ def rescore_changed_properties(
     # matching_repository.merge_matches_for_client for why the merge needs
     # this and not just the winners. A property that has since been pushed
     # into the review queue is "considered but not scored", and its stale
-    # cached match has to go.
+    # cached match has to go. A protected listing is deliberately in NEITHER
+    # list: it was filtered out of `changed` above, so it is neither
+    # re-scored nor "considered but not scored".
     considered_ids = {prop.record_id for prop in changed}
-    _merge_scores(client.phone, scores, considered_ids, computed_at)
+    _merge_scores(client.phone, scores, considered_ids, computed_at, protected_record_ids)
     return len(scores)
+
+
+def rescore_properties_for_client(phone: str, record_ids: Collection[str]) -> int:
+    """Re-scores ONE client against a named handful of listings and nothing
+    else — the correction applied when listings stop being protected for a
+    client, i.e. when their active site visits are cancelled (see
+    Controller/WhatsAppInquiryHandlingController/whatsapp_inquiry_controller.py).
+
+    Why it is needed: while a listing is assigned to a client the nightly
+    pass deliberately never re-scores it for them (see PROTECTED PAIRS
+    above), and it advances that client's watermark past it anyway. So a
+    listing edited DURING an assignment that is then cancelled would keep the
+    score it had from before the edit forever — the nightly pass no longer
+    sees it as changed. This brings exactly those listings up to date at the
+    moment they become ordinary matches again, and touches nothing else.
+
+    Deliberately cheap: the listings come from the in-memory snapshot (no
+    query), the requirement vector is read as stored rather than re-derived
+    (no embedding-model call), and the result goes through the same
+    incremental merge the nightly pass uses — so a listing that no longer
+    matches loses its row and one that still does gets a correct score.
+    Returns how many of the named listings ended up as matches.
+    """
+    wanted = {record_id for record_id in record_ids if record_id}
+    if not wanted:
+        return 0
+    client = client_store.get_client_by_phone(phone)
+    if client is None or not has_requirements(client):
+        return 0
+    listings = [prop for prop in match_candidates.get_all() if prop.record_id in wanted]
+    if not listings:
+        return 0
+    stored_vector = client_store.get_requirement_embeddings([phone]).get(phone)
+    return rescore_changed_properties(client, listings, _now(), stored_vector=stored_vector)
 
 
 def _is_matchable(prop: EmbeddedProperty) -> bool:
@@ -464,17 +549,29 @@ def _merge_scores(
     scores: List[MatchScore],
     considered_ids: Set[str],
     computed_at: datetime,
+    protected_ids: Collection[str] = (),
 ) -> None:
     """Applies an incremental pass: the considered properties' rows are
     replaced by whatever they scored this time (or removed if they no
-    longer score at all), and every other cached match survives untouched."""
+    longer score at all), and every other cached match survives untouched.
+
+    `protected_ids` never reaches the scoring above (its listings were
+    filtered out before that) — it is passed on so the CEILING cannot evict
+    one either: a client's assigned or completed listing must not lose its
+    row because a night's new arrivals out-ranked it. See _best_matches and
+    matching_repository.merge_matches_for_client."""
     if is_client_database_configured():
         matching_repository.merge_matches_for_client(
-            phone, scores, considered_ids, computed_at, keep_best=MAX_MATCHES_PER_CLIENT
+            phone,
+            scores,
+            considered_ids,
+            computed_at,
+            keep_best=MAX_MATCHES_PER_CLIENT,
+            protected_record_ids=protected_ids,
         )
         return
     kept = [score for score in _score_cache.get(phone, []) if score.record_id not in considered_ids]
-    _score_cache[phone] = _best_matches(kept + scores)
+    _score_cache[phone] = _best_matches(kept + scores, protected_ids)
     _computed_at_cache[phone] = computed_at
 
 
@@ -544,6 +641,14 @@ def _display_fields(prop: EmbeddedProperty) -> dict:
         # match itself being re-scored.
         "contact_phones": list(prop.contact_phones),
         "description": prop.description,
+        # Whether the listing is currently on the market. Read from the LIVE
+        # listing like every other field here, never stored on the match row,
+        # so a card marked "Not available" un-marks itself the moment the
+        # toggle goes back — with nothing re-scored and no row rewritten.
+        # It changes no score and no ranking (see
+        # match_invalidation_service.MATCH_NEUTRAL_FIELDS); the dialogs use
+        # it only to mark the card.
+        "is_available": prop.is_available,
         "review_status": prop.review_status,
         "needs_review": prop.needs_review,
         "property_source": match_candidates.source_of(prop),

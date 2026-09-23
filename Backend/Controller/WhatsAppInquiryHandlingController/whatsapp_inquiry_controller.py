@@ -9,6 +9,7 @@ from typing import Dict, List, Optional
 from fastapi import APIRouter, Depends, HTTPException
 from pydantic import BaseModel
 
+from Middleware import step_logger
 from Model.WhatsAppInquiryHandlingModel.client_record import ClientRecord
 from Model.WhatsAppInquiryHandlingModel.inquiry_message import InquiryChatMessage
 from Service.AgentManagementService import agent_store, manual_property_store
@@ -427,7 +428,54 @@ def clear_assignments(phone: str) -> CancelResult:
     website properties and their completed visits exactly as they are —
     only the active hand-offs go."""
     client = client_store.get_client_by_phone(phone)
-    return _cancel_active_assignments(phone, client.name if client is not None else None)
+    # Read BEFORE the cancellation, because afterwards there is nothing left
+    # to read: these are exactly the listings that were protected from
+    # re-scoring while they were out with an agent.
+    released = [assignment.property_record_id for assignment in agent_store.get_active_assignments_for_client(phone)]
+    result = _cancel_active_assignments(phone, client.name if client is not None else None)
+    _rescore_released_properties(phone, released)
+    return result
+
+
+def _rescore_released_properties(phone: str, released: List[str]) -> None:
+    """Brings the scores of just-cancelled listings up to date for this one
+    client.
+
+    While a listing is assigned to a client, the nightly pass deliberately
+    never re-scores it for them (matching_service.rescore_changed_properties'
+    PROTECTED PAIRS) and still advances that client's watermark past it. So a
+    listing EDITED during the assignment would otherwise keep its pre-edit
+    score for good once the assignment is cancelled: it is an ordinary match
+    again, but the nightly pass no longer counts it as changed. Re-scoring
+    exactly those listings here closes that, at the one moment the protection
+    ends.
+
+    A listing this client has ALSO completed a visit to stays protected
+    (completed visits are permanent history, see agent_store.
+    clear_assignments_for_client) and is deliberately left out.
+
+    Cheap by construction — the listings come from the in-memory snapshot and
+    the client's stored requirement vector is reused, so this is a small
+    merge and no embedding-model call — and non-fatal: the cancellation has
+    already succeeded and must never be reported as a failure because a score
+    could not be refreshed. A failure here simply leaves the old score until
+    that listing is next edited or the client's matches are refreshed.
+    """
+    if not released:
+        return
+    try:
+        still_protected = set(agent_store.get_completed_property_ids(phone))
+        wanted = [record_id for record_id in released if record_id and record_id not in still_protected]
+        if not wanted:
+            return
+        from Service.ClientPropertyMatchingService import matching_service
+
+        matching_service.rescore_properties_for_client(phone, wanted)
+    except Exception as exc:  # noqa: BLE001
+        step_logger.error(
+            f"[Matching] Could not refresh the scores of {len(released)} just-cancelled listing(s) for "
+            f"{phone} ({type(exc).__name__}): {exc!r} — the cancellation itself is applied."
+        )
 
 
 @router.delete("/clients/{phone}", response_model=CancelResult, dependencies=[Depends(require_admin)])

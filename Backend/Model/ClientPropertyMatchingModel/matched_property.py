@@ -34,6 +34,21 @@ class MatchedProperty(MatchScore):
     # hold hundreds of thousands of rows and gain no byte from this.
     contact_phones: List[str] = Field(default_factory=list)
     description: Optional[str] = None
+    # The listing's "AVL or Not" toggle, filled from the live listing at read
+    # time exactly like contact_phones above — never stored on the match row,
+    # which is what keeps it free across hundreds of thousands of rows AND
+    # what makes it always current.
+    #
+    # It has nothing to do with matching: an unavailable listing is scored,
+    # ranked, assigned and shown exactly like any other, and flipping the
+    # toggle costs it no place in any shortlist (see
+    # Service/ClientPropertyMatchingService/match_invalidation_service.py's
+    # MATCH_NEUTRAL_FIELDS). It is here so the matches dialogs can MARK the
+    # card, which is the whole of what "not available" does on this surface.
+    #
+    # Defaulted True so a response built from anything that predates this
+    # field reads as available rather than as off the market.
+    is_available: bool = True
     review_status: str
     needs_review: bool
     # What was matched: a WhatsApp-captured/hand-added property ("property")

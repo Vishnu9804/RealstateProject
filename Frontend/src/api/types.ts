@@ -423,6 +423,14 @@ export interface MatchedProperty {
    *  sit beside it is gone from the API, the models and the database. */
   contact_phones: string[];
   description: string | null;
+  /** The listing's "AVL or Not" toggle, read off the LIVE listing every time
+   *  a result is built — never stored with the score. It has nothing to do
+   *  with matching: an unavailable listing keeps its score, its rank, its
+   *  place in every bucket and its assignment, and the cards simply MARK it.
+   *  Optional because a response cached before this field existed has no
+   *  value for it, which must read as "available", not as "off the market" —
+   *  so every check is written `=== false`, never `!is_available`. */
+  is_available?: boolean;
   review_status: "accepted" | "outsider";
   needs_review: boolean;
   /** Property or builder project — decided by the backend from the live

@@ -31,6 +31,7 @@ from datetime import datetime, timedelta, timezone
 from Database import settings_repository
 from Database.session import is_database_configured
 from Middleware import step_logger
+from Service.AgentManagementService import agent_store
 from Service.BackendUsageService import cpu_usage_service
 from Service.BrokerRequirementService import requirement_matching_service
 from Service.ClientPropertyMatchingService import match_candidates, matching_service
@@ -319,6 +320,14 @@ def _recompute_all_clients() -> None:
     each client is compared only against properties added or edited since
     that client was last scored. A night on which nothing was added does no
     work and writes nothing.
+
+    And a listing this client is already ASSIGNED to, or has already
+    COMPLETED a visit to, is never re-scored for them at all — see
+    matching_service.rescore_changed_properties' PROTECTED PAIRS. Without
+    that, this pass was quietly undoing the protection the edit itself
+    applied: an edited property was kept in an assigned client's matches at
+    the moment of the edit, and then dropped (or moved to another bucket) by
+    this run the following morning.
     """
     clients = client_store.get_all_clients(limit=_ALL_CLIENTS_LIMIT)
     if not clients:
@@ -326,12 +335,21 @@ def _recompute_all_clients() -> None:
         return
 
     phones = [client.phone for client in clients]
-    # Two bulk reads for the whole run, instead of per-client lookups: where
-    # each client got to last time, and the requirement vector each already
-    # has stored (unchanged since their last full recompute, by definition —
-    # a requirements edit triggers one immediately).
+    # Four bulk reads for the whole run, instead of per-client lookups: where
+    # each client got to last time, the requirement vector each already has
+    # stored (unchanged since their last full recompute, by definition — a
+    # requirements edit triggers one immediately), and the two id lists that
+    # say which listings are already out with an agent for a client or have
+    # already been visited by them.
+    #
+    # The last two are the same pair of queries the Inquiries table's counts
+    # already run for every client at once (see match_counts_service._build),
+    # against two small tables — one row per site visit, not per match. Once
+    # a night beside a pass that scores thousands of pairs, they are free.
     watermarks = client_store.get_matches_computed_at(phones)
     stored_vectors = client_store.get_requirement_embeddings(phones)
+    assigned_by_phone = agent_store.get_assigned_property_ids_by_client(phones)
+    completed_by_phone = agent_store.get_completed_property_ids_by_client(phones)
     run_started_at = datetime.now(timezone.utc)
 
     step_logger.info(f"[Daily Matching] Scheduled rescore starting for {len(clients)} client(s)...")
@@ -355,6 +373,12 @@ def _recompute_all_clients() -> None:
                 changed,
                 run_started_at,
                 stored_vector=stored_vectors.get(client.phone),
+                # This client's own history — assigned and completed
+                # together, in ONE set, because the rule treats them
+                # identically (exactly as the edit-time purge does, see
+                # Database/edited_property_match_repository.py).
+                protected_record_ids=set(assigned_by_phone.get(client.phone) or ())
+                | set(completed_by_phone.get(client.phone) or ()),
             )
             stamped[client.phone] = run_started_at
             succeeded += 1

@@ -11,6 +11,7 @@ from datetime import datetime
 from typing import Dict, List, Optional, Tuple
 
 from sqlalchemy import delete, func, select
+from sqlalchemy.orm import undefer
 
 from Database.client_models import ClientRow
 from Database.client_session import get_client_session
@@ -57,6 +58,18 @@ FOLLOW_UP_FIELD = "last_follow_up_dates"
 FOLLOW_UP_REPORT_FIELD = "follow_up_report"
 FOLLOW_UP_FIELDS = (FOLLOW_UP_FIELD, FOLLOW_UP_REPORT_FIELD)
 PRESERVED_FIELDS = (*STAFF_DETAIL_FIELDS, *FOLLOW_UP_FIELDS)
+# current_address/about_loan/notes are `deferred=True` on ClientRow (see its
+# own comment) — three free-text columns only the Edit/Detail dialogs ever
+# show, excluded from the Inquiries page's list query so 500 rows don't each
+# carry them over the wire. `additional_phones` stays out of this tuple
+# deliberately: unlike the other three, the list itself searches it (see
+# InquiryClientsPage.tsx), so it is never deferred and always loaded.
+_DEFERRED_STAFF_TEXT_FIELDS = ("current_address", "about_loan", "notes")
+# A single-client read still needs the three fields above, so every call
+# site that fetches ONE row for a full ClientRecord (not a list) passes this
+# as `options=` to load them in that same query rather than triggering a
+# lazy-load round trip the first time _to_pydantic reads one.
+_UNDEFER_STAFF_TEXT = [undefer(getattr(ClientRow, name)) for name in _DEFERRED_STAFF_TEXT_FIELDS]
 # WHERE this client first reached us (see ClientRow.source). Kept out of
 # _COLUMNS because that loop overwrites its columns from the incoming record
 # on every write, and this one is WRITE-ONCE — but it must still be READ on
@@ -88,7 +101,7 @@ def resolve_source(stored: Optional[str], incoming: Optional[str]) -> str:
 
 def get_client_by_phone(phone: str) -> Optional[ClientRecord]:
     with get_client_session() as session:
-        row = session.get(ClientRow, phone)
+        row = session.get(ClientRow, phone, options=_UNDEFER_STAFF_TEXT)
         return _to_pydantic(row) if row is not None else None
 
 
@@ -114,7 +127,7 @@ def upsert_client(
     is the whole point — see PRESERVED_FIELDS. `last_follow_up_dates` is
     never written here at all, by anyone: set_last_follow_up owns it."""
     with get_client_session() as session:
-        row = session.get(ClientRow, record.phone)
+        row = session.get(ClientRow, record.phone, options=_UNDEFER_STAFF_TEXT)
         if row is None:
             row = ClientRow(phone=record.phone)
             session.add(row)
@@ -182,7 +195,13 @@ def get_all_clients(limit: int) -> List[ClientRecord]:
     stmt = select(ClientRow).order_by(ClientRow.created_at.desc()).limit(limit)
     with get_client_session() as session:
         rows = list(session.execute(stmt).scalars().all())
-    return [_to_pydantic(row) for row in rows]
+    # `full=False`: current_address/about_loan/notes are deferred on
+    # ClientRow and were never selected above, so reading them here (this
+    # runs after the session that could lazy-load them has already closed)
+    # would raise DetachedInstanceError, not just cost a query. The
+    # Inquiries table never shows those three anyway — see _UNDEFER_STAFF_TEXT
+    # for where a single-client read gets them back.
+    return [_to_pydantic(row, full=False) for row in rows]
 
 
 def get_all_client_phones(limit: int) -> List[str]:
@@ -312,7 +331,7 @@ def set_last_follow_up(
     None when no client exists for this number — the caller turns that into
     a 404; the automatic stamp treats it as "nothing to record"."""
     with get_client_session() as session:
-        row = session.get(ClientRow, phone)
+        row = session.get(ClientRow, phone, options=_UNDEFER_STAFF_TEXT)
         if row is None:
             return None
         setattr(row, FOLLOW_UP_FIELD, when)
@@ -323,8 +342,19 @@ def set_last_follow_up(
         return _to_pydantic(row)
 
 
-def _to_pydantic(row: ClientRow) -> ClientRecord:
-    data = {name: getattr(row, name) for name in (*_COLUMNS, *PRESERVED_FIELDS, SOURCE_FIELD)}
+def _to_pydantic(row: ClientRow, *, full: bool = True) -> ClientRecord:
+    """`full=False` (get_all_clients only) skips current_address/about_loan/
+    notes: they're `deferred=True` on ClientRow and were never selected for
+    the list query, so reading them here would either lazy-load one query
+    per row (N+1, against a database billed by the round trip) or, once the
+    session that could do that lazy load has closed, raise
+    DetachedInstanceError outright. Left out of `data`, pydantic's own
+    Optional[...] = None default fills them in — exactly what a caller that
+    never asked for them should see."""
+    names = (*_COLUMNS, *PRESERVED_FIELDS, SOURCE_FIELD)
+    if not full:
+        names = tuple(name for name in names if name not in _DEFERRED_STAFF_TEXT_FIELDS)
+    data = {name: getattr(row, name) for name in names}
     # has_photo is a SQL expression loaded with the row (ClientRow.has_photo),
     # so reading it here costs no query and never touches the photo itself.
     return ClientRecord(**data, has_photo=bool(row.has_photo), created_at=row.created_at, updated_at=row.updated_at)

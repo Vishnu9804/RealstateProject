@@ -577,9 +577,10 @@ def _measure_embedding_model() -> Dict[str, Any]:
     if model is None:
         return {
             "loaded": False,
-            "detail": f"{name} is not loaded in this process yet — it loads on the first property embedding or "
-            "match scoring. Once it does, expect ~90 MB of weights here, plus the PyTorch runtime in "
-            "\"runtime & libraries\".",
+            "detail": f"{name} is not in memory right now — it loads on the first property embedding or match "
+            "scoring, and is released again after a stretch with nothing to embed (see "
+            "EMBEDDING_MODEL_IDLE_UNLOAD_MINUTES). While it is loaded, expect ~90 MB of weights here, plus "
+            "the PyTorch runtime in \"runtime & libraries\".",
         }
     parameters = 0
     weight_bytes = 0

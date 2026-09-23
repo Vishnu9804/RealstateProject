@@ -78,11 +78,19 @@ class ClientRow(ClientBase):
     # wiped the next time the client touched the public form. It is written
     # only when upsert_client is explicitly told to (update_staff_fields=True),
     # which only the Inquiries page's own Add/Edit dialog ever passes.
-    current_address: Mapped[Optional[str]] = mapped_column(Text, nullable=True)
+    #
+    # deferred=True for the same cost reason as photo_url/requirement_embedding
+    # below: this is free text staff type by hand, only ever shown in the
+    # Edit/Detail dialogs, and the Inquiries page was loading it for every one
+    # of up to 500 clients on every page open regardless. Database/
+    # client_repository.py excludes it from the list query's columns
+    # (_DEFERRED_STAFF_TEXT_FIELDS) and undefers it explicitly wherever a
+    # single client is read in full (_UNDEFER_STAFF_TEXT).
+    current_address: Mapped[Optional[str]] = mapped_column(Text, nullable=True, deferred=True)
     # Whatever staff noted about this client's loan situation — pre-approved,
     # bank, amount, "cash buyer", anything. Free text, same staff-only
-    # treatment as current_address above.
-    about_loan: Mapped[Optional[str]] = mapped_column(Text, nullable=True)
+    # treatment (and same deferred=True cost reason) as current_address above.
+    about_loan: Mapped[Optional[str]] = mapped_column(Text, nullable=True, deferred=True)
     # Extra numbers for this client, beside the WhatsApp number that is
     # their primary key — a landline, a spouse's number, a second mobile.
     # Free text, NOT verified and NOT normalized: unlike `phone`, nothing
@@ -95,8 +103,9 @@ class ClientRow(ClientBase):
     additional_phones: Mapped[Optional[list]] = mapped_column(JSON(none_as_null=True), nullable=True)
     # Free-form staff notes — a catch-all, unlike current_address/about_loan
     # which are about one specific thing each. Same staff-only treatment:
-    # kept out of _COLUMNS, written only when update_staff_fields=True.
-    notes: Mapped[Optional[str]] = mapped_column(Text, nullable=True)
+    # kept out of _COLUMNS, written only when update_staff_fields=True. Same
+    # deferred=True cost reason as current_address above.
+    notes: Mapped[Optional[str]] = mapped_column(Text, nullable=True, deferred=True)
     # When this client was last followed up with.
     #
     # Stamped automatically the moment the post-site-visit follow-up WhatsApp

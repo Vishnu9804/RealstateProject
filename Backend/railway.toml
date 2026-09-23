@@ -1,0 +1,53 @@
+# Railway configuration for the FastAPI backend.
+#
+# Railway reads this file from the SERVICE'S ROOT DIRECTORY, so the service's
+# "Root Directory" setting in the Railway dashboard must be `Backend` for any
+# of this to apply. (The repository also holds Frontend/, LandingPage/ and
+# Dashboard/, which are deployed to Cloudflare Pages, not here.)
+#
+# Settings made here win over the same settings typed into the dashboard, so
+# this file — not a dashboard field somebody changed once — is where the
+# deployment's shape is decided and reviewed.
+
+[deploy]
+
+# EXACTLY ONE INSTANCE. This is a correctness requirement, not a cost
+# preference, and it must stay 1 however busy the application gets:
+#
+#   - The property snapshot (Service/WhatsAppDataFetchingService/
+#     property_snapshot.py) is this process's single in-memory copy of the
+#     property list, kept current by the same call that performs each write.
+#     A second instance would hold its own copy and would never hear about
+#     the first one's writes, so its dashboard would serve stale properties
+#     indefinitely, with nothing to notice it by.
+#   - The WhatsApp connections are one neonize client per linked number,
+#     bound to the session files on this container's own disk. Two instances
+#     means two clients on one WhatsApp session, which conflicts and can get
+#     the number logged out.
+#   - The daily 6 AM matching run (Service/ClientPropertyMatchingService/
+#     scheduled_recompute_service.py) starts a thread per process, so a
+#     second instance would run it a second time and race the first on the
+#     same match rows.
+#   - The registration-form token store (Service/WhatsAppInquiryHandlingService/
+#     form_token_service.py) is per-process and in memory: a link issued by
+#     one instance would be rejected as invalid by the other.
+#
+# Scaling this service means a bigger instance, never more of them.
+numReplicas = 1
+
+# No --reload (that is the local development flag, and it would restart the
+# server — killing every live WhatsApp connection — whenever a session file
+# was touched; see main.py's docstring) and no --workers, which would fork
+# extra worker processes and reintroduce every problem listed above inside
+# this one container.
+#
+# ${PORT:-8000} rather than a bare $PORT so a missing PORT gives a working
+# server instead of an unreadable uvicorn argument error.
+startCommand = "uvicorn main:app --host 0.0.0.0 --port ${PORT:-8000}"
+
+# The WhatsApp and Instagram connections are meant to be up continuously, so
+# a crashed process should come back by itself. Bounded, so a process that
+# cannot start at all (a bad environment variable, say) stops and is visible
+# as a failure rather than restarting forever.
+restartPolicyType = "ON_FAILURE"
+restartPolicyMaxRetries = 10

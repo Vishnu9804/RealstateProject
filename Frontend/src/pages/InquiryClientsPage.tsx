@@ -294,22 +294,35 @@ export default function InquiryClientsPage() {
         // Backend/Service/LandingPageService/landing_page_service.py's
         // _sync_to_inquiries) — there is no second list to poll here any
         // more, only the one Inquiries table this page has always shown.
-        const statusData = await inquiryClientApi.getStatus();
+        //
+        // On a first load or a manual refresh we already know the heavy
+        // list fetch is needed regardless of what the version says — so it
+        // fires in parallel with the status call instead of waiting for it
+        // to come back first, cutting one full round trip off the wait. A
+        // background poll tick still waits on the version before deciding,
+        // so it never fires the heavy fetch when nothing actually changed.
+        const forceClients = manual || lastClientsVersion.current === null;
+
+        let statusData: InquiryStatusResponse;
+        let clientData: InquiryClientRecord[] | null;
+        if (forceClients) {
+          [statusData, clientData] = await Promise.all([
+            inquiryClientApi.getStatus(),
+            inquiryClientApi.getClients(FETCH_LIMIT),
+          ]);
+        } else {
+          statusData = await inquiryClientApi.getStatus();
+          // clients_version and leads_version are both carried on the
+          // status response and both feed the counts effect below (see
+          // countsVersion) — a new website enquiry can change an EXISTING
+          // client's Matches count without that client's own updated_at
+          // moving at all, so the counts have to watch both.
+          const needsClients = lastClientsVersion.current !== statusData.clients_version;
+          clientData = needsClients ? await inquiryClientApi.getClients(FETCH_LIMIT) : null;
+        }
+
         setInquiryStatus(statusData);
         setError(null);
-
-        // clients_version and leads_version are both carried on the status
-        // response and both feed the counts effect below (see
-        // countsVersion) — a new website enquiry can change an EXISTING
-        // client's Matches count without that client's own updated_at
-        // moving at all, so the counts have to watch both.
-
-        const needsClients =
-          manual ||
-          lastClientsVersion.current === null ||
-          lastClientsVersion.current !== statusData.clients_version;
-
-        const clientData = needsClients ? await inquiryClientApi.getClients(FETCH_LIMIT) : null;
 
         if (clientData !== null) {
           setClients(clientData);

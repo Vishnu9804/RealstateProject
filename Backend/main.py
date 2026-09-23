@@ -61,7 +61,8 @@ from fastapi import Depends, FastAPI, Request
 from fastapi.exceptions import RequestValidationError
 from fastapi.middleware.cors import CORSMiddleware
 from fastapi.middleware.gzip import GZipMiddleware
-from fastapi.responses import JSONResponse
+from fastapi.openapi.docs import get_redoc_html, get_swagger_ui_html
+from fastapi.responses import HTMLResponse, JSONResponse
 
 if sys.platform == "win32":
     # The default Windows console codepage (cp1252) can't render the
@@ -105,6 +106,7 @@ from Config.settings import get_settings
 from Database.session import init_db, is_database_configured
 from Middleware.cpu_meter import CpuMeterMiddleware, install_threadpool_meter
 from Middleware.dashboard_access import require_dashboard_key
+from Middleware.docs_access import require_docs_auth
 from Middleware.logging_config import configure_logging
 from Middleware.public_rate_limit import PublicRateLimitMiddleware
 from Middleware import step_logger
@@ -300,7 +302,17 @@ async def lifespan(_app: FastAPI):
     threading.Timer(2.0, lambda: os._exit(0)).start()
 
 
-app = FastAPI(title="Real Estate WhatsApp Ingestion API", lifespan=lifespan)
+# docs_url/redoc_url/openapi_url are all disabled here (None) — FastAPI's
+# defaults serve them with no login at all, which is fine on localhost but
+# not once this API is hosted somewhere public. Protected replacements for
+# all three are registered further down, behind require_docs_auth.
+app = FastAPI(
+    title="Real Estate WhatsApp Ingestion API",
+    lifespan=lifespan,
+    docs_url=None,
+    redoc_url=None,
+    openapi_url=None,
+)
 
 # The frontend (Frontend/, Vite dev server) runs on a different origin than
 # this API, so without CORS the browser blocks every request from it — a
@@ -335,6 +347,14 @@ _cors_origins = [
 if get_settings().frontend_lan_origin:
     _cors_origins.append(get_settings().frontend_lan_origin)
     _cors_origins.append(get_settings().frontend_lan_origin.replace(":5173", ":5174"))
+
+# The real, deployed frontend origin(s) — Cloudflare Pages domains — once
+# they're hosted (EXTRA_CORS_ORIGINS in .env, comma-separated). Empty by
+# default, so nothing changes until it's explicitly set.
+if get_settings().extra_cors_origins:
+    _cors_origins.extend(
+        origin.strip() for origin in get_settings().extra_cors_origins.split(",") if origin.strip()
+    )
 
 # A ceiling on the handful of endpoints an anonymous stranger can call — see
 # Middleware/public_rate_limit.py for exactly which, and why the budgets are
@@ -383,6 +403,25 @@ app.add_middleware(GZipMiddleware, minimum_size=1024)
 # changes a request or a response.
 app.add_middleware(CpuMeterMiddleware)
 install_threadpool_meter()
+
+
+# Protected replacements for the docs FastAPI would otherwise serve for free
+# at these same three paths — see Middleware/docs_access.py's docstring for
+# why. include_in_schema=False so these three don't list themselves in their
+# own API surface.
+@app.get("/openapi.json", include_in_schema=False, dependencies=[Depends(require_docs_auth)])
+def _protected_openapi_schema() -> dict:
+    return app.openapi()
+
+
+@app.get("/docs", include_in_schema=False, dependencies=[Depends(require_docs_auth)])
+def _protected_swagger_ui() -> HTMLResponse:
+    return get_swagger_ui_html(openapi_url="/openapi.json", title=f"{app.title} - Swagger UI")
+
+
+@app.get("/redoc", include_in_schema=False, dependencies=[Depends(require_docs_auth)])
+def _protected_redoc_ui() -> HTMLResponse:
+    return get_redoc_html(openapi_url="/openapi.json", title=f"{app.title} - ReDoc")
 
 
 @app.exception_handler(RequestValidationError)
@@ -444,7 +483,7 @@ app.include_router(display_settings_router, prefix="/api", dependencies=[Depends
 app.include_router(property_router, prefix="/api", dependencies=[Depends(get_current_user)])
 app.include_router(soldout_property_router, prefix="/api", dependencies=[Depends(get_current_user)])
 app.include_router(broker_requirement_router, prefix="/api", dependencies=[Depends(get_current_user)])
-app.include_router(builder_project_router, prefix="/api")
+app.include_router(builder_project_router, prefix="/api", dependencies=[Depends(get_current_user)])
 app.include_router(whatsapp_inquiry_router, prefix="/api", dependencies=[Depends(get_current_user)])
 app.include_router(property_share_router, prefix="/api", dependencies=[Depends(get_current_user)])
 app.include_router(inquiry_form_router, prefix="/api")

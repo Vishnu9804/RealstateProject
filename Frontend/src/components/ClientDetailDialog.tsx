@@ -1,5 +1,6 @@
-import { useEffect } from "react";
+import { useEffect, useState } from "react";
 import { createPortal } from "react-dom";
+import { inquiryClientApi } from "../api/inquiryClientApi";
 import type { InquiryClientRecord } from "../api/types";
 import { formatCompactInr, formatIst, relativeTime } from "../lib/formatters";
 import { formatPhone } from "../lib/phone";
@@ -55,6 +56,32 @@ export default function ClientDetailDialog({
     return () => document.removeEventListener("keydown", onKeyDown);
   }, [onClose]);
 
+  // current_address/about_loan/notes never travel with the Inquiries list
+  // (Backend/Database/client_models.py's ClientRow marks them deferred —
+  // three free-text columns nothing but this dialog and the Edit dialog show,
+  // no longer worth 500 clients' worth of bytes on every page load/poll).
+  // Everything else renders instantly off the row `client` already passed
+  // in; only these three catch up once this one-client fetch resolves.
+  const [details, setDetails] = useState<InquiryClientRecord>(client);
+  const [detailsLoading, setDetailsLoading] = useState(true);
+  useEffect(() => {
+    setDetails(client);
+    setDetailsLoading(true);
+    let cancelled = false;
+    inquiryClientApi
+      .getClient(client.phone)
+      .then((full) => {
+        if (!cancelled) setDetails(full);
+      })
+      .catch(() => undefined)
+      .finally(() => {
+        if (!cancelled) setDetailsLoading(false);
+      });
+    return () => {
+      cancelled = true;
+    };
+  }, [client]);
+
   return createPortal(
     <div className="modal-scrim" onMouseDown={(event) => event.target === event.currentTarget && onClose()}>
       <div className="detail-modal anim-rise" role="dialog" aria-modal="true" aria-label="Client details">
@@ -107,7 +134,7 @@ export default function ClientDetailDialog({
           </button>
         </div>
         <div className="detail-modal__body">
-          <ClientDetail client={client} />
+          <ClientDetail client={details} loading={detailsLoading} />
         </div>
         <div className="detail-modal__foot">
           <Button variant="ghost" onClick={onClose}>
@@ -115,7 +142,7 @@ export default function ClientDetailDialog({
           </Button>
           {onEdit && (
             <span style={{ marginLeft: "auto" }}>
-              <Button variant="ghost" icon={<IconEdit size={14} />} onClick={() => onEdit(client)}>
+              <Button variant="ghost" icon={<IconEdit size={14} />} onClick={() => onEdit(details)}>
                 Edit
               </Button>
             </span>
@@ -172,8 +199,13 @@ function When({ iso }: { iso: string | null }) {
   );
 }
 
-function ClientDetail({ client }: { client: InquiryClientRecord }) {
+function ClientDetail({ client, loading }: { client: InquiryClientRecord; loading: boolean }) {
   const hasBudget = client.budget_min_inr !== null || client.budget_max_inr !== null;
+  // current_address/about_loan/notes arrive a beat after everything else on
+  // this card (see the fetch above) — while that's in flight they read
+  // "Loading…" rather than "—", so a client that genuinely has none typed in
+  // is never mistaken for one this dialog hasn't heard back about yet.
+  const staffText = (value: string | null) => (loading ? "Loading…" : value || "—");
   return (
     <div className="detail">
       <div className="detail__grid">
@@ -242,12 +274,12 @@ function ClientDetail({ client }: { client: InquiryClientRecord }) {
           <div className="detail__k">
             <IconPin size={11} /> Current address
           </div>
-          <div className="detail__v">{client.current_address || "—"}</div>
+          <div className="detail__v">{staffText(client.current_address)}</div>
         </div>
 
         <div className="detail__block">
           <div className="detail__k">Loan</div>
-          <div className="detail__v">{client.about_loan || "—"}</div>
+          <div className="detail__v">{staffText(client.about_loan)}</div>
         </div>
 
         {/* Exact instants, not "3 days ago" alone: the follow-up stamp is
@@ -316,10 +348,10 @@ function ClientDetail({ client }: { client: InquiryClientRecord }) {
           </div>
         )}
 
-        {client.notes && (
+        {(loading || client.notes) && (
           <div className="detail__block detail__block--full">
             <div className="detail__k">Notes</div>
-            <div className="detail__note detail__note--tall">{client.notes}</div>
+            <div className="detail__note detail__note--tall">{loading ? "Loading…" : client.notes}</div>
           </div>
         )}
       </div>

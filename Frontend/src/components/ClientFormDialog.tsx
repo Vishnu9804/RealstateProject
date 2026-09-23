@@ -408,10 +408,52 @@ export default function ClientFormDialog({
   onSaved: (client: InquiryClientRecord, mode: "add" | "edit") => void;
 }) {
   const toast = useToast();
-  const [initial] = useState<FormState>(() => (mode === "edit" && client ? toFormState(client) : BLANK_FORM));
+  const [initial, setInitial] = useState<FormState>(() => (mode === "edit" && client ? toFormState(client) : BLANK_FORM));
   const [form, setForm] = useState<FormState>(initial);
   const [saving, setSaving] = useState(false);
   const [formError, setFormError] = useState<string | null>(null);
+
+  // current_address/about_loan/notes never travel with the Inquiries list
+  // any more (Backend/Database/client_models.py's ClientRow marks them
+  // deferred — see ClientDetailDialog.tsx's own comment on why), so the
+  // `client` this dialog opened with never carries them; `initial`/`form`
+  // above start with those three blank. Fetching the one full record fills
+  // them in — into `initial` too, so a save that never touches them still
+  // diffs against what's really stored instead of against a blank stand-in
+  // that would read as "changed" the moment something real is typed in.
+  // Disabled rather than silently left blank while this is in flight (or if
+  // it fails) so nobody types over saved content they haven't actually seen.
+  const [detailsLoading, setDetailsLoading] = useState(mode === "edit");
+  const [detailsError, setDetailsError] = useState<string | null>(null);
+  const staffFieldsLocked = mode === "edit" && (detailsLoading || Boolean(detailsError));
+  useEffect(() => {
+    if (mode !== "edit" || !client) return;
+    let cancelled = false;
+    inquiryClientApi
+      .getClient(client.phone)
+      .then((full) => {
+        if (cancelled) return;
+        const patch = {
+          current_address: full.current_address ?? "",
+          about_loan: full.about_loan ?? "",
+          notes: full.notes ?? "",
+        };
+        setInitial((prev) => ({ ...prev, ...patch }));
+        setForm((prev) => ({ ...prev, ...patch }));
+      })
+      .catch((err) => {
+        if (!cancelled) setDetailsError(friendlyError(err));
+      })
+      .finally(() => {
+        if (!cancelled) setDetailsLoading(false);
+      });
+    return () => {
+      cancelled = true;
+    };
+    // Once, for the client this dialog was opened on — same as the photo
+    // fetch just below.
+    // eslint-disable-next-line react-hooks/exhaustive-deps
+  }, []);
   // Everything the LAST Save attempt refused, together, in the pinned bar
   // above the footer -- see components/ui/FormIssues.
   const [issues, setIssues] = useState<FieldIssue[]>([]);
@@ -866,7 +908,13 @@ export default function ClientFormDialog({
             <Field
               label="Current address"
               htmlFor="client-form-current-address"
-              hint="Where they live now — not what they're looking for."
+              hint={
+                detailsLoading
+                  ? "Loading…"
+                  : detailsError
+                    ? `Couldn't load this field (${detailsError}) — close and reopen Edit to try again.`
+                    : "Where they live now — not what they're looking for."
+              }
             >
               <textarea
                 id="client-form-current-address"
@@ -875,12 +923,22 @@ export default function ClientFormDialog({
                 value={form.current_address}
                 onChange={(event) => set("current_address", event.target.value)}
                 placeholder="e.g. B-402, Shilp Residency, Vesu"
-                disabled={saving}
+                disabled={saving || staffFieldsLocked}
                 maxLength={500}
               />
             </Field>
 
-            <Field label="Loan" htmlFor="client-form-about-loan" hint="Optional — pre-approval, bank, amount, cash buyer.">
+            <Field
+              label="Loan"
+              htmlFor="client-form-about-loan"
+              hint={
+                detailsLoading
+                  ? "Loading…"
+                  : detailsError
+                    ? `Couldn't load this field (${detailsError}) — close and reopen Edit to try again.`
+                    : "Optional — pre-approval, bank, amount, cash buyer."
+              }
+            >
               <textarea
                 id="client-form-about-loan"
                 className="textarea"
@@ -888,12 +946,22 @@ export default function ClientFormDialog({
                 value={form.about_loan}
                 onChange={(event) => set("about_loan", event.target.value)}
                 placeholder="e.g. HDFC pre-approved up to 60L"
-                disabled={saving}
+                disabled={saving || staffFieldsLocked}
                 maxLength={500}
               />
             </Field>
 
-            <Field label="Notes" htmlFor="client-form-notes-field" hint="Optional — anything else worth keeping on file about this client.">
+            <Field
+              label="Notes"
+              htmlFor="client-form-notes-field"
+              hint={
+                detailsLoading
+                  ? "Loading…"
+                  : detailsError
+                    ? `Couldn't load this field (${detailsError}) — close and reopen Edit to try again.`
+                    : "Optional — anything else worth keeping on file about this client."
+              }
+            >
               <textarea
                 id="client-form-notes-field"
                 className="textarea"
@@ -901,7 +969,7 @@ export default function ClientFormDialog({
                 value={form.notes}
                 onChange={(event) => set("notes", event.target.value)}
                 placeholder="e.g. Prefers evening calls, referred by Mehta Realty…"
-                disabled={saving}
+                disabled={saving || staffFieldsLocked}
                 maxLength={2000}
               />
             </Field>

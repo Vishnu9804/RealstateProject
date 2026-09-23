@@ -232,6 +232,28 @@ class Settings(BaseSettings):
     instagram_daily_comment_limit: int = Field(default=10, ge=0)
     instagram_daily_dm_limit: int = Field(default=10, ge=0)
 
+    # --- embedding model memory (Service/WhatsAppDataFetchingService/
+    # embedding_service.py) ---
+    #
+    # How long the sentence-transformers model may sit unused before it is
+    # released from memory, in MINUTES. It reloads automatically on the next
+    # embedding (a second or two, from the on-disk model cache), so nothing
+    # it PRODUCES changes — same model, same weights, same vectors. The only
+    # thing this changes is how much RAM this process holds while nobody is
+    # saving anything.
+    #
+    # It is a setting rather than a constant because the right number is a
+    # property of how the hosting bills RAM and of how bursty the working
+    # day is, neither of which is a fact about the code. Embedding happens
+    # only when a property, builder project, client requirement or broker
+    # requirement is saved: clustered during the day, silent overnight.
+    #
+    # Set to 0 to switch releasing off entirely — the model then stays
+    # loaded from its first use until the process exits, exactly as it
+    # behaved before this setting existed. Same "0 turns it off" convention
+    # as the daily allowances above.
+    embedding_model_idle_unload_minutes: int = Field(default=15, ge=0)
+
     # Whether the Settings page may change the selected areas
     # (ALLOW_AREA_CHANGE in .env). False by default: the area list decides
     # which captured properties are Main vs Outsider, so editing it is locked
@@ -246,6 +268,24 @@ class Settings(BaseSettings):
     # hosting: the Message to Model feed carries raw WhatsApp message text.
     # The Dashboard must be built with the same value as VITE_DASHBOARD_KEY.
     dashboard_key: str = ""
+
+    # HTTP Basic Auth credentials required to open /docs, /redoc and
+    # /openapi.json (see Middleware/docs_access.py) — without these, once
+    # this backend is hosted somewhere public, anyone with the URL can browse
+    # the entire API surface (every route, every request/response shape)
+    # with no login at all. Blank (the default) leaves them open, same
+    # convention as dashboard_key above — fine on your own machine. Set BOTH
+    # before hosting.
+    docs_username: str = ""
+    docs_password: str = ""
+
+    # Comma-separated list of extra frontend origins the CORS allow-list
+    # accepts, on top of the hardcoded localhost ones and the auto-detected
+    # LAN origin above — this is where the real Cloudflare Pages domain(s)
+    # go once the frontend(s) are hosted, e.g.
+    # "https://real-estate-ops.pages.dev,https://real-estate-site.pages.dev".
+    # Leave blank in local development.
+    extra_cors_origins: str = ""
 
     @model_validator(mode="after")
     def _fill_lan_defaults(self) -> "Settings":

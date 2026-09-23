@@ -575,18 +575,26 @@ def get_all_agents_with_stats() -> List[AgentSummary]:
     agent_repository.get_all_agents_with_active_clients) rather than two
     separate round trips, since each round trip to Neon costs real,
     user-visible latency; completed visits are a second, small query
-    grouped in afterward. The in-memory fallback has no such cost, so it
-    stays a plain Python-side grouping throughout."""
-    visits_by_agent: Dict[str, List[VisitRecord]] = {}
-    for visit in _get_all_visits():
-        visits_by_agent.setdefault(visit.agent_id, []).append(visit)
-
+    grouped in afterward — but only when there is at least one agent to
+    attach them to. An empty roster would otherwise still pay for a full
+    scan of agent_visits just to build an empty map nothing ends up
+    reading. The in-memory fallback has no such cost, so it stays a plain
+    Python-side grouping throughout."""
     if is_client_database_configured():
         agents = agent_repository.get_all_agents_with_active_clients()
+        if not agents:
+            return agents
+        visits_by_agent: Dict[str, List[VisitRecord]] = {}
+        for visit in _get_all_visits():
+            visits_by_agent.setdefault(visit.agent_id, []).append(visit)
         for agent in agents:
             agent.completed_visits = visits_by_agent.get(agent.agent_id, [])
             agent.visits_this_month = _visits_this_month(agent.completed_visits)
         return agents
+
+    visits_by_agent: Dict[str, List[VisitRecord]] = {}
+    for visit in _get_all_visits():
+        visits_by_agent.setdefault(visit.agent_id, []).append(visit)
 
     assignments_by_agent: Dict[str, List[AssignedClientSummary]] = {}
     for assignment in _assignments:

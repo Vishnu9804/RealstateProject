@@ -235,6 +235,7 @@ def post_with_retries(
     site: str,
     usage_sink: Optional[List[dict]] = None,
     failure: Optional[dict] = None,
+    priority: bool = False,
 ) -> Optional[str]:
     """Sends `request_body` and returns the model's raw reply text, retrying
     on transient failures only. Returns None once every attempt has failed.
@@ -263,7 +264,12 @@ def post_with_retries(
 
     `failure`, when given, has ["reason"] set to a short human explanation if
     this returns None — the caller passes it on to the durable retry queue so
-    a held batch records WHY it is waiting."""
+    a held batch records WHY it is waiting.
+
+    `priority`, when True, lets this call jump ahead of any already-queued
+    non-priority call for the NEXT slot once the current one frees — see
+    glm_gate.slot. Only inquiry_classifier.py sets this; every other caller
+    keeps the default and queues FIFO exactly as before."""
     client = _get_client()
     model = request_body.get("model") or get_settings().zai_model
 
@@ -272,7 +278,7 @@ def post_with_retries(
 
     while True:
         try:
-            with glm_gate.slot(description):
+            with glm_gate.slot(description, priority=priority):
                 content, usage = _stream_completion(client, request_body)
         except httpx.HTTPStatusError as exc:
             status = exc.response.status_code

@@ -568,9 +568,13 @@ def update_requirement(record_id: str, content_updates: Dict[str, Any]) -> Optio
     # torn down and rebuilt to arrive at the same answer.
     #
     # Swallowed for the same reason as delete_requirement's cache eviction: a
-    # matching failure must never turn a saved edit into an error (and the
-    # next time the matches are opened, the changed text is detected and
-    # they are re-scored anyway).
+    # matching failure must never turn a saved edit into an error. The
+    # requirement's dialog is a cache-only read (get_matches_for_requirement)
+    # and will not retry this on its own — a stuck failure here needs either
+    # the dialog's manual Refresh or the nightly catch-up (which only
+    # revisits a requirement once some property changes) to clear. The same
+    # accepted risk client_store.upsert_client's own swallowed recompute
+    # carries; a transient failure here is exactly as rare.
     if moved - MATCH_NEUTRAL_REQUIREMENT_FIELDS:
         try:
             from Service.BrokerRequirementService import requirement_matching_service

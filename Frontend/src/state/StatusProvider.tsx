@@ -25,9 +25,13 @@ interface StatusContextValue {
    *  from "the backend is genuinely down" and only alarm the user for the
    *  latter. */
   failures: number;
+  /** When the status last CHANGED — not when it was last checked. A poll
+   *  that comes back identical deliberately updates nothing at all (see
+   *  `load` below), so this does not move on a quiet tick. */
   lastUpdated: Date | null;
   refresh: () => void;
 }
+
 
 const StatusContext = createContext<StatusContextValue | null>(null);
 
@@ -55,6 +59,9 @@ export function StatusProvider({ children }: { children: React.ReactNode }) {
   const [lastUpdated, setLastUpdated] = useState<Date | null>(null);
   const [initialLoading, setInitialLoading] = useState(true);
   const inFlight = useRef(false);
+  // The serialised form of the last payload that actually changed — see
+  // `load` for why the comparison cannot read `status` directly.
+  const lastPayload = useRef("");
 
   const load = useCallback(async () => {
     // A slow backend must not queue up overlapping polls; skipping a tick is
@@ -63,10 +70,39 @@ export function StatusProvider({ children }: { children: React.ReactNode }) {
     inFlight.current = true;
     try {
       const data = await whatsappApi.getStatus();
-      setStatus(data);
+      // A tick that changed nothing must cost nothing.
+      //
+      // This poll runs for the whole time the app is open, on every internal
+      // page, and its result is shared through a context that Layout and
+      // every page below it read. Setting state unconditionally meant a new
+      // object and a new Date every few seconds, which re-rendered the
+      // header AND the entire open page — a table of rows, its badges and
+      // its pills — on a timer, whether or not a single number had moved.
+      //
+      // That work is not free and it does not wait its turn: landing in the
+      // middle of a hover or a press, it is exactly what makes a 140ms
+      // transition drop frames and read as "late". The overwhelming majority
+      // of ticks are identical to the one before, so the overwhelming
+      // majority of that work was for nothing.
+      //
+      // The comparison is against a serialised copy held in a ref rather
+      // than against `status` from this closure, which `useCallback([])`
+      // pins to its first value forever — comparing against that would
+      // always report "changed" and quietly do nothing at all. The payload
+      // is a flat bag of counters and version strings built by the same
+      // backend function in the same order every time (see
+      // whatsapp_service.get_status), so comparing serialised forms is both
+      // exact and far cheaper than the render it avoids.
+      const serialized = JSON.stringify(data);
+      if (serialized !== lastPayload.current) {
+        lastPayload.current = serialized;
+        setStatus(data);
+        setLastUpdated(new Date());
+      }
+      // Both no-ops once already settled: React skips the re-render when a
+      // setter is handed the value the state already holds.
       setError(null);
       setFailures(0);
-      setLastUpdated(new Date());
     } catch (err) {
       setError(friendlyError(err));
       setFailures((count) => count + 1);

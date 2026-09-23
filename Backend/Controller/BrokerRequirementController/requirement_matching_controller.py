@@ -30,10 +30,11 @@ def get_requirement_match_counts(limit: int = 500) -> Dict[str, int]:
 
 @router.get("/requirements/{record_id}", response_model=RequirementMatchResult)
 def get_requirement_matches(record_id: str) -> RequirementMatchResult:
-    """The stored matches for ONE broker requirement, brought current before
-    they are returned: only properties added or edited since it was last
-    scored are scored now, and the store is written only when that changed
-    something (see requirement_matching_service.get_matches_for_requirement).
+    """The stored matches for ONE broker requirement, read from cache only —
+    no scoring, no write (see requirement_matching_service.
+    get_matches_for_requirement). Mirrors the client side's cache-only
+    /clients/{phone}; a requirement is brought current on creation, on a
+    match-relevant edit, and by the nightly catch-up, never by this read.
 
     Has a distinct literal prefix from the client routes' /clients/{phone},
     so no route-order ambiguity exists between the two routers."""

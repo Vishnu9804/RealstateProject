@@ -17,7 +17,9 @@ stage (see find_message_ids_by_fingerprints).
 
 from __future__ import annotations
 
-from typing import Any, Collection, Dict, List, Optional
+import threading
+import time
+from typing import Any, Collection, Dict, List, Optional, Tuple
 
 from Database import broker_requirement_repository
 from Database.session import is_database_configured
@@ -52,6 +54,7 @@ def add_requirements(requirements: List[StructuredRequirement]) -> None:
         return
     if is_database_configured():
         broker_requirement_repository.add_requirements(requirements)
+        _invalidate_summary()
         return
     global _version_counter
     _version_counter += 1
@@ -103,25 +106,90 @@ def get_requirement(record_id: str) -> Optional[StructuredRequirement]:
     return None
 
 
+# --- the status poll's two numbers -----------------------------------------
+#
+# WHY THESE ARE CACHED AT ALL
+#
+# get_requirement_count() and get_requirements_version() are both read on
+# EVERY /whatsapp/status tick (see WhatsAppDataFetchingService/
+# whatsapp_service.get_status), which every open page polls every few
+# seconds for as long as it is open. They were the only two numbers on that
+# response still answered by a database round trip: the property count and
+# version come from the in-memory snapshot, the sold-out and builder-project
+# pairs from their own caches. So this table was being asked the same two
+# questions all day, and — because each of them ran its OWN aggregate — it
+# was asked twice per tick for numbers one query already produces together.
+#
+# That is the same waste client_store.get_clients_summary was written to end
+# on the clients table, and this is the same fix: one read, both numbers,
+# held briefly.
+#
+# WHY A HELD VALUE IS NOT STALE
+#
+# Every write path in this module drops it (see _invalidate_summary), and
+# this application is single-process by deployment (see Backend/railway.toml's
+# numReplicas) — so a requirement added, edited or deleted here, or arriving
+# on the WhatsApp intake thread, is reflected on the very next read. The TTL
+# is only a backstop for a change made outside this process entirely (a row
+# edited by hand in Neon's console), and it bounds that to seconds.
+_SUMMARY_TTL_SECONDS = 30.0
+
+_summary_lock = threading.Lock()
+_summary: Optional[Tuple[int, str]] = None
+_summary_at = 0.0
+
+
+def _requirements_summary() -> Tuple[int, str]:
+    """(count, version) from ONE aggregate, held for _SUMMARY_TTL_SECONDS.
+
+    The lock is held across the read deliberately: several status polls
+    landing together should produce one query and share its answer, not one
+    query each.
+    """
+    global _summary, _summary_at
+    if not is_database_configured():
+        return len(_requirements), f"{len(_requirements)}:{_version_counter}"
+    with _summary_lock:
+        if _summary is not None and (time.monotonic() - _summary_at) < _SUMMARY_TTL_SECONDS:
+            return _summary
+        # This one query already computes the count on its way to the newest
+        # updated_at, which is exactly why the separate count query above it
+        # was redundant — see client_repository.get_clients_version for the
+        # same observation on the clients table.
+        count, latest = broker_requirement_repository.get_requirements_version()
+        _summary = (count, f"{count}:{latest.isoformat() if latest else '0'}")
+        _summary_at = time.monotonic()
+        return _summary
+
+
+def _invalidate_summary() -> None:
+    """Drops the held pair so the next read is a fresh one. Called by every
+    write path below; a path that forgot to call it would show a number up to
+    _SUMMARY_TTL_SECONDS old, never a wrong one that persists."""
+    global _summary, _summary_at
+    with _summary_lock:
+        _summary = None
+        _summary_at = 0.0
+
+
 def get_requirement_count() -> int:
-    if is_database_configured():
-        return broker_requirement_repository.get_requirement_count()
-    return len(_requirements)
+    return _requirements_summary()[0]
 
 
 def get_requirements_version() -> str:
     """A single comparable string the Broker Requirements page can hold onto
     and diff against. Callers never need to parse this, only check it for
     equality against what they last saw."""
-    if is_database_configured():
-        count, latest = broker_requirement_repository.get_requirements_version()
-        return f"{count}:{latest.isoformat() if latest else '0'}"
-    return f"{len(_requirements)}:{_version_counter}"
+    return _requirements_summary()[1]
 
 
 def update_requirement(record_id: str, content_updates: Dict[str, Any]) -> Optional[StructuredRequirement]:
     if is_database_configured():
-        return broker_requirement_repository.update_requirement(record_id, content_updates)
+        updated = broker_requirement_repository.update_requirement(record_id, content_updates)
+        # An edit moves the row's updated_at, which IS the version — so this
+        # has to drop the held pair even though the count is unchanged.
+        _invalidate_summary()
+        return updated
     global _version_counter
     for requirement in _requirements:
         if requirement.record_id == record_id:
@@ -141,11 +209,17 @@ def save_requirement_embedding(record_id: str, embedding: List[float]) -> None:
     deployment always has DATABASE_URL set)."""
     if is_database_configured():
         broker_requirement_repository.save_requirement_embedding(record_id, embedding)
+        # Writing a vector can move the row's updated_at too, and the version
+        # is built from exactly that — so the held pair goes, for the same
+        # reason an edit drops it.
+        _invalidate_summary()
 
 
 def delete_requirement(record_id: str) -> bool:
     if is_database_configured():
-        return broker_requirement_repository.delete_requirement(record_id)
+        deleted = broker_requirement_repository.delete_requirement(record_id)
+        _invalidate_summary()
+        return deleted
     global _version_counter
     for index, requirement in enumerate(_requirements):
         if requirement.record_id == record_id:

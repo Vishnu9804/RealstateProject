@@ -49,6 +49,25 @@ the order of seconds to ~45s — so the queue this creates is almost always
 empty, and when it isn't, waiting for a slot is strictly faster than being
 rejected and then waiting out a retry backoff.
 
+Priority lane
+-------------
+A bulk property import queues several batches back to back (observed:
+~75 properties -> 7-8 batches, each holding the single slot for up to
+~45s), and plain FIFO ordering meant an inquiry classification call that
+arrived mid-import queued up behind ALL of them — a person waiting on a
+WhatsApp reply stuck for minutes behind a background job nobody is
+watching in real time. `slot(..., priority=True)` (used only by
+inquiry_classifier.py) fixes the ORDER of the queue, not the gate itself:
+when the current holder releases the slot, a priority waiter is handed it
+next regardless of arrival order versus non-priority waiters. It never
+preempts a call already in flight — the in-flight request always finishes
+normally, so a property batch is never interrupted or corrupted by this.
+Because priority calls are rare, small (one message, ~300 max_tokens) and
+fast, this costs a property/requirement batch at most the time the
+CURRENTLY in-flight call takes to finish, not the whole backlog — and
+non-priority callers still queue strictly FIFO among themselves, so two
+property batches never reorder relative to each other.
+
 Sizing: a single in-flight request is the setting that cannot be wrong,
 whatever plan the account is on. Raise _MAX_CONCURRENT_REQUESTS only after
 confirming a higher concurrency allowance with Z.ai.
@@ -104,7 +123,19 @@ _COOLDOWN_BY_CODE = {
     _CODE_DAILY_LIMIT_REACHED: _MAX_COOLDOWN_SECONDS,
 }
 
-_slots = threading.BoundedSemaphore(_MAX_CONCURRENT_REQUESTS)
+# Replaces a plain threading.BoundedSemaphore: a semaphore wakes whichever
+# waiter the OS/GIL happens to schedule next, which is FIFO-ish but gives no
+# way to let a priority caller jump the queue. A Condition over the same
+# kind of state a semaphore holds (a count of free slots) gets both: still
+# exactly _MAX_CONCURRENT_REQUESTS in flight at once, same as before, but the
+# NEXT slot goes to a priority waiter first if one is waiting — see "Priority
+# lane" above. This governs only queue order; it never touches a call that
+# is already in flight, so an in-progress batch always runs to completion
+# exactly as it did before this existed.
+_slot_cv = threading.Condition()
+_slots_in_use = 0
+_priority_waiting = 0
+
 _state_lock = threading.Lock()
 _earliest_next_start = 0.0
 _cooldown_until = 0.0
@@ -112,10 +143,43 @@ _cooldown_note = ""
 _waiting_callers = 0
 
 
+def _acquire_slot(priority: bool) -> None:
+    global _slots_in_use, _priority_waiting
+    with _slot_cv:
+        if priority:
+            _priority_waiting += 1
+        try:
+            # A non-priority caller also waits while a priority caller is
+            # queued, even if a slot is free the instant it checks — that's
+            # what lets the priority caller be handed the slot next instead
+            # of racing it. Rechecked in a loop (not a single wait) because
+            # notify_all wakes every waiter and only one should proceed.
+            while _slots_in_use >= _MAX_CONCURRENT_REQUESTS or (not priority and _priority_waiting > 0):
+                _slot_cv.wait()
+            _slots_in_use += 1
+        finally:
+            if priority:
+                _priority_waiting -= 1
+
+
+def _release_slot() -> None:
+    global _slots_in_use
+    with _slot_cv:
+        _slots_in_use -= 1
+        _slot_cv.notify_all()
+
+
 @contextmanager
-def slot(description: str) -> Iterator[None]:
+def slot(description: str, priority: bool = False) -> Iterator[None]:
     """Holds one of the process's GLM request slots for the duration of the
     block, after waiting out any cool-down another caller is serving.
+
+    `priority=True` is for a call a person is waiting on right now (inquiry
+    classification) rather than an unattended background batch job (property/
+    requirement structuring). It only changes which queued waiter gets the
+    NEXT slot when the current one frees up — see the "Priority lane" note
+    in this module's docstring. Non-priority callers still queue FIFO among
+    themselves.
 
     Always released, including when the request inside raises — which is
     what lets a caller sleep out its retry backoff without holding the slot
@@ -127,17 +191,18 @@ def slot(description: str) -> Iterator[None]:
         queued_ahead = _waiting_callers - 1
     if queued_ahead > 0:
         step_logger.info(
-            f"Holding {description} — {queued_ahead} other GLM request(s) already queued. "
-            "Requests go out one at a time on purpose; sending them together is what Z.ai "
-            "answers with HTTP 429."
+            f"Holding {description} — {queued_ahead} other GLM request(s) already queued"
+            + (", jumping the queue (priority)" if priority else "")
+            + ". Requests go out one at a time on purpose; sending them together is what "
+            "Z.ai answers with HTTP 429."
         )
 
-    _slots.acquire()
+    _acquire_slot(priority)
     try:
         _wait_for_clear_window()
         yield
     finally:
-        _slots.release()
+        _release_slot()
         with _state_lock:
             _waiting_callers -= 1
 

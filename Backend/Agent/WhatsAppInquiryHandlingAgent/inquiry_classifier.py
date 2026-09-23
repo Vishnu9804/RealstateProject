@@ -72,6 +72,11 @@ def classify_batch(messages: List[InquiryChatMessage]) -> InquiryClassification:
         "an inquiry classification batch",
         site="intent",
         failure=failure,
+        # A person is waiting on this reply right now, unlike a background
+        # property/requirement batch — jump the gate's queue so a bulk
+        # import never makes an inquiry wait behind the whole backlog. See
+        # glm_gate.py's "Priority lane" note.
+        priority=True,
     )
     if content is None:
         reason = failure.get("reason") or "classification request failed"

@@ -106,7 +106,14 @@ export default function LandingPagePage() {
 
   const load = useCallback(
     async (manual = false) => {
-      setRefreshing(true);
+      // Only a refresh the operator ASKED for says so. A background poll
+      // announcing itself flipped this header between "Syncing…" and
+      // "Updated …", and put the Refresh button into its busy state, every
+      // few seconds for as long as the page was open — two whole re-renders
+      // per tick to report that nothing had happened. setRefreshing(false)
+      // below stays unconditional and is simply a no-op unless a manual
+      // refresh set it.
+      if (manual) setRefreshing(true);
       try {
         const data = await propertyApi.getProperties(FETCH_LIMIT);
         setProperties(data);

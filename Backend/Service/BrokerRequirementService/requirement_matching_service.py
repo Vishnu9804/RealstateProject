@@ -62,15 +62,6 @@ not anyone has opened it — the basis for match counts or alerts later.
     transaction for the whole batch.
   - Editing a requirement re-scores it in full (recompute_for_requirement),
     as does the dialog's Refresh.
-  - Opening the dialog (get_matches_for_requirement) reads the stored rows
-    and brings them current on the spot: if the requirement text changed
-    since it was scored, a full re-score; otherwise ONLY the properties
-    added or edited since then are scored (the property list is the
-    in-memory snapshot, so this costs no database read), and rows for
-    properties that no longer exist are dropped. It writes only when that
-    catch-up actually had something to look at — reopening an unchanged
-    requirement is one read and no write.
-
   - Every day at 6 AM IST (rescore_all_requirements, run by
     ClientPropertyMatchingService/scheduled_recompute_service after the
     client pass) every requirement is caught up the same incremental way,
@@ -79,7 +70,12 @@ not anyone has opened it — the basis for match counts or alerts later.
     scored against are never re-scored; a night with no new or edited
     property does one tiny read and no write.
 
-Because every read catches up first, stored matches are never shown stale.
+  - Opening the dialog (get_matches_for_requirement) reads ONLY the stored
+    rows — no embedding call, no scoring, no write. Exactly
+    ClientPropertyMatchingService.matching_service.get_cached_result's
+    contract, and for the same reason: a "View matches" open must never
+    re-run the pipeline. A requirement is brought current by the three
+    triggers above, never by a read.
 
 Deleting a requirement removes its stored matches through the foreign key's
 ON DELETE CASCADE; marking a property sold out removes that property's rows
@@ -138,69 +134,26 @@ _vector_cache: Dict[str, Tuple[str, List[float]]] = {}
 
 
 def get_matches_for_requirement(record_id: str) -> Optional[RequirementMatchResult]:
-    """The dialog's read: stored matches, brought current first (see the
-    module docstring). Returns None only when no requirement with this
-    record_id exists (the controller turns that into a 404)."""
+    """The dialog's read: the stored matches, exactly as last computed — no
+    embedding call, no scoring, no write. Same contract as
+    ClientPropertyMatchingService.matching_service.get_cached_result, so
+    opening either dialog behaves identically. A requirement is brought
+    current by score_new_requirements (on creation), recompute_for_requirement
+    (on a match-relevant edit, and the dialog's own Refresh), and the nightly
+    rescore_all_requirements catch-up — never by this read. Returns None only
+    when no requirement with this record_id exists (the controller turns
+    that into a 404)."""
     requirement = requirement_store.get_requirement(record_id)
     if requirement is None:
         return None
 
     pseudo_client = _as_pseudo_client(requirement)
-    if not _has_criteria(pseudo_client):
-        # Nothing to compare properties against — and nothing may be left
-        # STORED from before this was checked either, or the table's Matches
-        # column (get_match_counts, which counts stored rows) would keep
-        # advertising the hundred meaningless matches this requirement used
-        # to collect while the dialog correctly showed none. One read, and a
-        # write only on the first open that finds something to clear; after
-        # that this is the read alone.
-        stored, _, _ = requirement_match_store.get_matches(record_id)
-        if stored:
-            requirement_match_store.replace_matches({record_id: ([], _fingerprint(pseudo_client))}, _now())
-        return _build_result(requirement, pseudo_client, [], None, [])
-
-    fingerprint = _fingerprint(pseudo_client)
-    # Taken BEFORE the property list is read — see
-    # BrokerRequirementMatchRunRow.computed_at.
-    run_started_at = _now()
-    properties = match_candidates.get_all()
-    scores, computed_at, stored_fingerprint = requirement_match_store.get_matches(record_id)
-
-    if computed_at is None or stored_fingerprint != fingerprint:
-        # Never scored, or the requirement changed since: every stored score
-        # is suspect, so a full re-score replaces them.
-        scores = _score(requirement, pseudo_client, properties)
-        requirement_match_store.replace_matches({record_id: (scores, fingerprint)}, run_started_at)
-        computed_at = run_started_at
-    else:
-        changed = match_candidates.get_changed_since(computed_at)
-        live_ids = {prop.record_id for prop in properties}
-        gone = {score.record_id for score in scores if score.record_id not in live_ids}
-        if changed or gone:
-            rescored = _score(requirement, pseudo_client, changed)
-            considered = {prop.record_id for prop in changed} | gone
-            requirement_match_store.merge_matches(
-                record_id,
-                rescored,
-                considered,
-                run_started_at,
-                fingerprint,
-                keep_best=match_config.MAX_MATCHES_PER_REQUIREMENT,
-            )
-            # Trimmed the same way the store just trimmed the stored rows, so
-            # the dialog shows exactly what is held and not a longer list that
-            # would shrink on the next open.
-            scores = best_matches(
-                [score for score in scores if score.record_id not in considered] + rescored
-            )
-            computed_at = run_started_at
-
-    result = _build_result(requirement, pseudo_client, scores, computed_at, properties)
-    step_logger.info(
-        f"[Matching] requirement {record_id}: {len(result.high)} high, {len(result.medium)} medium, "
-        f"{len(result.low)} low."
-    )
-    return result
+    scores, computed_at, _stored_fingerprint = requirement_match_store.get_matches(record_id)
+    # Display fields only — nothing is scored here, so a builder project
+    # without a vector yet must not trigger the embedding model on a plain
+    # dialog open (mirrors matching_service._build_result).
+    properties = match_candidates.get_all(ensure_embeddings=False)
+    return _build_result(requirement, pseudo_client, scores, computed_at, properties)
 
 
 def get_match_counts(limit: int = 500) -> Dict[str, int]:
@@ -214,9 +167,10 @@ def get_match_counts(limit: int = 500) -> Dict[str, int]:
     Counted against the same matchable, still-existing properties
     _build_result shows, so the number equals the dialog's own total for
     what is stored. Properties that arrived after a requirement was last
-    scored are picked up when its dialog is opened (the catch-up in
-    get_matches_for_requirement), and the page then updates that one row's
-    count from the dialog's result. A never-scored requirement is absent."""
+    scored are picked up by the nightly catch-up (rescore_all_requirements)
+    or that requirement's own Refresh — never by opening its dialog, which
+    is a cache-only read like get_matches_for_requirement. A never-scored
+    requirement is absent."""
     # Ids only — nothing is scored, so no builder project's vector is needed.
     live_ids = {
         prop.record_id

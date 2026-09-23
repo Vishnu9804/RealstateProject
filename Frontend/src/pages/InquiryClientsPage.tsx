@@ -20,7 +20,12 @@ import { useDebounced, useSearchShortcut } from "../hooks/useUi";
 import { friendlyError } from "../lib/apiError";
 import { formatIst, fromIstFields, relativeTime, toIstFields } from "../lib/formatters";
 import { CLIENT_FETCH_LIMIT } from "../lib/fetchLimits";
-import { getCachedClients, setCachedClients } from "../lib/inquiryListCache";
+import {
+  getCachedClients,
+  getCachedMatchCounts,
+  setCachedClients,
+  setCachedMatchCounts,
+} from "../lib/inquiryListCache";
 import {
   compileFilters,
   countActiveFilters,
@@ -181,9 +186,18 @@ export default function InquiryClientsPage() {
   // (clients_version, leads_version) pair the held map was fetched for, so
   // an ordinary poll that changed neither doesn't re-fetch at all — exactly
   // the gate the per-row version did, applied once instead of per row.
-  const [matchCounts, setMatchCounts] = useState<Record<string, MatchCounts> | null>(null);
-  const countsSignature = useRef<string | null>(null);
-  const countsFetchedAt = useRef(0);
+  //
+  // Seeded from the shared cache so coming back to this page paints the
+  // three columns with the numbers they had a moment ago instead of three
+  // spinners — the rows themselves already painted instantly from the client
+  // cache, which left these as the only thing anyone actually waited for.
+  // The effect below still revalidates; this only decides what is on screen
+  // while it does.
+  const [matchCounts, setMatchCounts] = useState<Record<string, MatchCounts> | null>(
+    () => getCachedMatchCounts()?.data ?? null,
+  );
+  const countsSignature = useRef<string | null>(getCachedMatchCounts()?.signature ?? null);
+  const countsFetchedAt = useRef(getCachedMatchCounts()?.fetchedAt ?? 0);
   const countsInFlight = useRef(false);
   // Bumped to force the counts effect below to run again, AND to ask the
   // backend for a freshly rebuilt map rather than its held one — adding a
@@ -282,7 +296,14 @@ export default function InquiryClientsPage() {
 
   const load = useCallback(
     async (manual = false) => {
-      setRefreshing(true);
+      // Only a refresh the operator ASKED for says so. A background poll
+      // announcing itself flipped this header between "Syncing…" and
+      // "Updated …", and put the Refresh button into its busy state, every
+      // few seconds for as long as the page was open — two whole re-renders
+      // per tick to report that nothing had happened. setRefreshing(false)
+      // below stays unconditional and is simply a no-op unless a manual
+      // refresh set it.
+      if (manual) setRefreshing(true);
       try {
         // The status call is cheap (mostly in-memory counters plus a small
         // aggregate query) and runs every tick. clients_version on it is
@@ -477,6 +498,41 @@ export default function InquiryClientsPage() {
   // something unrelated happened to that client. A re-read this
   // infrequent, against a validator that is a hash of the counts
   // themselves, costs a bodyless 304 whenever nothing has in fact changed.
+  // Counts do not have to wait for the status call to come back.
+  //
+  // They used to: the effect below is gated on `inquiryStatus`, which only
+  // arrives after load()'s own request completes — so on a cold open the
+  // three columns sat spinning through TWO round trips in series (status,
+  // then counts) before a single number appeared. The status response is
+  // only needed to decide whether a re-read is WARRANTED; it is not needed
+  // to read. So when there is nothing on screen to show, this fires the read
+  // straight away, in parallel with load()'s own request, and the effect
+  // below still revalidates the moment the versions are known.
+  //
+  // Only when there is nothing cached: a revisit already has its numbers and
+  // must not spend a request re-confirming what the version gate is about to
+  // confirm for free.
+  useEffect(() => {
+    if (matchCounts !== null || countsInFlight.current) return;
+    countsInFlight.current = true;
+    countsFetchedAt.current = Date.now();
+    matchingApi
+      .getAllMatchCounts()
+      .then((counts) => {
+        setMatchCounts(counts);
+        setCachedMatchCounts(counts, countsSignature.current);
+      })
+      .catch(() => {
+        // Leave the signature and clock alone — the effect below owns the
+        // retry, and it runs on the very next status tick.
+        countsFetchedAt.current = 0;
+      })
+      .finally(() => {
+        countsInFlight.current = false;
+      });
+    // eslint-disable-next-line react-hooks/exhaustive-deps
+  }, []);
+
   useEffect(() => {
     if (!inquiryStatus) return;
     // One at a time. `inquiryStatus` is a new object on every status tick,
@@ -498,7 +554,12 @@ export default function InquiryClientsPage() {
       // held map next expires. The heartbeat deliberately does not: it is
       // the backstop, and the backend's own expiry is what paces it.
       .getAllMatchCounts(changed && previous !== null)
-      .then(setMatchCounts)
+      .then((counts) => {
+        setMatchCounts(counts);
+        // Held against the signature it was actually fetched for, so a
+        // remount can tell whether it is still the current answer.
+        setCachedMatchCounts(counts, signature);
+      })
       .catch(() => {
         // Put the clock and the signature back so the next tick retries,
         // rather than latching this one as "already fetched" — otherwise a

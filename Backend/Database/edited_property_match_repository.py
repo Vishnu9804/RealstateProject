@@ -12,11 +12,13 @@ could be shared with a broker or handed to an agent in the meantime.
 
 So an edit drops those rows outright. Nothing is re-scored here: the listing's
 updated_at has just moved, so the machinery that already exists picks it up and
-scores it AGAIN, against its new content —
-  - a requirement's dialog catches up on open (requirement_matching_service.
-    get_matches_for_requirement) and in the 6 AM pass,
-  - a client's matches in the nightly incremental pass
-    (scheduled_recompute_service), or immediately on "Refresh matches".
+scores it AGAIN, against its new content — a requirement's matches in the
+6 AM pass (requirement_matching_service.rescore_all_requirements) or
+immediately on that requirement's dialog's own "Refresh", and a client's
+matches in the nightly incremental pass (scheduled_recompute_service) or
+immediately on "Refresh matches". Neither dialog re-scores merely by being
+opened — both are cache-only reads (matching_service.get_cached_result,
+requirement_matching_service.get_matches_for_requirement).
 If it still matches, it comes back with a correct score; if it does not, it
 never should have been there. That is why removing is safe AND cheap:
 re-scoring at edit time would mean reading every client's stored requirement

@@ -111,7 +111,7 @@
   font-size: 12px;
   font-weight: 560;
   cursor: pointer;
-  transition: all var(--t-fast) var(--ease-out);
+  transition: var(--tx-ui);
 }
 .popover__sort-btn:hover { color: var(--ink); background: var(--plane-2); border-color: var(--rim-strong); }
 .popover__sort-btn--on {
@@ -150,7 +150,7 @@
   background: var(--plane-2);
   color: var(--ink-3);
   cursor: pointer;
-  transition: all var(--t-fast) var(--ease-out);
+  transition: var(--tx-ui);
 }
 .popover__search-clear:hover { background: var(--plane-3); color: var(--ink); }
 

@@ -216,7 +216,7 @@
   font-size: 13px;
   cursor: pointer;
   box-shadow: inset 0 2px 6px rgba(0, 0, 0, 0.18);
-  transition: all var(--t-fast) var(--ease-out);
+  transition: var(--tx-ui);
 }
 .cmdk-trigger:hover { color: var(--ink); border-color: var(--rim-strong); background: var(--plane-1); }
 
@@ -269,7 +269,7 @@
   cursor: pointer;
   display: grid;
   place-items: center;
-  transition: all var(--t-fast) var(--ease-out);
+  transition: var(--tx-ui);
 }
 .toast__close:hover { background: var(--plane-3); color: var(--ink); }
 /* The life bar drains so the toast never disappears without warning. */
@@ -730,7 +730,11 @@
   opacity: 0;
   transform: scale(0.7);
   cursor: pointer;
-  transition: all var(--t-fast) var(--ease-spring);
+  transition:
+    opacity var(--t-fast) var(--ease-spring),
+    transform var(--t-fast) var(--ease-spring),
+    background-color var(--t-fast) var(--ease-spring),
+    color var(--t-fast) var(--ease-spring);
 }
 .photo-tile:hover .photo-tile__remove,
 .photo-tile:focus-within .photo-tile__remove { opacity: 1; transform: scale(1); }
@@ -822,7 +826,7 @@
   font-size: 14px;
   text-align: left;
   cursor: pointer;
-  transition: all var(--t-fast) var(--ease-out);
+  transition: var(--tx-ui);
 }
 .cmdk__item[data-active="true"] {
   background: var(--plane-3);
@@ -883,7 +887,12 @@
   color: var(--ink-4);
   font-size: 12px;
   font-weight: 700;
-  transition: all var(--t-base) var(--ease-spring);
+  transition:
+    background-color var(--t-base) var(--ease-spring),
+    border-color var(--t-base) var(--ease-spring),
+    box-shadow var(--t-base) var(--ease-spring),
+    color var(--t-base) var(--ease-spring),
+    transform var(--t-base) var(--ease-spring);
 }
 .step--done .step__dot {
   background: color-mix(in oklab, var(--ok) 18%, var(--plane-1));
@@ -1209,7 +1218,7 @@
   background: var(--plane-1);
   color: var(--ink-3);
   cursor: pointer;
-  transition: all var(--t-fast) var(--ease-out);
+  transition: var(--tx-ui);
 }
 .row-actions__btn:hover {
   background: var(--plane-2);
@@ -1442,7 +1451,7 @@
   text-overflow: ellipsis;
   white-space: nowrap;
 }
-.copy svg { flex: none; opacity: 0; transform: scale(0.7); transition: all var(--t-fast) var(--ease-spring); color: var(--ink-4); }
+.copy svg { flex: none; opacity: 0; transform: scale(0.7); transition: opacity var(--t-fast) var(--ease-spring), transform var(--t-fast) var(--ease-spring), color var(--t-fast) var(--ease-spring); color: var(--ink-4); }
 .copy:hover { color: var(--accent); }
 .copy:hover svg, .copy:focus-visible svg { opacity: 1; transform: scale(1); }
 .copy--done { color: var(--ok) !important; }

@@ -49,6 +49,33 @@
   --t-slow: 520ms;
   --t-lazy: 900ms;
 
+  /* What an interactive control animates when you hover or press it, named
+     once so the controls that share that behaviour share the list too.
+
+     Spelled out rather than `transition: all`, which is what these used to
+     say. `all` asks the browser to watch EVERY animatable property on the
+     element for change — including the ones that move other things when
+     they do. A control that also changes its padding, width, font-size or
+     border-width in a hover rule (or inherits one that does, or has one
+     added later) gets that change animated as well, and animating a
+     geometry property means re-running layout for the whole subtree on
+     every frame of a 140ms hover. Listing the five that actually change
+     keeps every one of these on the compositor, where a hover belongs, and
+     makes it impossible for a later edit to quietly put layout back into
+     the hover path.
+
+     The five ARE what these controls change today, so nothing looks any
+     different — background-image is deliberately absent because the one
+     control that swaps to a gradient on state change (.unit-caps__opt.is-on)
+     could never interpolate to one anyway, under `all` or otherwise. */
+  --tx-ui:
+    color var(--t-fast) var(--ease-out),
+    background-color var(--t-fast) var(--ease-out),
+    border-color var(--t-fast) var(--ease-out),
+    box-shadow var(--t-fast) var(--ease-out),
+    opacity var(--t-fast) var(--ease-out),
+    transform var(--t-fast) var(--ease-out);
+
   /* ---- 3D ---- */
   --perspective: 1400px;
   --lift-1: -3px;

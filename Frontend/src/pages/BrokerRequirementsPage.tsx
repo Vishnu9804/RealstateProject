@@ -9,6 +9,11 @@ import { useDebounced, usePersistentState, useSearchShortcut } from "../hooks/us
 import { friendlyError } from "../lib/apiError";
 import { formatCompactInr, relativeTime } from "../lib/formatters";
 import {
+  getCachedRequirements,
+  setCachedRequirementCounts,
+  setCachedRequirements,
+} from "../lib/requirementListCache";
+import {
   compileFilters,
   countActiveFilters,
   describeFilter,
@@ -166,7 +171,12 @@ function sourceDetail(requirement: BrokerRequirementRecord): string {
 
 export default function BrokerRequirementsPage() {
   const toast = useToast();
-  const [requirements, setRequirements] = useState<BrokerRequirementRecord[] | null>(null);
+  // Seeded from the shared cache so returning to this page draws the table
+  // it was last showing immediately, instead of skeleton rows and a round
+  // trip — see lib/requirementListCache.ts.
+  const [requirements, setRequirements] = useState<BrokerRequirementRecord[] | null>(
+    () => getCachedRequirements()?.data ?? null,
+  );
   const [error, setError] = useState<string | null>(null);
   const [lastUpdated, setLastUpdated] = useState<Date | null>(null);
   const [refreshing, setRefreshing] = useState(false);
@@ -211,7 +221,9 @@ export default function BrokerRequirementsPage() {
   // when the list itself is (re)loaded — one small aggregate query per load
   // (see matchingApi.getRequirementMatchCounts), never on a timer — and
   // patched per row from the dialog's own result, which costs no request.
-  const [matchCounts, setMatchCounts] = useState<Record<string, number> | null>(null);
+  const [matchCounts, setMatchCounts] = useState<Record<string, number> | null>(
+    () => getCachedRequirements()?.counts ?? null,
+  );
   const [countsFailed, setCountsFailed] = useState(false);
   // True while the one delayed retry below is pending, so rows still being
   // scored show a spinner rather than flicking through "View matches".
@@ -230,6 +242,7 @@ export default function BrokerRequirementsPage() {
       // A newer load has started since — its answer is the one to keep.
       if (seq !== countsSeq.current) return;
       setMatchCounts(counts);
+      setCachedRequirementCounts(counts);
       setCountsFailed(false);
       // A requirement that has just arrived is scored a moment AFTER it is
       // stored, so the list can briefly be ahead of its counts. One delayed
@@ -278,10 +291,18 @@ export default function BrokerRequirementsPage() {
 
   const load = useCallback(
     async (manual = false) => {
-      setRefreshing(true);
+      // Only a refresh the operator ASKED for says so. A background poll
+      // announcing itself flipped this header between "Syncing…" and
+      // "Updated …", and put the Refresh button into its busy state, every
+      // few seconds for as long as the page was open — two whole re-renders
+      // per tick to report that nothing had happened. setRefreshing(false)
+      // below stays unconditional and is simply a no-op unless a manual
+      // refresh set it.
+      if (manual) setRefreshing(true);
       try {
         const data = await requirementApi.getRequirements(FETCH_LIMIT);
         setRequirements(data);
+        setCachedRequirements(data, lastVersion.current);
         setLastUpdated(new Date());
         setError(null);
         void loadCounts(

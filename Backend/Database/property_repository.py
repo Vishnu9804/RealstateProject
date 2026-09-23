@@ -11,7 +11,7 @@ from dataclasses import dataclass
 from datetime import datetime, timezone
 from typing import Any, Dict, List, Optional, Tuple
 
-from sqlalchemy import func, select
+from sqlalchemy import func, select, update
 from sqlalchemy.orm import Session, defer
 
 from Database.models import PropertyRow, WhatsAppMessageRow
@@ -527,6 +527,39 @@ def update_property(
             row.qualified_at = qualified_at
         session.flush()
         return _to_pydantic(row)
+
+
+def set_embeddings(vectors: Dict[str, List[float]], embedding_model: str) -> int:
+    """Stores freshly computed vectors for MANY properties in one
+    transaction, returning how many rows were actually written (a record_id
+    that no longer exists is skipped, not an error). The write half of
+    tools/reembed_listings.py, which re-embeds every stored listing after
+    embedding_service.EMBEDDING_TEXT_FIELDS changes; nothing is read back,
+    because the caller already holds every value it needs.
+
+    Deliberately UNLIKE builder_project_repository.set_embeddings, which
+    writes `updated_at` as itself so that filling in a MISSING vector is
+    never mistaken for an edit. Here a vector is not being filled in, it is
+    being REPLACED, and every score already computed from the old one is
+    stale the moment it is — so the bump is the whole point. It is what
+    makes the 6 AM incremental pass re-score each property against every
+    client and requirement (match_candidates.get_changed_since), and what
+    lets a running backend notice the change at all (property_vector_store.
+    _maybe_refresh_from_external_edit).
+    """
+    if not vectors:
+        return 0
+    written = 0
+    with get_session() as session:
+        for record_id, vector in vectors.items():
+            result = session.execute(
+                update(PropertyRow)
+                .where(PropertyRow.record_id == record_id)
+                .values(embedding=vector, embedding_model=embedding_model)
+                .execution_options(synchronize_session=False)
+            )
+            written += result.rowcount
+    return written
 
 
 def delete_property(record_id: str) -> bool:

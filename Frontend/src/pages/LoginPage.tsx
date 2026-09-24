@@ -53,7 +53,7 @@ export default function LoginPage() {
               <IconZap size={19} />
             </span>
             <span className="brand__text">
-              <span className="brand__name">Estate Signal</span>
+              <span className="brand__name">Manibhadra Real Estate</span>
               <span className="brand__sub">WhatsApp intake</span>
             </span>
           </div>

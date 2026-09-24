@@ -32,6 +32,7 @@ import FilterPopover from "../components/ui/FilterPopover";
 import StickyTableHead from "../components/ui/StickyTableHead";
 import RowRail from "../components/ui/RowRail";
 import ConfirmDialog from "../components/ui/ConfirmDialog";
+import MoveToMainDialog from "../components/MoveToMainDialog";
 import PropertyFormDialog from "../components/PropertyFormDialog";
 import { COLUMNS, FilterTrigger, Pager, PropertyDetailDialog } from "./DashboardPage";
 import { Badge, Button, EmptyState, Note, Panel, Segmented, SkeletonRows } from "../components/ui/Primitives";
@@ -377,6 +378,9 @@ export default function LandingPagePage() {
     }
   }
 
+  // Outsider -> Main asks which Settings area it belongs to (MoveToMainDialog).
+  const rowMoveFromOutsider = rowConfirm?.type === "move" && rowConfirm.property.review_status === "outsider";
+
   async function confirmRowMove() {
     if (!rowConfirm || rowConfirm.type !== "move") return;
     const property = rowConfirm.property;
@@ -684,7 +688,19 @@ export default function LandingPagePage() {
         />
       )}
 
-      {rowConfirm?.type === "move" && (
+      {rowConfirm?.type === "move" && rowMoveFromOutsider && (
+        <MoveToMainDialog
+          property={rowConfirm.property}
+          onClose={() => setRowConfirm(null)}
+          onMoved={(updated) => {
+            updateLocalProperty(updated.record_id, updated);
+            setDetailId(null);
+            setRowConfirm(null);
+          }}
+        />
+      )}
+
+      {rowConfirm?.type === "move" && !rowMoveFromOutsider && (
         <ConfirmDialog
           title={`Move to ${rowConfirm.property.review_status === "outsider" ? "Main" : "Outsider"}`}
           body={

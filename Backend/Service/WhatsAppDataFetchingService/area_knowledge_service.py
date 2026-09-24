@@ -712,6 +712,48 @@ def observe_properties(properties: List[StructuredProperty]) -> None:
         )
 
 
+def learn_manual_assignment(area: str, texts: List[Optional[str]]) -> List[str]:
+    """A person moving an Outsider property into Main said which Settings
+    area it belongs to (Properties page). Every place string in `texts` —
+    the property's old area and its address, split the same way the
+    pipeline splits an address — is recorded under that area. Returns the
+    strings that were new. Does not touch the hit/write analysis: that
+    measures the pipeline, and this is a human teaching it, not a lookup."""
+    with _lock:
+        if not _loaded:
+            load_from_disk()
+        area_display, area_key = _canonical_area(area or "")
+        if not area_key:
+            return []
+        _area_display[area_key] = area_display
+        places = _area_places.setdefault(area_key, {})
+        changed = False
+        if area_key not in places:
+            # The area anchors its own list, same as in _candidate_places.
+            places[area_key] = area_display
+            _place_owner.setdefault(area_key, area_key)
+            changed = True
+        added: List[str] = []
+        for text in texts:
+            for segment in _SEGMENT_SPLIT.split(text or ""):
+                cleaned = _clean_place(segment)
+                if cleaned is None:
+                    continue
+                place_display, place_key = cleaned
+                if place_key in places:
+                    continue
+                places[place_key] = place_display
+                _place_owner.setdefault(place_key, area_key)
+                added.append(place_display)
+        if added or changed:
+            _persist_knowledge()
+        step_logger.info(
+            f"Area knowledge base: manual move into {area_display} taught "
+            f"{len(added)} new place(s){': ' + ', '.join(added) if added else ''}."
+        )
+        return added
+
+
 # ------------------------------------------------------------------- reading
 
 

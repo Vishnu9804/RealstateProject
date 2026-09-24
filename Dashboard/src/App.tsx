@@ -62,7 +62,7 @@ export default function App() {
               </span>
               <span className="brand__text">
                 <span className="brand__name">Dashboard</span>
-                <span className="brand__sub">Estate Signal — internal</span>
+                <span className="brand__sub">Manibhadra Real Estate — internal</span>
               </span>
             </div>
 

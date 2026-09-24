@@ -2,7 +2,7 @@ import type { AgentSummary, InquiryClientRecord } from "../api/types";
 import { formatArea, formatCompactInr, formatVisitTime } from "./formatters";
 import { formatPhoneList } from "./phone";
 
-export const BUSINESS_NAME = "Estate Signal";
+export const BUSINESS_NAME = "Manibhadra Real Estate";
 
 /** The fields a hand-off message actually needs from a property, common to
  *  both a matched property (MatchedProperty) and a manually-added one

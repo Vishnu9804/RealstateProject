@@ -18,6 +18,8 @@ interface ConfirmDialogProps {
   cancelLabel?: string;
   tone?: "danger" | "default";
   busy?: boolean;
+  /** Keeps the confirm button off until the body has what it needs. */
+  confirmDisabled?: boolean;
   onConfirm: () => void;
   onClose: () => void;
 }
@@ -29,6 +31,7 @@ export default function ConfirmDialog({
   cancelLabel = "Cancel",
   tone = "default",
   busy = false,
+  confirmDisabled = false,
   onConfirm,
   onClose,
 }: ConfirmDialogProps) {
@@ -75,7 +78,7 @@ export default function ConfirmDialog({
             type="button"
             className={`btn btn--sm ${tone === "danger" ? "btn--danger" : "btn--primary"}`}
             onClick={onConfirm}
-            disabled={busy}
+            disabled={busy || confirmDisabled}
             aria-busy={busy || undefined}
           >
             {busy && <span className="spinner" />}

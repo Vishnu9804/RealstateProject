@@ -50,6 +50,7 @@ import {
   IconUsers,
   IconX,
 } from "../components/ui/Icons";
+import { PAGE_SIZE, Pager } from "./DashboardPage";
 
 /**
  * Every site visit, across every agent, in one table — the Agents page shows
@@ -419,6 +420,34 @@ export default function VisitsPage() {
     return tabRows.filter((row) => (!onlyRevisits || isRevisitRow(row)) && (!needle || matchesQuery(row, needle)));
   }, [tabRows, onlyRevisits, query, matchesQuery]);
 
+  // Paged exactly the way the Properties and Inquiries tables are (same
+  // PAGE_SIZE, same Pager). A combined re-visit row counts as one row, and
+  // its dropped-down visits always stay on the page with it.
+  const [page, setPage] = useState(1);
+  const pageCount = Math.max(1, Math.ceil(visibleRows.length / PAGE_SIZE));
+  const pageRows = useMemo(
+    () => visibleRows.slice((page - 1) * PAGE_SIZE, page * PAGE_SIZE),
+    [visibleRows, page],
+  );
+  const listTopRef = useRef<HTMLDivElement>(null);
+
+  // A narrowed list invalidates the page you were on.
+  useEffect(() => setPage(1), [tab, onlyRevisits, query]);
+  useEffect(() => {
+    if (page > pageCount) setPage(pageCount);
+  }, [page, pageCount]);
+
+  // Turning the page puts you at the top of the new rows. Skipped on the
+  // first render, so opening the page doesn't scroll on its own.
+  const pagedOnce = useRef(false);
+  useEffect(() => {
+    if (!pagedOnce.current) {
+      pagedOnce.current = true;
+      return;
+    }
+    listTopRef.current?.scrollIntoView({ behavior: "smooth", block: "start" });
+  }, [page]);
+
   const stats = useMemo(() => {
     const today = toIstFields(new Date().toISOString())?.date;
     const active = allEntries.filter((entry) => entry.kind === "assigned");
@@ -604,6 +633,8 @@ export default function VisitsPage() {
       )}
 
       {visibleRows.length > 0 && (
+        <>
+        <div ref={listTopRef} className="list-anchor" />
         <div className="table-frame anim-rise">
           <div className="table-scroll">
             <table className="table visits-table">
@@ -621,7 +652,7 @@ export default function VisitsPage() {
                 </tr>
               </thead>
               <tbody>
-                {visibleRows.map((row) => {
+                {pageRows.map((row) => {
                   const grouped = isRevisitRow(row);
                   const isOpen = grouped && expanded.has(row.key);
                   return (
@@ -659,6 +690,8 @@ export default function VisitsPage() {
             </table>
           </div>
         </div>
+        <Pager page={page} pageCount={pageCount} total={visibleRows.length} onChange={setPage} label="Visit pages" />
+        </>
       )}
 
       {openEntry && (

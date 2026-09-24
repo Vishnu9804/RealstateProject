@@ -54,6 +54,7 @@ it (see the Needs review dialog's Move to Main / Move to Outsider actions).
 
 from __future__ import annotations
 
+import re
 import uuid
 from datetime import datetime, timezone
 from typing import Any, Dict, List, Optional
@@ -68,6 +69,7 @@ from Model.WhatsAppDataFetchingModel.structured_property import StructuredProper
 from Model.WhatsAppDataFetchingModel.whatsapp_message import WhatsAppChatMessage
 from Service.BackendUsageService import cpu_usage_service
 from Service.WhatsAppDataFetchingService import (
+    area_filter_service,
     area_knowledge_service,
     display_settings_service,
     embedding_service,
@@ -541,6 +543,57 @@ def update_property(
         if match_invalidation_service.edit_affects_matching(moved_updates, needs_review):
             match_invalidation_service.handle_listing_edited(record_id)
     return _to_record(updated) if updated is not None else None
+
+
+def _place_key(text: str) -> str:
+    return re.sub(r"[^a-z0-9]", "", text.lower())
+
+
+def move_to_main_with_area(record_id: str, area: str) -> Optional[PropertyRecord]:
+    """The Properties page's Outsider -> Main move when the person says which
+    of their Settings areas this property really belongs to.
+
+    The chosen area becomes the property's area_name. Whatever the property
+    said its area was before is not thrown away: it is put at the front of
+    the address (unless the address already mentions it), so "Anuvrat Dwar"
+    moved into Citylight reads area "Citylight", address "Anuvrat Dwar, ...".
+    The old area and address are then taught to the area knowledge base
+    under the chosen area — best-effort, a knowledge base write must never
+    undo or fail the move itself.
+
+    Raises ValueError when `area` is not one of the Settings areas; returns
+    None when the property does not exist."""
+    chosen = next(
+        (keyword.strip() for keyword in area_filter_service.get_area_keywords() if _place_key(keyword) == _place_key(area or "")),
+        None,
+    )
+    if not chosen or not _place_key(chosen):
+        raise ValueError("Pick one of the areas selected on the Settings page.")
+
+    found = property_vector_store.get_property_info(record_id)
+    if found is None:
+        return None
+    existing = found[0]
+    old_area = (existing.area_name or "").strip()
+    old_address = (existing.address or "").strip()
+
+    new_address = old_address
+    if old_area and _place_key(old_area) != _place_key(chosen) and _place_key(old_area) not in _place_key(old_address):
+        new_address = f"{old_area}, {old_address}" if old_address else old_area
+
+    updated = update_property(
+        record_id,
+        review_status="accepted",
+        content_updates={"area_name": chosen, "address": new_address or None},
+    )
+    if updated is None:
+        return None
+
+    try:
+        area_knowledge_service.learn_manual_assignment(chosen, [old_area, old_address])
+    except Exception as exc:  # noqa: BLE001 - the move already succeeded
+        step_logger.error(f"Could not teach the area knowledge base from a manual move ({record_id}): {exc!r}")
+    return updated
 
 
 def delete_property(record_id: str) -> bool:

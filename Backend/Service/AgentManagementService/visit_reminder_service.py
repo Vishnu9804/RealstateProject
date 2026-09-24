@@ -66,7 +66,7 @@ _MIN_SLEEP_SECONDS = 5
 
 # The name the dashboard's own client messages sign with
 # (Frontend/src/lib/handoffTemplate.ts's BUSINESS_NAME).
-_BUSINESS_NAME = "Estate Signal"
+_BUSINESS_NAME = "Manibhadra Real Estate"
 
 _wake = threading.Event()
 _start_lock = threading.Lock()

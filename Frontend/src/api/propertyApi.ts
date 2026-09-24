@@ -67,6 +67,10 @@ export const propertyApi = {
   createProperty: (body: PropertyContentFields): Promise<PropertyRecord> => apiClient.post(`/properties`, body),
   updateProperty: (recordId: string, body: PropertyUpdateBody): Promise<PropertyRecord> =>
     apiClient.patch(`/properties/${encodeURIComponent(recordId)}`, body),
+  /** Outsider -> Main into one of the Settings areas: sets the area, keeps
+   *  the old one in the address, and teaches the area knowledge base. */
+  moveToMainWithArea: (recordId: string, area: string): Promise<PropertyRecord> =>
+    apiClient.post(`/properties/${encodeURIComponent(recordId)}/move-to-main`, { area }),
   deleteProperty: (recordId: string): Promise<void> =>
     apiClient.delete(`/properties/${encodeURIComponent(recordId)}`),
 };

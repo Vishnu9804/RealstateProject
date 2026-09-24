@@ -37,6 +37,7 @@ import { useToast } from "../components/ui/Toast";
 import FilterPopover, { type SortControl } from "../components/ui/FilterPopover";
 import StickyTableHead from "../components/ui/StickyTableHead";
 import ConfirmDialog from "../components/ui/ConfirmDialog";
+import MoveToMainDialog from "../components/MoveToMainDialog";
 import RowRail from "../components/ui/RowRail";
 import PropertyFormDialog from "../components/PropertyFormDialog";
 import MoveMenu from "../components/ui/MoveMenu";
@@ -1130,7 +1131,26 @@ export default function DashboardPage() {
         />
       )}
 
-      {confirmAction && (
+      {confirmAction?.type === "move" &&
+        confirmAction.target === "accepted" &&
+        confirmAction.property.review_status === "outsider" && (
+          <MoveToMainDialog
+            property={confirmAction.property}
+            onClose={() => setConfirmAction(null)}
+            onMoved={(updated) => {
+              updateLocalProperty(updated.record_id, updated);
+              setDetailId(null);
+              setConfirmAction(null);
+            }}
+          />
+        )}
+
+      {confirmAction &&
+        !(
+          confirmAction.type === "move" &&
+          confirmAction.target === "accepted" &&
+          confirmAction.property.review_status === "outsider"
+        ) && (
         <ConfirmDialog
           title={
             confirmAction.type === "delete"

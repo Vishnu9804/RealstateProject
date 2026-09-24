@@ -297,6 +297,25 @@ def update_property(record_id: str, body: PropertyUpdateRequest) -> PropertyReco
     return updated
 
 
+class MoveToMainRequest(BaseModel):
+    area: str = Field(min_length=1)
+
+
+@router.post("/{record_id}/move-to-main", response_model=PropertyRecord)
+def move_to_main(record_id: str, body: MoveToMainRequest) -> PropertyRecord:
+    """Outsider -> Main with the Settings area the person picked: the area
+    is set, the old area kept in the address, and the area knowledge base
+    learns it (see property_pipeline_service.move_to_main_with_area). The
+    "Other" choice does not come here — it is the plain PATCH move."""
+    try:
+        updated = property_pipeline_service.move_to_main_with_area(record_id, body.area)
+    except ValueError as exc:
+        raise HTTPException(status_code=400, detail=str(exc)) from exc
+    if updated is None:
+        raise HTTPException(status_code=404, detail="Property not found")
+    return updated
+
+
 @router.delete("/{record_id}", status_code=204, dependencies=[Depends(require_admin)])
 def delete_property(record_id: str) -> None:
     deleted = property_pipeline_service.delete_property(record_id)

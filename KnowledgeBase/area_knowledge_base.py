@@ -54,6 +54,7 @@ AREA_KNOWLEDGE_BASE: Dict[str, List[str]] = {
     ],
     'Althan': [
         'Althan',
+        'Anuradh dhwar',
         'Green Victory',
         'Venusia Bungalow',
     ],
@@ -234,6 +235,7 @@ AREA_KNOWLEDGE_BASE: Dict[str, List[str]] = {
         'Vesu',
         '2nd Vip Road',
         'Aashirvad Avenue',
+        'Ami Residency',
         'Avadh Carolina - Dumas',
         'Dumas',
         'Dumas Road',

@@ -208,10 +208,10 @@ class _TransientCompletionError(Exception):
 def _get_client() -> httpx.Client:
     global _client
     if _client is None:
-        api_key = get_settings().zai_api_key
+        api_key = get_settings().zai_api_key_property
         if not api_key:
             raise RuntimeError(
-                "ZAI_API_KEY is not set — add it to Backend/.env before the LLM stage can run."
+                "ZAI_API_KEY_PROPERTY is not set — add it to Backend/.env before the LLM stage can run."
             )
         _client = httpx.Client(
             base_url=get_settings().zai_base_url,

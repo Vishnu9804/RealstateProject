@@ -48,7 +48,7 @@ from fastapi import Response
 from Middleware import step_logger
 from Service.BackendUsageService import usage_feed
 
-_LOG_PATH = usage_feed.PROJECT_ROOT / "LLMUsage" / "message_model_log.jsonl"
+_LOG_PATH = usage_feed.DATA_DIR / "LLMUsage" / "message_model_log.jsonl"
 
 _MAX_TEXT_CHARS = 6000
 _PRUNE_EVERY_SECONDS = 600.0

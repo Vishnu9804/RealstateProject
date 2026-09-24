@@ -66,10 +66,9 @@ from typing import Any, Deque, Dict, List, Optional, Tuple
 from Middleware import step_logger
 from Service.BackendUsageService import usage_feed
 
-# Backend/Service/NeonUsageService/this_file.py -> parents[2] = Backend/
-_BACKEND_DIR = Path(__file__).resolve().parents[2]
-_PROJECT_ROOT = _BACKEND_DIR.parent
-_USAGE_DIR = _PROJECT_ROOT / "NeonUsage"
+# Under DATA_DIR (Config/paths.py): locally the project root, one level
+# above Backend/; on Railway the Volume.
+_USAGE_DIR = usage_feed.DATA_DIR / "NeonUsage"
 _USAGE_PATH = _USAGE_DIR / "neon_usage_stats.json"
 
 # ---------------------------------------------------------------- assumptions

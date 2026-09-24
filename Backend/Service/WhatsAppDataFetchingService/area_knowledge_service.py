@@ -47,6 +47,12 @@ nearly every batch, killing the live WhatsApp connections and losing the
 properties still being processed. Kept one directory up, the watcher cannot
 see it and the pipeline is untouched.
 
+More precisely it lives under DATA_DIR (Config/paths.py): the project root
+locally, as above, and a Railway Volume in production, where it survives
+restarts and redeploys. A read-only copy committed with the code
+(Backend/KnowledgeBaseSeed/area_knowledge_base.py, see
+SEED_KNOWLEDGE_BASE_PATH) starts the live file on a fresh Volume.
+
 It is never imported as a module either — it is read with ast.literal_eval,
 so a hand edit is picked up on the next restart without any import-cache
 games, and a corrupted/half-edited file degrades to "start empty" instead of
@@ -73,20 +79,27 @@ from datetime import datetime, timezone
 from pathlib import Path
 from typing import Any, Deque, Dict, List, Optional, Tuple
 
+from Config import paths
 from Middleware import step_logger
 from Model.WhatsAppDataFetchingModel.structured_property import StructuredProperty
 from Service.WhatsAppDataFetchingService import area_filter_service
 
-# Backend/Service/WhatsAppDataFetchingService/this_file.py
-#   parents[0] = .../Service/WhatsAppDataFetchingService
-#   parents[1] = .../Service
-#   parents[2] = .../Backend        <- uvicorn's --reload watch root
-#   parents[3] = .../<project root> <- outside it, on purpose (see docstring)
-_BACKEND_DIR = Path(__file__).resolve().parents[2]
-_PROJECT_ROOT = _BACKEND_DIR.parent
-KNOWLEDGE_BASE_DIR = _PROJECT_ROOT / "KnowledgeBase"
+# The LIVE files, under DATA_DIR (Config/paths.py): locally the project root,
+# outside uvicorn's --reload watch root (Backend/) on purpose (see docstring);
+# on Railway the Volume, so what was learned survives a redeploy.
+KNOWLEDGE_BASE_DIR = paths.DATA_DIR / "KnowledgeBase"
 KNOWLEDGE_BASE_PATH = KNOWLEDGE_BASE_DIR / "area_knowledge_base.py"
 _STATS_PATH = KNOWLEDGE_BASE_DIR / "area_knowledge_stats.json"
+
+# The SEED: a copy of the knowledge base committed with the code, so it ships
+# with every deploy. Only ever READ, and only when the live file does not
+# exist yet (a fresh Volume, or a deleted file) — the live file then starts
+# as this copy instead of empty. Once the live file exists it always wins and
+# this one is ignored, so updating the seed never overwrites anything learned
+# since. Keep it current by pasting the live file's content (the Dashboard's
+# file panel shows it) into it and committing. Being read-only is what makes
+# it safe inside Backend/: --reload only reacts to writes.
+SEED_KNOWLEDGE_BASE_PATH = paths.BACKEND_DIR / "KnowledgeBaseSeed" / "area_knowledge_base.py"
 
 _VARIABLE_NAME = "AREA_KNOWLEDGE_BASE"
 
@@ -385,9 +398,12 @@ recognise whatever a broker actually typed.
 Comparison is done on a punctuation-and-case-insensitive key, so "VIP Road"
 and "V.I.P. road" are one entry; the spelling kept here is the first one seen.
 
-This file lives OUTSIDE Backend/ deliberately: uvicorn --reload restarts the
-server on any *.py write under Backend/, which would kill the live WhatsApp
-connections mid-batch every time a new place was learned.
+This file lives in the backend's data folder (DATA_DIR — the project root
+locally, the Volume on Railway), OUTSIDE Backend/ deliberately: uvicorn
+--reload restarts the server on any *.py write under Backend/, which would
+kill the live WhatsApp connections mid-batch every time a new place was
+learned. The copy at Backend/KnowledgeBaseSeed/area_knowledge_base.py is only
+used to create this file when it does not exist yet.
 """
 
 from typing import Dict, List
@@ -497,17 +513,33 @@ def load_from_disk() -> None:
         _stats.clear()
         _stats.update(_blank_stats())
 
+        # The live file if there is one; otherwise the seed committed with the
+        # code (see SEED_KNOWLEDGE_BASE_PATH). Reading the seed rather than
+        # copying it means the live file is only created by the normal
+        # "create it if missing" write below — so a failed first write just
+        # seeds again on the next start instead of leaving an empty file
+        # behind that would hide the seed forever.
+        source_path = KNOWLEDGE_BASE_PATH
+        if not KNOWLEDGE_BASE_PATH.exists() and SEED_KNOWLEDGE_BASE_PATH.exists():
+            source_path = SEED_KNOWLEDGE_BASE_PATH
+            step_logger.info(
+                f"No area knowledge base at {KNOWLEDGE_BASE_PATH} yet — starting it from the copy "
+                f"committed with the code ({SEED_KNOWLEDGE_BASE_PATH})."
+            )
+
         knowledge: Dict[str, List[str]] = {}
-        if KNOWLEDGE_BASE_PATH.exists():
+        source_unreadable = False
+        if source_path.exists():
             try:
-                knowledge = _parse_knowledge_file(KNOWLEDGE_BASE_PATH.read_text(encoding="utf-8"))
+                knowledge = _parse_knowledge_file(source_path.read_text(encoding="utf-8"))
             except Exception as exc:  # noqa: BLE001
                 step_logger.error(
-                    f"The area knowledge base file ({KNOWLEDGE_BASE_PATH}) could not be read: {exc!r}. "
+                    f"The area knowledge base file ({source_path}) could not be read: {exc!r}. "
                     "Starting from an empty knowledge base — the existing file is left untouched until the "
                     "next successful write, so nothing is lost that a fix to the file cannot recover."
                 )
                 knowledge = {}
+                source_unreadable = True
 
         for area, places in knowledge.items():
             area_display, area_key = _canonical_area(area)
@@ -532,7 +564,9 @@ def load_from_disk() -> None:
                 )
 
         _loaded = True
-        if not KNOWLEDGE_BASE_PATH.exists():
+        # Not after an unreadable SEED: writing an empty live file now would
+        # hide the seed from every later start, even once it is fixed.
+        if not KNOWLEDGE_BASE_PATH.exists() and not source_unreadable:
             _persist_knowledge()
 
         step_logger.info(

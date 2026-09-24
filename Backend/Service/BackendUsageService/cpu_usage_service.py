@@ -27,7 +27,7 @@ every _SAMPLE_EVERY_SECONDS, the file is written at most every
 _PERSIST_EVERY_SECONDS and only when something changed. No thread of its
 own, no database. Kept for 48 hours (see usage_feed).
 
-The file lives OUTSIDE Backend/ (see usage_feed.PROJECT_ROOT for why).
+The file lives under DATA_DIR, OUTSIDE Backend/ (see usage_feed.DATA_DIR for why).
 """
 
 from __future__ import annotations
@@ -41,7 +41,7 @@ from typing import Any, Callable, Dict, Optional, TypeVar
 from Middleware import step_logger
 from Service.BackendUsageService import usage_feed
 
-_USAGE_PATH = usage_feed.PROJECT_ROOT / "BackendUsage" / "cpu_usage_hourly.json"
+_USAGE_PATH = usage_feed.DATA_DIR / "BackendUsage" / "cpu_usage_hourly.json"
 
 KIND_REQUEST = "API request"
 KIND_JOB = "Background job"

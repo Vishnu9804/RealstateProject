@@ -31,8 +31,9 @@ measurements against this exact API:
 from __future__ import annotations
 
 import json
+import threading
 import time
-from typing import List, Optional, Tuple
+from typing import Dict, List, Optional, Tuple
 
 import httpx
 
@@ -41,7 +42,10 @@ from Config.settings import get_settings
 from Middleware import step_logger
 from Service.LLMUsageService import llm_usage_service
 
-_client: Optional[httpx.Client] = None
+# One httpx client per lane, because a client carries its API key in its
+# Authorization header — see lane_for / _api_key_for_lane.
+_clients: Dict[str, httpx.Client] = {}
+_clients_lock = threading.Lock()
 
 _MAX_ATTEMPTS = 4
 _RETRY_BACKOFF_SECONDS = [3.0, 10.0, 30.0]
@@ -96,25 +100,57 @@ def looks_like_repetition_loop(text: str) -> bool:
     return False
 
 
-def _get_client() -> httpx.Client:
-    global _client
-    if _client is None:
-        api_key = get_settings().zai_api_key
-        if not api_key:
-            raise RuntimeError("ZAI_API_KEY is not set — add it to Backend/.env before the LLM stage can run.")
-        _client = httpx.Client(
-            base_url=get_settings().zai_base_url,
-            headers={"Authorization": f"Bearer {api_key}"},
-            # `read` is the gap between two streamed chunks, not total
-            # generation time — see the module docstring.
-            timeout=httpx.Timeout(connect=15.0, read=120.0, write=30.0, pool=15.0),
-            # Batches arrive at most once a minute and often far less often,
-            # so a pooled connection is usually cold by the time the next one
-            # needs it — and reusing a silently-dropped idle socket costs a
-            # full `read` timeout before httpx gives up.
-            limits=httpx.Limits(max_keepalive_connections=5, keepalive_expiry=30.0),
-        )
-    return _client
+def lane_for(lane: str) -> str:
+    """The lane a call for `lane` actually runs on. "inquiry" only gets its
+    own lane (its own gate AND its own httpx client) when ZAI_API_KEY_INQUIRY
+    is set; while it is blank, inquiry calls use the property key, so they
+    must also queue on the property gate — two gates in front of one Z.ai
+    account would let the two workloads collide again. Everything that is
+    not "inquiry" runs on the property lane, as it always did."""
+    if lane == glm_gate.LANE_INQUIRY and get_settings().zai_api_key_inquiry:
+        return glm_gate.LANE_INQUIRY
+    return glm_gate.LANE_PROPERTY
+
+
+def _api_key_for_lane(lane: str) -> str:
+    settings = get_settings()
+    if lane == glm_gate.LANE_INQUIRY:
+        return settings.zai_api_key_inquiry
+    return settings.zai_api_key_property
+
+
+def has_api_key(lane: str) -> bool:
+    """True when a call for `lane` has a key to send with (the inquiry lane
+    counts its fallback to the property key)."""
+    return bool(_api_key_for_lane(lane_for(lane)))
+
+
+def _get_client(lane: str = glm_gate.LANE_PROPERTY) -> httpx.Client:
+    lane = lane_for(lane)
+    client = _clients.get(lane)
+    if client is not None:
+        return client
+    with _clients_lock:
+        client = _clients.get(lane)
+        if client is None:
+            api_key = _api_key_for_lane(lane)
+            if not api_key:
+                variable = "ZAI_API_KEY_INQUIRY" if lane == glm_gate.LANE_INQUIRY else "ZAI_API_KEY_PROPERTY"
+                raise RuntimeError(f"{variable} is not set — add it to Backend/.env before the LLM stage can run.")
+            client = httpx.Client(
+                base_url=get_settings().zai_base_url,
+                headers={"Authorization": f"Bearer {api_key}"},
+                # `read` is the gap between two streamed chunks, not total
+                # generation time — see the module docstring.
+                timeout=httpx.Timeout(connect=15.0, read=120.0, write=30.0, pool=15.0),
+                # Batches arrive at most once a minute and often far less often,
+                # so a pooled connection is usually cold by the time the next one
+                # needs it — and reusing a silently-dropped idle socket costs a
+                # full `read` timeout before httpx gives up.
+                limits=httpx.Limits(max_keepalive_connections=5, keepalive_expiry=30.0),
+            )
+            _clients[lane] = client
+    return client
 
 
 def build_request_body(system_prompt: str, user_prompt: str, max_tokens: int = 16000) -> dict:
@@ -236,6 +272,7 @@ def post_with_retries(
     usage_sink: Optional[List[dict]] = None,
     failure: Optional[dict] = None,
     priority: bool = False,
+    lane: str = glm_gate.LANE_PROPERTY,
 ) -> Optional[str]:
     """Sends `request_body` and returns the model's raw reply text, retrying
     on transient failures only. Returns None once every attempt has failed.
@@ -269,8 +306,14 @@ def post_with_retries(
     `priority`, when True, lets this call jump ahead of any already-queued
     non-priority call for the NEXT slot once the current one frees — see
     glm_gate.slot. Only inquiry_classifier.py sets this; every other caller
-    keeps the default and queues FIFO exactly as before."""
-    client = _get_client()
+    keeps the default and queues FIFO exactly as before.
+
+    `lane` picks the Z.ai account (API key) and the gate the call runs on —
+    see lane_for. The default is the property lane, so every caller that
+    doesn't pass it behaves exactly as it did with the single shared key.
+    Only inquiry_classifier.py passes glm_gate.LANE_INQUIRY."""
+    lane = lane_for(lane)
+    client = _get_client(lane)
     model = request_body.get("model") or get_settings().zai_model
 
     attempt = 0
@@ -278,7 +321,7 @@ def post_with_retries(
 
     while True:
         try:
-            with glm_gate.slot(description, priority=priority):
+            with glm_gate.slot(description, priority=priority, lane=lane):
                 content, usage = _stream_completion(client, request_body)
         except httpx.HTTPStatusError as exc:
             status = exc.response.status_code
@@ -293,7 +336,7 @@ def post_with_retries(
                         "the durable retry queue, which will keep trying until it goes through."
                     )
                     return _failed(failure, f"HTTP 429 — {explanation}")
-                wait_for = glm_gate.note_rate_limited(exc.response, rate_limit_retries)
+                wait_for = glm_gate.note_rate_limited(exc.response, rate_limit_retries, lane=lane)
                 step_logger.warn(
                     f"GLM request for {description} was rate-limited (HTTP 429, rate-limit retry "
                     f"{rate_limit_retries}/{_MAX_RATE_LIMIT_RETRIES}) — {explanation}. Pausing every "

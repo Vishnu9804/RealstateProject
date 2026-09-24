@@ -95,6 +95,7 @@ import uuid
 from dataclasses import dataclass, field
 from typing import Callable, Dict, List, Optional, Set
 
+from Config import paths
 from Middleware import step_logger
 from Model.WhatsAppDataFetchingModel.group import WhatsAppGroup
 from Model.WhatsAppDataFetchingModel.whatsapp_connection import ConnectionRole, WhatsAppConnectionView
@@ -118,8 +119,16 @@ _RECONNECT_DELAY_SECONDS = 5
 _STUCK_TIMEOUT_SECONDS = 240
 _STUCK_SWEEP_INTERVAL_SECONDS = 30
 
-_SESSION_DIR = os.path.join(os.path.dirname(__file__), "session")
-_LEGACY_PROPERTY_SESSION_DB = os.path.join(_SESSION_DIR, "whatsapp_session.db")
+# The original session folder, next to this file. Still where sessions go
+# locally, and where the pre-multi-number session file is looked for.
+_CODE_SESSION_DIR = os.path.join(os.path.dirname(__file__), "session")
+# Where NEW connections store their session (the WhatsApp login itself).
+# Only moved when DATA_DIR is explicitly set — on Railway, to the Volume, so
+# a redeploy does not log every linked number out. Unset, it is the original
+# folder, so a local setup is exactly as before. An existing connection keeps
+# the path stored in its roster entry either way.
+_SESSION_DIR = str(paths.DATA_DIR / "WhatsAppSessions") if paths.DATA_DIR_IS_SET else _CODE_SESSION_DIR
+_LEGACY_PROPERTY_SESSION_DB = os.path.join(_CODE_SESSION_DIR, "whatsapp_session.db")
 _LEGACY_INQUIRY_SESSION_DB = os.path.normpath(
     os.path.join(os.path.dirname(__file__), "..", "WhatsAppInquiryHandlingService", "session", "whatsapp_inquiry_session.db")
 )
@@ -134,6 +143,7 @@ def _connection_session_db_path(connection_id: str) -> str:
 # recreated and the number re-pairs, exactly as before).
 _OWN_SESSION_DIRS = {
     os.path.normcase(os.path.normpath(_SESSION_DIR)),
+    os.path.normcase(os.path.normpath(_CODE_SESSION_DIR)),
     os.path.normcase(os.path.normpath(os.path.dirname(_LEGACY_INQUIRY_SESSION_DB))),
 }
 

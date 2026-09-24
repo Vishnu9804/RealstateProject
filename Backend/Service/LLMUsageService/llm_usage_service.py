@@ -19,9 +19,10 @@ not a hardcoded list. Property and Requirement currently share one model
 (ZAI_MODEL) and Intent uses its own (ZAI_INQUIRY_MODEL), but nothing here
 assumes either fact: pointing a site at a different model tomorrow simply
 starts a new row under that site the next time it's called, with no code
-change here. All three sites now call the same Z.ai account (previously
-Intent called Gemini, on a separate account), so all three also share
-Agent/WhatsAppDataFetchingAgent/glm_gate.py's process-wide concurrency gate.
+change here. All three sites call Z.ai: Property and Requirement on
+ZAI_API_KEY_PROPERTY, Intent on its own account (ZAI_API_KEY_INQUIRY, or the
+property key while that is blank). Each account has its own lane in
+Agent/WhatsAppDataFetchingAgent/glm_gate.py's concurrency gate.
 
 A site's own totals (calls / input / output / total tokens, and the three
 per-call averages) are NEVER stored as a separate counter — get_overview()
@@ -67,14 +68,10 @@ from typing import Any, Dict, Optional
 from Middleware import step_logger
 from Service.BackendUsageService import usage_feed
 
-# Backend/Service/LLMUsageService/this_file.py
-#   parents[0] = .../Service/LLMUsageService
-#   parents[1] = .../Service
-#   parents[2] = .../Backend        <- uvicorn's --reload watch root
-#   parents[3] = .../<project root> <- outside it, on purpose (see docstring)
-_BACKEND_DIR = Path(__file__).resolve().parents[2]
-_PROJECT_ROOT = _BACKEND_DIR.parent
-_USAGE_DIR = _PROJECT_ROOT / "LLMUsage"
+# Under DATA_DIR (Config/paths.py): locally the project root, outside
+# uvicorn's --reload watch root (Backend/) on purpose (see docstring); on
+# Railway the Volume.
+_USAGE_DIR = usage_feed.DATA_DIR / "LLMUsage"
 _USAGE_PATH = _USAGE_DIR / "llm_usage_stats.json"
 _HOURLY_PATH = _USAGE_DIR / "llm_usage_hourly.json"
 

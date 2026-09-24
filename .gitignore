@@ -39,3 +39,7 @@ KnowledgeBase/area_knowledge_stats.json
 # Batches held for retry after a failed LLM call (runtime state, see
 # Backend/Service/WhatsAppDataFetchingService/pending_batch_store.py)
 PendingBatches/
+
+# WhatsApp session files when DATA_DIR is set (Backend/Config/paths.py) —
+# the login token of every linked number. Never commit it.
+WhatsAppSessions/

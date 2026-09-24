@@ -68,6 +68,19 @@ CURRENTLY in-flight call takes to finish, not the whole backlog — and
 non-priority callers still queue strictly FIFO among themselves, so two
 property batches never reorder relative to each other.
 
+Lanes (one per Z.ai API key)
+----------------------------
+Inquiry classification runs on its own Z.ai account/key
+(ZAI_API_KEY_INQUIRY), the property + requirement structuring stages on
+another (ZAI_API_KEY_PROPERTY). Z.ai's concurrency and rate limits are per
+account, so the two are separate LANES here, each with its own slot, spacing
+clock and 429 cool-down: a 4-minute bulk import holding the property lane's
+only slot no longer delays an inquiry at all, and a 429 on one account no
+longer parks requests on the other. Inside one lane everything above applies
+unchanged. When ZAI_API_KEY_INQUIRY is left blank, inquiry calls use the
+property key and therefore run on the property lane (glm_client.lane_for),
+so two callers never share one account across two gates.
+
 Sizing: a single in-flight request is the setting that cannot be wrong,
 whatever plan the account is on. Raise _MAX_CONCURRENT_REQUESTS only after
 confirming a higher concurrency allowance with Z.ai.
@@ -123,56 +136,100 @@ _COOLDOWN_BY_CODE = {
     _CODE_DAILY_LIMIT_REACHED: _MAX_COOLDOWN_SECONDS,
 }
 
-# Replaces a plain threading.BoundedSemaphore: a semaphore wakes whichever
-# waiter the OS/GIL happens to schedule next, which is FIFO-ish but gives no
-# way to let a priority caller jump the queue. A Condition over the same
-# kind of state a semaphore holds (a count of free slots) gets both: still
-# exactly _MAX_CONCURRENT_REQUESTS in flight at once, same as before, but the
-# NEXT slot goes to a priority waiter first if one is waiting — see "Priority
-# lane" above. This governs only queue order; it never touches a call that
-# is already in flight, so an in-progress batch always runs to completion
-# exactly as it did before this existed.
-_slot_cv = threading.Condition()
-_slots_in_use = 0
-_priority_waiting = 0
-
-_state_lock = threading.Lock()
-_earliest_next_start = 0.0
-_cooldown_until = 0.0
-_cooldown_note = ""
-_waiting_callers = 0
+# Lane names. Each lane is a completely independent gate (its own slot count,
+# its own spacing clock, its own cool-down), because each lane is a different
+# Z.ai API key — and Z.ai's concurrency / rate limits are per ACCOUNT, so two
+# keys from two accounts never compete with each other. A single shared gate
+# would keep serialising them against each other for no benefit, which is
+# exactly the "inquiry waits behind a bulk import" delay the second account
+# exists to remove. See the "Lanes" note in the module docstring.
+LANE_PROPERTY = "property"
+LANE_INQUIRY = "inquiry"
 
 
-def _acquire_slot(priority: bool) -> None:
-    global _slots_in_use, _priority_waiting
-    with _slot_cv:
-        if priority:
-            _priority_waiting += 1
-        try:
-            # A non-priority caller also waits while a priority caller is
-            # queued, even if a slot is free the instant it checks — that's
-            # what lets the priority caller be handed the slot next instead
-            # of racing it. Rechecked in a loop (not a single wait) because
-            # notify_all wakes every waiter and only one should proceed.
-            while _slots_in_use >= _MAX_CONCURRENT_REQUESTS or (not priority and _priority_waiting > 0):
-                _slot_cv.wait()
-            _slots_in_use += 1
-        finally:
+class _Gate:
+    """One lane's admission-control state. Replaces a plain
+    threading.BoundedSemaphore: a semaphore wakes whichever waiter the OS/GIL
+    happens to schedule next, which is FIFO-ish but gives no way to let a
+    priority caller jump the queue. A Condition over the same kind of state a
+    semaphore holds (a count of free slots) gets both: still exactly
+    _MAX_CONCURRENT_REQUESTS in flight at once, but the NEXT slot goes to a
+    priority waiter first if one is waiting — see "Priority lane" above. This
+    governs only queue order; it never touches a call that is already in
+    flight, so an in-progress batch always runs to completion."""
+
+    def __init__(self, name: str) -> None:
+        self.name = name
+        self.slot_cv = threading.Condition()
+        self.slots_in_use = 0
+        self.priority_waiting = 0
+        self.state_lock = threading.Lock()
+        self.earliest_next_start = 0.0
+        self.cooldown_until = 0.0
+        self.cooldown_note = ""
+        self.waiting_callers = 0
+
+    def acquire_slot(self, priority: bool) -> None:
+        with self.slot_cv:
             if priority:
-                _priority_waiting -= 1
+                self.priority_waiting += 1
+            try:
+                # A non-priority caller also waits while a priority caller is
+                # queued, even if a slot is free the instant it checks — that's
+                # what lets the priority caller be handed the slot next instead
+                # of racing it. Rechecked in a loop (not a single wait) because
+                # notify_all wakes every waiter and only one should proceed.
+                while self.slots_in_use >= _MAX_CONCURRENT_REQUESTS or (not priority and self.priority_waiting > 0):
+                    self.slot_cv.wait()
+                self.slots_in_use += 1
+            finally:
+                if priority:
+                    self.priority_waiting -= 1
+
+    def release_slot(self) -> None:
+        with self.slot_cv:
+            self.slots_in_use -= 1
+            self.slot_cv.notify_all()
+
+    def wait_for_clear_window(self) -> None:
+        """Blocks until both this lane's cool-down has expired and the minimum
+        spacing since the previous request has elapsed, then claims this
+        request's start time. Re-checks in a loop rather than sleeping once: a
+        second 429 landing while we wait EXTENDS the cool-down, and this has to
+        honour the extension."""
+        while True:
+            with self.state_lock:
+                now = time.monotonic()
+                wait_for = max(self.cooldown_until - now, self.earliest_next_start - now)
+                note = self.cooldown_note
+                if wait_for <= 0:
+                    self.earliest_next_start = now + _MIN_SECONDS_BETWEEN_REQUESTS
+                    return
+            if wait_for > 2.0:
+                step_logger.info(
+                    f"Pausing GLM requests for {wait_for:.0f}s before the next one"
+                    + (f" — {note}" if note else "")
+                )
+            # Capped so an extended cool-down is picked up on the next pass
+            # rather than being slept straight through.
+            time.sleep(min(wait_for, 5.0))
 
 
-def _release_slot() -> None:
-    global _slots_in_use
-    with _slot_cv:
-        _slots_in_use -= 1
-        _slot_cv.notify_all()
+_gates = {LANE_PROPERTY: _Gate(LANE_PROPERTY), LANE_INQUIRY: _Gate(LANE_INQUIRY)}
+
+
+def _gate_for(lane: str) -> _Gate:
+    # An unrecognised lane name falls back to the property lane — the
+    # original, single-gate behaviour — rather than raising in the middle of
+    # a request.
+    return _gates.get(lane) or _gates[LANE_PROPERTY]
 
 
 @contextmanager
-def slot(description: str, priority: bool = False) -> Iterator[None]:
-    """Holds one of the process's GLM request slots for the duration of the
-    block, after waiting out any cool-down another caller is serving.
+def slot(description: str, priority: bool = False, lane: str = LANE_PROPERTY) -> Iterator[None]:
+    """Holds one of `lane`'s GLM request slots for the duration of the block,
+    after waiting out any cool-down another caller on the same lane is
+    serving.
 
     `priority=True` is for a call a person is waiting on right now (inquiry
     classification) rather than an unattended background batch job (property/
@@ -184,11 +241,11 @@ def slot(description: str, priority: bool = False) -> Iterator[None]:
     Always released, including when the request inside raises — which is
     what lets a caller sleep out its retry backoff without holding the slot
     shut against everyone else."""
-    global _waiting_callers
+    gate = _gate_for(lane)
 
-    with _state_lock:
-        _waiting_callers += 1
-        queued_ahead = _waiting_callers - 1
+    with gate.state_lock:
+        gate.waiting_callers += 1
+        queued_ahead = gate.waiting_callers - 1
     if queued_ahead > 0:
         step_logger.info(
             f"Holding {description} — {queued_ahead} other GLM request(s) already queued"
@@ -197,52 +254,28 @@ def slot(description: str, priority: bool = False) -> Iterator[None]:
             "Z.ai answers with HTTP 429."
         )
 
-    _acquire_slot(priority)
+    gate.acquire_slot(priority)
     try:
-        _wait_for_clear_window()
+        gate.wait_for_clear_window()
         yield
     finally:
-        _release_slot()
-        with _state_lock:
-            _waiting_callers -= 1
+        gate.release_slot()
+        with gate.state_lock:
+            gate.waiting_callers -= 1
 
 
-def _wait_for_clear_window() -> None:
-    """Blocks until both the shared cool-down has expired and the minimum
-    spacing since the previous request has elapsed, then claims this
-    request's start time. Re-checks in a loop rather than sleeping once: a
-    second 429 landing while we wait EXTENDS the cool-down, and this has to
-    honour the extension."""
-    global _earliest_next_start
-
-    while True:
-        with _state_lock:
-            now = time.monotonic()
-            wait_for = max(_cooldown_until - now, _earliest_next_start - now)
-            note = _cooldown_note
-            if wait_for <= 0:
-                _earliest_next_start = now + _MIN_SECONDS_BETWEEN_REQUESTS
-                return
-        if wait_for > 2.0:
-            step_logger.info(
-                f"Pausing GLM requests for {wait_for:.0f}s before the next one"
-                + (f" — {note}" if note else "")
-            )
-        # Capped so an extended cool-down is picked up on the next pass
-        # rather than being slept straight through.
-        time.sleep(min(wait_for, 5.0))
-
-
-def note_rate_limited(response: Optional[httpx.Response], retry_number: int) -> float:
+def note_rate_limited(response: Optional[httpx.Response], retry_number: int, lane: str = LANE_PROPERTY) -> float:
     """Records that Z.ai rejected a request with HTTP 429 and returns how
     long THIS caller should wait before trying again. Also parks every other
-    caller for the same period, so the pipeline stops competing with itself
-    the moment the first thread discovers the limit.
+    caller ON THE SAME LANE for the same period, so the pipeline stops
+    competing with itself the moment the first thread discovers the limit. A
+    different lane is a different Z.ai account, which this 429 says nothing
+    about, so it is left running.
 
     `retry_number` is 1 for the first 429 of a request, 2 for the second and
     so on; it only ever lengthens the wait, never shortens one the server
     asked for."""
-    global _cooldown_until, _cooldown_note
+    gate = _gate_for(lane)
 
     code = _error_code(response)
     server_asked_for = _retry_after_seconds(response)
@@ -254,9 +287,9 @@ def note_rate_limited(response: Optional[httpx.Response], retry_number: int) -> 
     wait_for = min(max(server_asked_for or 0.0, escalated), _MAX_COOLDOWN_SECONDS)
     wait_for += random.uniform(0.0, min(3.0, wait_for * 0.25))
 
-    with _state_lock:
-        _cooldown_until = max(_cooldown_until, time.monotonic() + wait_for)
-        _cooldown_note = describe(response)
+    with gate.state_lock:
+        gate.cooldown_until = max(gate.cooldown_until, time.monotonic() + wait_for)
+        gate.cooldown_note = describe(response)
     return wait_for
 
 

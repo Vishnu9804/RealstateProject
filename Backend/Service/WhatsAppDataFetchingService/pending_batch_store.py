@@ -80,17 +80,17 @@ from datetime import datetime, timezone
 from pathlib import Path
 from typing import Any, Callable, Dict, Iterator, List, Optional, Set, Tuple
 
+from Config import paths
 from Middleware import step_logger
 from Model.WhatsAppDataFetchingModel.whatsapp_message import WhatsAppChatMessage
 
-# Backend/Service/WhatsAppDataFetchingService/this_file.py
-#   parents[2] = .../Backend    <- uvicorn's --reload watch root
-#   parents[3] = .../<project root>
-# Outside the watch root on purpose, exactly like KnowledgeBase/: writing a
-# file under Backend/ while uvicorn --reload is running would restart the
-# server on every buffered message.
-_PROJECT_ROOT = Path(__file__).resolve().parents[3]
-PENDING_DIR = _PROJECT_ROOT / "PendingBatches"
+# Under DATA_DIR (Config/paths.py). Locally that is the project root, outside
+# uvicorn's --reload watch root (Backend/) on purpose, exactly like
+# KnowledgeBase/: writing a file under Backend/ while uvicorn --reload is
+# running would restart the server on every buffered message. On Railway it
+# is the Volume — without one, a redeploy would wipe every held batch, which
+# is the one thing this module exists to prevent.
+PENDING_DIR = paths.DATA_DIR / "PendingBatches"
 # A subdirectory, so the batch-record scan below (a NON-recursive glob of
 # PENDING_DIR) can never mistake a live buffer snapshot for a batch to retry.
 BUFFER_DIR = PENDING_DIR / "buffers"

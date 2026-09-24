@@ -102,6 +102,7 @@ from Controller.NeonUsageController.neon_usage_controller import router as neon_
 from Controller.BackendUsageController.backend_usage_controller import router as backend_usage_router
 from Controller.LandingPageController.landing_page_controller import router as landing_page_router
 from Controller.PropertySharingController.property_share_controller import router as property_share_router
+from Config import paths
 from Config.settings import get_settings
 from Database.session import init_db, is_database_configured
 from Middleware.cpu_meter import CpuMeterMiddleware, install_threadpool_meter
@@ -178,6 +179,19 @@ async def _startup_heartbeat() -> None:
 
 @asynccontextmanager
 async def lifespan(_app: FastAPI):
+    # Where every runtime-written file goes (Config/paths.py) — the first
+    # thing to check in a hosted log if anything seems to reset on redeploy.
+    if paths.DATA_DIR_IS_SET:
+        step_logger.info(
+            f"Runtime files (pending batches, area knowledge base, usage stats, WhatsApp sessions) are kept in "
+            f"{paths.DATA_DIR} (DATA_DIR)."
+        )
+    else:
+        step_logger.info(
+            f"Runtime files (pending batches, area knowledge base, usage stats) are kept in {paths.DATA_DIR} "
+            "(DATA_DIR is not set). On a host, set DATA_DIR to a persistent Volume or they reset on every redeploy."
+        )
+
     # FIRST, before anything touches the database: the Neon usage history is
     # a chronological list of wake-ups, and init_db()'s own queries are
     # themselves the first wake-up of this run. Loading afterwards would

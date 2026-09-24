@@ -3,7 +3,8 @@ nothing outside this file should call `os.getenv(...)` directly. Values come
 from `Backend/.env` (see `.env.example` for the variables it must define).
 
 Every later stage of the pipeline depends on a value defined here:
-Z.ai GLM structuring (Agent/) needs `zai_api_key`, the Postgres+pgvector
+Z.ai GLM structuring (Agent/) needs `zai_api_key_property` (and inquiry
+classification `zai_api_key_inquiry`), the Postgres+pgvector
 data layer needs `database_url`. Both are intentionally blank until the
 final "connect the database" step — everything up to that point is built and
 runnable against these placeholders.
@@ -12,7 +13,7 @@ runnable against these placeholders.
 import socket
 from functools import lru_cache
 
-from pydantic import Field, model_validator
+from pydantic import AliasChoices, Field, model_validator
 from pydantic_settings import BaseSettings, SettingsConfigDict
 
 
@@ -38,7 +39,20 @@ def _detect_lan_ip() -> str:
 class Settings(BaseSettings):
     model_config = SettingsConfigDict(env_file=".env", env_file_encoding="utf-8", extra="ignore")
 
-    zai_api_key: str = ""
+    # Two Z.ai accounts, one key each, so the two workloads can never queue
+    # behind each other (Z.ai's concurrency limit is per ACCOUNT, and a bulk
+    # property import used to hold the only slot for minutes while a client
+    # inquiry waited):
+    #   ZAI_API_KEY_PROPERTY — property + broker-requirement structuring
+    #                          (the bulk imports). This was ZAI_API_KEY; the
+    #                          old name is still read if the new one is unset,
+    #                          so a host that hasn't renamed the variable yet
+    #                          keeps working.
+    #   ZAI_API_KEY_INQUIRY  — client-inquiry classification only. Leave blank
+    #                          to fall back to the property key (inquiries
+    #                          then share that account, exactly as before).
+    zai_api_key_property: str = Field(default="", validation_alias=AliasChoices("ZAI_API_KEY_PROPERTY", "ZAI_API_KEY"))
+    zai_api_key_inquiry: str = Field(default="", validation_alias=AliasChoices("ZAI_API_KEY_INQUIRY"))
     # Single Postgres+pgvector database for the whole app — both the
     # property-listing data (whatsappDataFetching) and the client records
     # (whatsappInquiryHandling, Database/client_session.py) live in this one
@@ -72,7 +86,7 @@ class Settings(BaseSettings):
     # property-related at all. A much simpler fixed-shape judgment (one bool +
     # a short reason) than property/requirement extraction, so GLM-4.7-FlashX's
     # speed and lower cost apply here without the accuracy problems that moved
-    # zai_model off it above. Same Z.ai account/key as zai_api_key.
+    # zai_model off it above. Runs on zai_api_key_inquiry (falls back to zai_api_key_property if blank).
     zai_inquiry_model: str = "glm-4.7-flashx"
     # OpenAI-compatible chat-completions endpoint. Override with ZAI_BASE_URL
     # only if Z.ai's regional/mainland endpoint is needed instead.
@@ -301,6 +315,17 @@ class Settings(BaseSettings):
     # "https://real-estate-ops.pages.dev,https://real-estate-site.pages.dev".
     # Leave blank in local development.
     extra_cors_origins: str = ""
+
+    # Folder every runtime-written file lives under (see Config/paths.py):
+    # pending batches, the area knowledge base, the usage stats and — only
+    # when this is set — the WhatsApp session files. Blank (the default)
+    # keeps today's local layout: the project root, one level above
+    # Backend/. On Railway it must be the mount path of a Volume (/data), so
+    # all of it survives restarts and redeploys. RAILWAY_VOLUME_MOUNT_PATH,
+    # which Railway sets by itself whenever a Volume is attached, is used
+    # when DATA_DIR is not set, so a forgotten variable still lands on the
+    # Volume. Read once at startup.
+    data_dir: str = Field(default="", validation_alias=AliasChoices("DATA_DIR", "RAILWAY_VOLUME_MOUNT_PATH"))
 
     @model_validator(mode="after")
     def _fill_lan_defaults(self) -> "Settings":

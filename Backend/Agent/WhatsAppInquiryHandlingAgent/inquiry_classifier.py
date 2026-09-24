@@ -7,15 +7,17 @@ Genuinely agentic (LLM-driven) code — belongs in Agent/, not Service/
 (mirrors Agent/WhatsAppDataFetchingAgent/property_structurer.py).
 
 Runs on GLM-4.7-FlashX via Z.ai (Config/settings.py's zai_inquiry_model),
-the same account/transport the property and requirement structuring stages
-use (Agent/WhatsAppDataFetchingAgent/glm_client.py) — previously ran on
-Gemini, on its own separate account. A much simpler fixed-shape judgment
-(one bool + a short reason) than property/requirement extraction, so
-FlashX's speed and lower cost apply cleanly here. Because this now shares
-Z.ai's account-wide concurrency allowance, every call goes through the same
-process-wide gate (glm_gate.py) the other two stages use — necessary now,
-not merely inherited, since two simultaneous Z.ai requests are exactly what
-that gate exists to prevent.
+the same transport the property and requirement structuring stages use
+(Agent/WhatsAppDataFetchingAgent/glm_client.py) but on its OWN Z.ai account
+and API key (ZAI_API_KEY_INQUIRY) — previously ran on Gemini, then shared the
+property key. Z.ai's concurrency allowance is per account, so a separate key
+means a bulk property import (ZAI_API_KEY_PROPERTY) can never hold up a
+client inquiry. Every call still goes through a gate (glm_gate.py), on the
+inquiry lane, so two simultaneous requests on this one account are still
+serialised; a blank ZAI_API_KEY_INQUIRY falls back to the property key and
+lane. A much simpler fixed-shape judgment (one bool + a short reason) than
+property/requirement extraction, so FlashX's speed and lower cost apply
+cleanly here.
 
 Token-efficiency (requirement #4 from the feature spec): every batch is
 classified in exactly ONE request containing only that batch's own text —
@@ -39,7 +41,7 @@ from typing import List
 
 from pydantic import ValidationError
 
-from Agent.WhatsAppDataFetchingAgent import glm_client
+from Agent.WhatsAppDataFetchingAgent import glm_client, glm_gate
 from Agent.WhatsAppInquiryHandlingAgent.inquiry_classification_schema import InquiryClassification
 from Config.settings import get_settings
 from Middleware import step_logger
@@ -59,9 +61,12 @@ def classify_batch(messages: List[InquiryChatMessage]) -> InquiryClassification:
     if not combined_text:
         return InquiryClassification(is_property_related=False, reason="empty batch")
 
-    if not get_settings().zai_api_key:
-        step_logger.error("ZAI_API_KEY is not set — add it to Backend/.env before inquiry classification can run.")
-        return InquiryClassification(is_property_related=False, reason="ZAI_API_KEY not configured")
+    if not glm_client.has_api_key(glm_gate.LANE_INQUIRY):
+        step_logger.error(
+            "ZAI_API_KEY_INQUIRY is not set (and there is no ZAI_API_KEY_PROPERTY to fall back to) — "
+            "add it to Backend/.env before inquiry classification can run."
+        )
+        return InquiryClassification(is_property_related=False, reason="ZAI_API_KEY_INQUIRY not configured")
 
     request_body = glm_client.build_request_body(_build_system_prompt(), _build_user_prompt(combined_text), max_tokens=300)
     request_body["model"] = get_settings().zai_inquiry_model
@@ -77,6 +82,11 @@ def classify_batch(messages: List[InquiryChatMessage]) -> InquiryClassification:
         # import never makes an inquiry wait behind the whole backlog. See
         # glm_gate.py's "Priority lane" note.
         priority=True,
+        # Runs on its own Z.ai account (ZAI_API_KEY_INQUIRY) and its own gate,
+        # so a bulk property import can no longer hold the slot this call
+        # needs. Falls back to the property lane while that key is blank —
+        # see glm_client.lane_for.
+        lane=glm_gate.LANE_INQUIRY,
     )
     if content is None:
         reason = failure.get("reason") or "classification request failed"

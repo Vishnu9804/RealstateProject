@@ -13,8 +13,8 @@ per update, for an hour bucket that is still filling up).
 
 A cursor is "<boot id>.<position>". Positions only mean something to the
 process that issued them, so a cursor from before a restart (or a redeploy,
-which on Railway also wipes these local files) is answered with everything
-still held — the page merges by key, so a resync can never double count.
+which also wipes these files if DATA_DIR is not on a persistent Volume) is
+answered with everything still held — the page merges by key, so a resync can never double count.
 
 Items that are running totals (one hour's CPU for one endpoint, one hour's
 tokens for one model) are keyed with the EPOCH of the store that produced
@@ -41,12 +41,14 @@ from typing import Any, Optional, Tuple
 
 from fastapi import Response
 
-# Backend/Service/BackendUsageService/this_file.py -> parents[3] = the
-# project root, one level ABOVE Backend/. Runtime-written files live there so
-# uvicorn's --reload (which watches Backend/) never restarts the server over
-# an ordinary stats write — the same reasoning as llm_usage_service and
-# neon_usage_service.
-PROJECT_ROOT = Path(__file__).resolve().parents[3]
+from Config import paths
+
+# Runtime-written files live under DATA_DIR (Config/paths.py): locally the
+# project root, one level ABOVE Backend/, so uvicorn's --reload (which
+# watches Backend/) never restarts the server over an ordinary stats write —
+# the same reasoning as llm_usage_service and neon_usage_service. On Railway
+# it is the Volume, so the files survive a redeploy.
+DATA_DIR = paths.DATA_DIR
 
 RETENTION_SECONDS = 48 * 3600
 _IST_OFFSET_SECONDS = 5 * 3600 + 30 * 60

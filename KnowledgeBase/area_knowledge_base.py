@@ -84,6 +84,7 @@ AREA_KNOWLEDGE_BASE: Dict[str, List[str]] = {
     'Citylight': [
         'Citylight',
         'Anurodh Dwar',
+        'Anuvrat Dhwar',
         'Athwa',
         'Chandan Park',
         'Citylight Char Rasta',
@@ -92,6 +93,7 @@ AREA_KNOWLEDGE_BASE: Dict[str, List[str]] = {
         'Megh Mayur Plaza',
         'new City Light road',
         'Parle Point',
+        'Piplod (Near Ryan International School',
         'Rudravan Apartment',
         'Sarjan Society',
         'Seema Row House',

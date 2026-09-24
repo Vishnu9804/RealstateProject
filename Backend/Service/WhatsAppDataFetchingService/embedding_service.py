@@ -62,6 +62,7 @@ from __future__ import annotations
 
 import ctypes
 import gc
+import os
 import sys
 import threading
 import time
@@ -183,6 +184,20 @@ def _return_free_memory_to_the_os() -> None:
         pass
 
 
+def _apply_hf_token() -> None:
+    """Makes HF_TOKEN from `.env` visible to huggingface_hub.
+
+    huggingface_hub reads the token from the process environment, but
+    Config/settings.py loads `.env` without exporting it, so a token that
+    lives only in `.env` would never be seen locally. An HF_TOKEN already set
+    in the real environment (as on Railway) is left untouched, and a blank
+    token changes nothing — the model is public and downloads anonymously.
+    """
+    token = get_settings().hf_token.strip()
+    if token and not os.environ.get("HF_TOKEN"):
+        os.environ["HF_TOKEN"] = token
+
+
 def _build_model() -> SentenceTransformer:
     """Constructs the model, reading from the on-disk cache alone once we
     know the files are there.
@@ -208,6 +223,7 @@ def _build_model() -> SentenceTransformer:
     the way that always worked turns that into one slow load and a log line.
     """
     global _model_files_cached
+    _apply_hf_token()
     from sentence_transformers import SentenceTransformer
 
     if _model_files_cached:

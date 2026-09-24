@@ -250,6 +250,15 @@ class Settings(BaseSettings):
     # as the daily allowances above.
     embedding_model_idle_unload_minutes: int = Field(default=15, ge=0)
 
+    # Hugging Face access token (HF_TOKEN in .env) used when the embedding
+    # model is downloaded. Optional: the model is public, so blank still works
+    # — a token only lifts the anonymous download rate limit and silences the
+    # "unauthenticated requests" warning. Settings reads `.env` itself without
+    # exporting it to the process environment, which is where huggingface_hub
+    # looks, so embedding_service hands the value over (see _apply_hf_token).
+    # On Railway, HF_TOKEN is a real environment variable and works either way.
+    hf_token: str = ""
+
     # Whether the Settings page may change the selected areas
     # (ALLOW_AREA_CHANGE in .env). False by default: the area list decides
     # which captured properties are Main vs Outsider, so editing it is locked

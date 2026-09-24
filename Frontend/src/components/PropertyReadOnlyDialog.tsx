@@ -280,7 +280,10 @@ function ReadOnlyFrame({
 
   return createPortal(
     <div className="modal-scrim" onMouseDown={(event) => event.target === event.currentTarget && onClose()}>
-      <div className="detail-modal anim-rise" role="dialog" aria-modal="true" aria-label={ariaLabel}>
+      {/* --solid: opaque body, no backdrop filter, short entrance — see
+          .detail-modal--solid in app.css for why a dialog this size is
+          better off not blurring the whole window behind it. */}
+      <div className="detail-modal detail-modal--solid anim-rise" role="dialog" aria-modal="true" aria-label={ariaLabel}>
         {loading && (
           <>
             <div className="detail-modal__head">

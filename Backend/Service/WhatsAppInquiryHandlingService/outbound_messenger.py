@@ -10,7 +10,7 @@ redesign.
 
 from __future__ import annotations
 
-from typing import Optional
+from typing import List, Optional, Tuple
 
 from Middleware import step_logger
 from Service.WhatsAppDataFetchingService import whatsapp_connection_manager
@@ -45,3 +45,18 @@ def send_image(phone: str, image: bytes, caption: Optional[str] = None, connecti
         step_logger.error(f"Cannot send WhatsApp image to {phone}: no connected number is available to send from.")
         return False
     return client.send_image(phone, image, caption)
+
+
+def send_album(
+    phone: str, images: List[bytes], caption: Optional[str] = None, connection_id: Optional[str] = None
+) -> Tuple[int, bool]:
+    """Several photos as ONE album message with `caption` under it — same
+    sender choice and fallback as send_text. Returns (photos delivered,
+    caption delivered); (0, False) when nothing went out."""
+    client = whatsapp_connection_manager.get_sender_client(
+        prefer_role="inquiry", connection_id=connection_id
+    )
+    if client is None:
+        step_logger.error(f"Cannot send WhatsApp album to {phone}: no connected number is available to send from.")
+        return 0, False
+    return client.send_album(phone, images, caption)

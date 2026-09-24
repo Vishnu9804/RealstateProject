@@ -35,6 +35,8 @@ import segno
 from neonize.client import NewClient
 from neonize.events import ConnectedEv, DisconnectedEv, LoggedOutEv, MessageEv, PairStatusEv
 from neonize.proto.Neonize_pb2 import JID
+from neonize.proto.waCommon.WACommon_pb2 import MessageKey
+from neonize.proto.waE2E.WAWebProtobufsE2E_pb2 import AlbumMessage, MessageAssociation
 from neonize.proto.waE2E.WAWebProtobufsE2E_pb2 import Message as ProtoMessage
 from neonize.utils import Jid2String, build_jid, extract_text
 
@@ -147,6 +149,100 @@ class WhatsAppConnectionClient:
             if "not connected" in str(exc).lower():
                 self._force_reconnect_after_dead_websocket()
             return False
+
+    def send_album(self, phone: str, images: List[bytes], caption: Optional[str] = None) -> tuple[int, bool]:
+        """Sends `images` as ONE WhatsApp album (a single bubble with a
+        "+N" tile when there are more than four) with `caption` shown under
+        it. Returns (photos delivered, caption delivered). Never raises.
+
+        The wire format is what WhatsApp's own apps produce: an AlbumMessage
+        announcing how many photos to expect, then each photo linked to it
+        through a MessageAssociation. Sending photos one after another
+        without that link is what made WhatsApp show a separate bubble per
+        photo. neonize ships its own send_album, but it sends the photos
+        from a thread pool, so their order inside the album is not
+        guaranteed and one failed photo aborts the lot; this does the same
+        thing in order, and reports what actually went out so the caller can
+        still deliver the details as text if the captioned photo did not.
+
+        (0, False) means nothing was sent — the caller may fall back to
+        sending the photos individually. A single usable photo is sent as a
+        plain captioned image, since an album needs at least two."""
+        if self._client is None:
+            step_logger.error(f"Cannot send WhatsApp album via {self.connection_id}: not connected yet.")
+            return 0, False
+        digits = "".join(ch for ch in phone if ch.isdigit())
+        if not digits:
+            step_logger.error(f"Cannot send WhatsApp album via {self.connection_id}: {phone!r} has no digits.")
+            return 0, False
+        jid = build_jid(digits)
+
+        # Upload every photo BEFORE announcing the album, so the count in the
+        # announcement is exactly what will follow. The caption rides on the
+        # first photo that builds; WhatsApp displays it under the whole album.
+        built = []
+        pending_caption = caption or None
+        captioned = None
+        for image in images:
+            try:
+                message = self._client.build_image_message(image, caption=pending_caption)
+            except Exception as exc:  # noqa: BLE001
+                step_logger.error(f"Failed to prepare a WhatsApp album photo for {phone} via {self.connection_id}: {exc!r}")
+                if "not connected" in str(exc).lower():
+                    self._force_reconnect_after_dead_websocket()
+                    return 0, False
+                continue
+            if pending_caption is not None:
+                captioned = message
+                pending_caption = None
+            built.append(message)
+
+        if not built:
+            return 0, False
+        try:
+            if len(built) == 1:
+                self._client.send_message(jid, built[0])
+                return 1, captioned is not None
+            parent = self._client.send_message(
+                jid, ProtoMessage(albumMessage=AlbumMessage(expectedImageCount=len(built), expectedVideoCount=0))
+            )
+            # WhatsApp files a chat under the contact's hidden LID where one
+            # is known, so the album's key names the chat that way too; the
+            # phone-number form is the fallback when there is no LID yet.
+            key_jid = jid
+            try:
+                lid = self._client.get_lid_from_pn(jid)
+                if lid and lid.User:
+                    key_jid = lid
+            except Exception:  # noqa: BLE001
+                pass
+            step_logger.info(f"Sending a {len(built)}-photo WhatsApp album to {phone} (album key {Jid2String(key_jid)}).")
+            association = MessageAssociation(
+                associationType=MessageAssociation.AssociationType.MEDIA_ALBUM,
+                parentMessageKey=MessageKey(remoteJID=Jid2String(key_jid), fromMe=True, ID=parent.ID),
+            )
+        except Exception as exc:  # noqa: BLE001
+            step_logger.error(f"Failed to send WhatsApp album to {phone} via {self.connection_id}: {exc!r}")
+            if "not connected" in str(exc).lower():
+                self._force_reconnect_after_dead_websocket()
+            return 0, False
+
+        delivered = 0
+        caption_delivered = False
+        for message in built:
+            message.messageContextInfo.messageAssociation.CopyFrom(association)
+            try:
+                self._client.send_message(jid, message)
+            except Exception as exc:  # noqa: BLE001
+                step_logger.error(f"Failed to send a WhatsApp album photo to {phone} via {self.connection_id}: {exc!r}")
+                if "not connected" in str(exc).lower():
+                    self._force_reconnect_after_dead_websocket()
+                    break
+                continue
+            delivered += 1
+            if message is captioned:
+                caption_delivered = True
+        return delivered, caption_delivered
 
     def _force_reconnect_after_dead_websocket(self) -> None:
         """See WhatsAppInquiryClient's identical method (the module this

@@ -33,11 +33,11 @@ because they protect against things webhooks make MORE likely, not less:
 
 One genuine behavioural difference, forced by Meta's rules rather than
 chosen: a comment can only ever produce ONE direct message (a "private
-reply", allowed once per comment, within 7 days). The three-message DM
-sequence therefore goes out as one combined message on the comment path.
-Every word of it is still sent, and the DM path — someone sharing a reel
-into the inbox, which opens a 24-hour messaging window — still sends the
-three separate messages exactly as before.
+reply", allowed once per comment, within 7 days). The two-message DM
+sequence (property details, then the requirements-form link) therefore goes
+out as one combined message on the comment path. Every word of it is still
+sent, and the DM path — someone sharing a reel into the inbox, which opens a
+24-hour messaging window — sends the two messages separately.
 """
 
 from __future__ import annotations
@@ -435,7 +435,7 @@ def _handle_message_event(event: dict) -> None:
             ig_user_id=sender_id,
             ig_username=None,
             # A person who just messaged us has an open 24-hour window, so
-            # the three messages go out exactly as they always have.
+            # the two messages go out as two separate DMs.
             send_sequence=lambda messages: all(
                 instagram_messenger.send_dm_to_user(sender_id, text) for text in messages
             ),
@@ -522,27 +522,34 @@ def _match_shared_reel(message: dict) -> Optional[EmbeddedProperty]:
 
 
 def _combine_for_single_message(messages) -> str:
-    """The three-message sequence as ONE message, for the private-reply path.
+    """The two-message sequence as ONE message, for the private-reply path.
 
     Kept whole wherever it fits, which for a real property it comfortably
-    does (~700 bytes against Instagram's 1000-byte ceiling). If a long
-    property somehow pushes it over, the site-visit line is the one dropped:
-    the details and the requirements-form link are what the person came for,
-    and the phone number is also in the public reply's follow-up
-    conversation.
+    does (~400 bytes against Instagram's 1000-byte ceiling). If a long
+    property somehow pushes it over, it is the property details that are
+    shortened, never the last message: the requirements-form link sits at the
+    very end, and send_private_reply_to_comment cuts anything over the limit
+    from the END — so an untrimmed overflow would lose the link, the one part
+    of the reply that is worth more than the rest.
     """
     messages = [text for text in messages if text]
     joined = "\n\n".join(messages)
-    if instagram_messenger.byte_length(joined) <= instagram_messenger.MAX_MESSAGE_BYTES:
+    max_bytes = instagram_messenger.MAX_MESSAGE_BYTES
+    if instagram_messenger.byte_length(joined) <= max_bytes or len(messages) < 2:
         return joined
-    if len(messages) > 2:
-        trimmed = "\n\n".join([messages[0], messages[-1]])
-        step_logger.warn(
-            "The combined Instagram private reply was over Instagram's 1000-byte limit — the site-visit "
-            "line was left out so the property details and the requirements link both fit."
-        )
-        return trimmed
-    return joined
+
+    tail = messages[-1]
+    budget = max_bytes - instagram_messenger.byte_length(tail) - len("\n\n")
+    if budget <= 0:
+        return joined  # the link message alone fills the limit; nothing sensible to trim
+    head = instagram_messenger.truncate_to_bytes("\n\n".join(messages[:-1]), budget)
+    if "\n" in head:
+        head = head[: head.rindex("\n")]  # end on a whole detail line
+    step_logger.warn(
+        "The combined Instagram private reply was over Instagram's 1000-byte limit — the property "
+        "details were shortened so the requirements link still fits."
+    )
+    return f"{head.rstrip()}\n\n{tail}"
 
 
 def _maybe_send_property_sequence(
@@ -613,8 +620,7 @@ def _maybe_send_property_sequence(
         if not send_sequence(
             [
                 templates.build_property_info_message(prop),
-                templates.build_site_visit_message(),
-                templates.build_more_options_message(form_link),
+                templates.build_requirement_link_message(form_link),
             ]
         ):
             step_logger.error(

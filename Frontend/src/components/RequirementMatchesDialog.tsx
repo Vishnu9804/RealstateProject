@@ -1,4 +1,4 @@
-import { useCallback, useEffect, useMemo, useRef, useState } from "react";
+import { memo, useCallback, useEffect, useMemo, useRef, useState } from "react";
 import { PROPERTY_FETCH_LIMIT } from "../lib/fetchLimits";
 import { createPortal } from "react-dom";
 import { matchingApi } from "../api/matchingApi";
@@ -11,6 +11,7 @@ import type {
   PropertySource,
   RequirementMatchResult,
 } from "../api/types";
+import { useSceneFreeze } from "../hooks/useSceneFreeze";
 import { friendlyError } from "../lib/apiError";
 import { formatArea, formatPrice, relativeTime } from "../lib/formatters";
 import { getCachedPropertyList, patchCachedProperty, setCachedPropertyList } from "../lib/propertyListCache";
@@ -166,6 +167,9 @@ export default function RequirementMatchesDialog({
   onMatchesLoaded?: (recordId: string, total: number) => void;
 }) {
   const toast = useToast();
+  // Same reasoning as ClientMatchesDialog's — this covers nearly the whole
+  // window, so the aurora behind it is invisible and only costing frames.
+  useSceneFreeze();
   // Held in a ref so a new function identity from the page never changes
   // `load` below — which would re-run its effect and re-fetch in a loop.
   const onMatchesLoadedRef = useRef(onMatchesLoaded);
@@ -341,14 +345,24 @@ export default function RequirementMatchesDialog({
     });
   }, [items]);
 
-  function toggleSelected(recordId: string) {
+  /*  Stable, and taking the id as an argument, so every card on the grid can
+   *  be handed the SAME function — which is what lets RequirementMatchCard's
+   *  React.memo hold and keeps a tick to one card's re-render instead of the
+   *  whole grid's. Same reasoning as ClientMatchesDialog's
+   *  handleToggleSelect. */
+  const toggleSelected = useCallback((recordId: string) => {
     setSelectedIds((previous) => {
       const next = new Set(previous);
       if (next.has(recordId)) next.delete(recordId);
       else next.add(recordId);
       return next;
     });
-  }
+  }, []);
+
+  const handleOpenItem = useCallback(
+    (recordId: string) => setOpenItemId(recordId),
+    [],
+  );
 
   /** The open card in the shape the client-inquiry property detail view
    *  takes, so both dialogs show a property identically. Nothing here is
@@ -413,7 +427,7 @@ export default function RequirementMatchesDialog({
         }}
       >
         <div
-          className="detail-modal detail-modal--wide matches-dialog anim-rise"
+          className="detail-modal detail-modal--wide detail-modal--solid matches-dialog anim-rise"
           role="dialog"
           aria-modal="true"
           aria-label="Properties matched for this requirement"
@@ -482,39 +496,41 @@ export default function RequirementMatchesDialog({
                 label: `${CATEGORY_LABEL[key]}${countByCategory[key] ? ` (${countByCategory[key]})` : ""}`,
               }))}
             />
+            {/* Shown only when the broker named more than one acceptable
+                type — the same control, the same behaviour and the same
+                place in the row as the client-inquiry dialog's, because it
+                is the same question being asked of the same scoring. It
+                shares this row rather than taking one of its own, which is
+                another rank of cards visible below. */}
+            {showTypeTabs && (
+              <div className="matches-dialog__types">
+                <span className="matches-dialog__types-rule" aria-hidden="true" />
+                <span className="section-head__eyebrow" style={{ marginBottom: 0 }}>
+                  Property type
+                </span>
+                <Segmented<string>
+                  ariaLabel="Which of the requirement's property types to show"
+                  value={typeFilter ?? ALL_TYPES}
+                  onChange={(value) => setTypeView(value === ALL_TYPES ? null : value)}
+                  options={[
+                    {
+                      value: ALL_TYPES,
+                      label: `All${visibleItems.length ? ` (${visibleItems.length})` : ""}`,
+                    },
+                    ...requirementTypeList.map((type) => {
+                      const count = countByType.get(type.toLowerCase()) ?? 0;
+                      return { value: type, label: `${type}${count ? ` (${count})` : ""}` };
+                    }),
+                  ]}
+                />
+              </div>
+            )}
             {selectedIds.size > 0 && (
               <span className="faint small" style={{ marginLeft: "auto" }}>
                 {selectedIds.size} selected
               </span>
             )}
           </div>
-
-          {/* Shown only when the broker named more than one acceptable type
-              — the same row, the same styling and the same behaviour as the
-              client-inquiry dialog's, because it is the same question being
-              asked of the same scoring. */}
-          {showTypeTabs && (
-            <div className="matches-dialog__tabs matches-dialog__tabs--types">
-              <span className="section-head__eyebrow" style={{ marginBottom: 0 }}>
-                Property type
-              </span>
-              <Segmented<string>
-                ariaLabel="Which of the requirement's property types to show"
-                value={typeFilter ?? ALL_TYPES}
-                onChange={(value) => setTypeView(value === ALL_TYPES ? null : value)}
-                options={[
-                  {
-                    value: ALL_TYPES,
-                    label: `All${visibleItems.length ? ` (${visibleItems.length})` : ""}`,
-                  },
-                  ...requirementTypeList.map((type) => {
-                    const count = countByType.get(type.toLowerCase()) ?? 0;
-                    return { value: type, label: `${type}${count ? ` (${count})` : ""}` };
-                  }),
-                ]}
-              />
-            </div>
-          )}
 
           <div className="detail-modal__body">
             {error && (
@@ -573,8 +589,8 @@ export default function RequirementMatchesDialog({
                         key={item.recordId}
                         item={item}
                         selected={selectedIds.has(item.recordId)}
-                        onToggleSelect={() => toggleSelected(item.recordId)}
-                        onOpen={() => setOpenItemId(item.recordId)}
+                        onToggleSelect={toggleSelected}
+                        onOpen={handleOpenItem}
                       />
                     ))}
                   </div>
@@ -641,7 +657,7 @@ export default function RequirementMatchesDialog({
  * always-absent props through the client dialog's hot path to save a small
  * amount of markup here.
  */
-function RequirementMatchCard({
+const RequirementMatchCard = memo(function RequirementMatchCard({
   item,
   selected,
   onToggleSelect,
@@ -649,10 +665,10 @@ function RequirementMatchCard({
 }: {
   item: MatchItem;
   selected: boolean;
-  onToggleSelect: () => void;
+  onToggleSelect: (recordId: string) => void;
   /** Opens the property's full details, exactly as a card does in
    *  ClientMatchesDialog — selecting is the corner checkbox's job alone. */
-  onOpen: () => void;
+  onOpen: (recordId: string) => void;
 }) {
   const source = item.property ?? item.match;
   const title = source.society_name || source.property_type || "Property";
@@ -669,14 +685,14 @@ function RequirementMatchCard({
       role="button"
       tabIndex={0}
       aria-label={`View details of ${title}`}
-      onClick={onOpen}
+      onClick={() => onOpen(item.recordId)}
       onKeyDown={(event) => {
         // Only the card's own keys — a key pressed on the checkbox inside
         // must toggle it, not also open the details.
         if (event.target !== event.currentTarget) return;
         if (event.key === "Enter" || event.key === " ") {
           event.preventDefault();
-          onOpen();
+          onOpen(item.recordId);
         }
       }}
     >
@@ -687,7 +703,7 @@ function RequirementMatchCard({
         aria-label={selected ? `Deselect ${title}` : `Select ${title}`}
         onClick={(event) => {
           event.stopPropagation();
-          onToggleSelect();
+          onToggleSelect(item.recordId);
         }}
       >
         <IconCheck size={12} strokeWidth={2.4} />
@@ -760,4 +776,4 @@ function RequirementMatchCard({
       </div>
     </div>
   );
-}
+});

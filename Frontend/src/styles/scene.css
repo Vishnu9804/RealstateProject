@@ -64,6 +64,21 @@
   animation: drift-a 51s var(--ease-in-out) infinite reverse;
 }
 
+/* Frozen while a full-screen dialog is over the top of it (see
+   lib/sceneFreeze.ts, which sets the attribute and ref-counts it).
+
+   Nothing here is visible under a dialog that covers nearly the whole
+   window — but the browser does not know that. Every element in the app
+   that filters its own backdrop (the topbar, the dialog chrome, popovers)
+   has to re-run that filter on any frame its backdrop changed, and these
+   three blobs change it on EVERY frame, forever. Pausing them for the
+   lifetime of the dialog makes the backdrop static, which lets the
+   compositor reuse what it already rasterised and hands the whole frame
+   budget back to the thing the user is actually touching. The animations
+   resume from exactly where they stopped when the dialog closes, so
+   nothing about the scene looks any different. */
+:root[data-modal-open] .scene__blob { animation-play-state: paused; }
+
 /* The floor. Tilted with rotateX so the lines converge — an actual
    vanishing point, not a flat checkerboard. */
 .scene__floor {

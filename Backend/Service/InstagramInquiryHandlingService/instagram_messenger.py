@@ -19,10 +19,10 @@ is the single most important constraint in the whole official-API rewrite:
                             merely commented. Meta allows exactly ONE per
                             comment, within 7 days of it. That is why the
                             comment path sends one combined message rather
-                            than the three separate DMs the old private-API
+                            than the separate DMs the old private-API
                             implementation could send: a second call for the
                             same comment is refused, so splitting the
-                            sequence would deliver the first third and drop
+                            sequence would deliver the first part and drop
                             the rest.
 
   send_dm_to_user           an ordinary DM. Only allowed while a 24-hour
@@ -86,6 +86,13 @@ def _take_prefix(text: str, max_bytes: int) -> str:
     splitting a character in half."""
     encoded = text.encode("utf-8")[:max_bytes]
     return encoded.decode("utf-8", errors="ignore")
+
+
+def truncate_to_bytes(text: str, max_bytes: int) -> str:
+    """Public face of _take_prefix, for callers that must shorten a message
+    themselves (to protect a part of it) instead of leaving it to the
+    sender's cut-from-the-end truncation."""
+    return _take_prefix(text, max_bytes)
 
 
 # --- the three outbound actions -------------------------------------------

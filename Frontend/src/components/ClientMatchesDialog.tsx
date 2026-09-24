@@ -1,4 +1,4 @@
-import { useCallback, useEffect, useMemo, useRef, useState } from "react";
+import { memo, useCallback, useEffect, useMemo, useRef, useState } from "react";
 import { PROPERTY_FETCH_LIMIT } from "../lib/fetchLimits";
 import { createPortal } from "react-dom";
 import { useNavigate } from "react-router-dom";
@@ -21,6 +21,7 @@ import type {
   PropertySource,
   VisitRecord,
 } from "../api/types";
+import { useSceneFreeze } from "../hooks/useSceneFreeze";
 import { friendlyError } from "../lib/apiError";
 import { getCachedAgents, setCachedAgents } from "../lib/agentListCache";
 import { getCachedBuilderProjectList, setCachedBuilderProjectList } from "../lib/builderProjectListCache";
@@ -391,6 +392,10 @@ export default function ClientMatchesDialog({
 }) {
   const navigate = useNavigate();
   const toast = useToast();
+  // This dialog covers nearly the whole window, so the drifting aurora
+  // behind it is both invisible and the single most expensive thing on the
+  // page while it is open — see lib/sceneFreeze.ts.
+  useSceneFreeze();
 
   // Seeded from the module-level caches (lib/clientMatchCache.ts,
   // lib/agentListCache.ts) so a client whose dialog was already opened
@@ -1077,23 +1082,43 @@ export default function ClientMatchesDialog({
    *  asked for later — either from the card's own "Choose agent" button,
    *  or by "Assign & send", which walks the ticked cards that still have
    *  no agent. Unticking drops whatever was planned for that card. */
-  function handleToggleSelect(recordId: string) {
-    if (selectedIds.has(recordId)) {
-      setSelectedIds((previous) => {
-        const next = new Set(previous);
-        next.delete(recordId);
-        return next;
-      });
-      setPlans((previous) => {
-        if (!(recordId in previous)) return previous;
-        const next = { ...previous };
-        delete next[recordId];
-        return next;
-      });
-      return;
-    }
-    setSelectedIds((previous) => new Set(previous).add(recordId));
-  }
+  /*  Written as one stable useCallback over functional updates rather than
+   *  reading `selectedIds` from the render that created it. Identity is the
+   *  point: this is handed to every card on the grid, and a handler that
+   *  changed on each tick would re-render all of them (React.memo compares
+   *  props by identity), which is the work the memo exists to avoid.
+   *
+   *  Behaviour is unchanged. Unticking still drops that card's plan; ticking
+   *  still cannot, because a plan is only ever set for a card that is
+   *  already ticked — the "Choose agent" button lives on the ticked card
+   *  (.match-card__plan--ghost hides and un-clicks it otherwise) and the
+   *  "Assign & send" walk only visits ticked cards — so `recordId in
+   *  previous` is false on the ticking branch and setPlans is a no-op
+   *  returning the same object. */
+  const handleToggleSelect = useCallback((recordId: string) => {
+    setSelectedIds((previous) => {
+      const next = new Set(previous);
+      if (next.has(recordId)) next.delete(recordId);
+      else next.add(recordId);
+      return next;
+    });
+    setPlans((previous) => {
+      if (!(recordId in previous)) return previous;
+      const next = { ...previous };
+      delete next[recordId];
+      return next;
+    });
+  }, []);
+
+  /** The other two things a card can ask for, stable for the same reason. */
+  const handleOpenItem = useCallback(
+    (recordId: string) => setOpenItemId(recordId),
+    [],
+  );
+  const handlePlanItem = useCallback(
+    (recordId: string) => setPlanner({ kind: "assign", recordId }),
+    [],
+  );
 
   /** True while "Assign & send" is walking the ticked cards that still have
    *  no agent, so each planner it opens leads straight into the next one
@@ -1478,6 +1503,15 @@ export default function ClientMatchesDialog({
   const allSettled =
     !loadingMatches && !loadingCompleted && !loadingMeta && !loadingProperties;
 
+  /*  Every prop below is either a primitive or a value that keeps its
+   *  identity between renders (`item` comes from the `items` memo,
+   *  `assigned` out of the `activeByProperty` memo, the three handlers are
+   *  stable useCallbacks). That is what lets PropertyMatchCard's React.memo
+   *  actually hold: ticking one card now re-renders that one card instead
+   *  of every card in the dialog. The plan is passed as two plain strings
+   *  for the same reason — the `{agentName, scheduledAt}` object it used to
+   *  build was a brand-new object on every render, which no memo can see
+   *  through. */
   const renderMatchCard = (item: DialogItem) => {
     const plan = plans[item.recordId];
     const planAgent = plan ? (agentsById.get(plan.agentId) ?? null) : null;
@@ -1486,15 +1520,12 @@ export default function ClientMatchesDialog({
         key={item.recordId}
         item={item}
         selected={selectedIds.has(item.recordId)}
-        onToggleSelect={() => handleToggleSelect(item.recordId)}
-        onOpen={() => setOpenItemId(item.recordId)}
+        onToggleSelect={handleToggleSelect}
+        onOpen={handleOpenItem}
         assigned={activeByProperty.get(item.recordId) ?? null}
-        plan={
-          planAgent
-            ? { agentName: planAgent.name, scheduledAt: plan.scheduledAt }
-            : null
-        }
-        onPlan={() => setPlanner({ kind: "assign", recordId: item.recordId })}
+        planAgentName={planAgent ? planAgent.name : null}
+        planScheduledAt={planAgent ? plan.scheduledAt : null}
+        onPlan={handlePlanItem}
       />
     );
   };
@@ -1534,7 +1565,7 @@ export default function ClientMatchesDialog({
         }}
       >
         <div
-          className="detail-modal detail-modal--wide matches-dialog anim-rise"
+          className="detail-modal detail-modal--wide detail-modal--solid matches-dialog anim-rise"
           role="dialog"
           aria-modal="true"
           aria-label={`Properties matched for ${displayName}`}
@@ -1651,43 +1682,53 @@ export default function ClientMatchesDialog({
                 {completedList.length} completed
               </button>
             )}
+            {/* The per-type control shares this row with Main/Outsider
+                instead of taking a second row of its own underneath. Same
+                control, same options, same behaviour — it simply stopped
+                spending a whole row's height on itself, which is another
+                rank of property cards visible without scrolling. It still
+                drops onto its own line by itself when the window is too
+                narrow for both (.matches-dialog__tabs wraps). */}
+            {showTypeTabs && (
+              <div className="matches-dialog__types">
+                <span
+                  className="matches-dialog__types-rule"
+                  aria-hidden="true"
+                />
+                <span
+                  className="section-head__eyebrow"
+                  style={{ marginBottom: 0 }}
+                >
+                  Property type
+                </span>
+                <Segmented<string>
+                  ariaLabel="Which of the client's property types to show"
+                  value={typeFilter ?? ALL_TYPES}
+                  onChange={(value) =>
+                    setTypeView(value === ALL_TYPES ? null : value)
+                  }
+                  options={[
+                    {
+                      value: ALL_TYPES,
+                      label: `All${visibleItems.length ? ` (${visibleItems.length})` : ""}`,
+                    },
+                    ...clientTypes.map((type) => {
+                      const count = countByType.get(type.toLowerCase()) ?? 0;
+                      return {
+                        value: type,
+                        label: `${type}${count ? ` (${count})` : ""}`,
+                      };
+                    }),
+                  ]}
+                />
+              </div>
+            )}
             {selectedIds.size > 0 && (
               <span className="faint small" style={{ marginLeft: "auto" }}>
                 {selectedIds.size} selected
               </span>
             )}
           </div>
-
-          {showTypeTabs && (
-            <div className="matches-dialog__tabs matches-dialog__tabs--types">
-              <span
-                className="section-head__eyebrow"
-                style={{ marginBottom: 0 }}
-              >
-                Property type
-              </span>
-              <Segmented<string>
-                ariaLabel="Which of the client's property types to show"
-                value={typeFilter ?? ALL_TYPES}
-                onChange={(value) =>
-                  setTypeView(value === ALL_TYPES ? null : value)
-                }
-                options={[
-                  {
-                    value: ALL_TYPES,
-                    label: `All${visibleItems.length ? ` (${visibleItems.length})` : ""}`,
-                  },
-                  ...clientTypes.map((type) => {
-                    const count = countByType.get(type.toLowerCase()) ?? 0;
-                    return {
-                      value: type,
-                      label: `${type}${count ? ` (${count})` : ""}`,
-                    };
-                  }),
-                ]}
-              />
-            </div>
-          )}
 
           <div className="detail-modal__body">
             {error && (
@@ -2263,25 +2304,38 @@ function formatCompletedDate(iso: string | null): string | null {
    Cards
    ======================================================================== */
 
-function PropertyMatchCard({
+/** One property on the grid.
+ *
+ *  Memoised, and every prop it takes is either a primitive or something
+ *  that keeps its identity between the parent's renders (see
+ *  renderMatchCard's own note) — so ticking a card, opening one, or any of
+ *  the dialog's own state changing re-renders only the cards whose data
+ *  actually moved, instead of the whole grid. The handlers take the record
+ *  id rather than closing over it, which is what allows them to be shared
+ *  by every card and therefore to be stable. */
+const PropertyMatchCard = memo(function PropertyMatchCard({
   item,
   selected,
   onToggleSelect,
   onOpen,
   assigned,
-  plan,
+  planAgentName,
+  planScheduledAt,
   onPlan,
 }: {
   item: DialogItem;
   selected: boolean;
-  onToggleSelect: () => void;
-  onOpen: () => void;
+  onToggleSelect: (recordId: string) => void;
+  onOpen: (recordId: string) => void;
   /** The active visit for this property, when it's already out with an
    *  agent — the card turns orange and loses its checkbox. */
   assigned: ActiveVisit | null;
-  /** What the visit planner picked for this ticked card, if anything. */
-  plan: { agentName: string; scheduledAt: string | null } | null;
-  onPlan: () => void;
+  /** What the visit planner picked for this ticked card, if anything —
+   *  passed as two plain values rather than an object so the memo above can
+   *  compare them. */
+  planAgentName: string | null;
+  planScheduledAt: string | null;
+  onPlan: (recordId: string) => void;
 }) {
   const source = item.property ?? item.match!;
   const title = source.society_name || source.property_type || "Property";
@@ -2309,12 +2363,12 @@ function PropertyMatchCard({
         .join(" ")}
       role="button"
       tabIndex={0}
-      onClick={onOpen}
+      onClick={() => onOpen(item.recordId)}
       onKeyDown={(event) => {
         if (event.target !== event.currentTarget) return;
         if (event.key === "Enter" || event.key === " ") {
           event.preventDefault();
-          onOpen();
+          onOpen(item.recordId);
         }
       }}
     >
@@ -2330,7 +2384,7 @@ function PropertyMatchCard({
           aria-label={selected ? `Deselect ${title}` : `Select ${title}`}
           onClick={(event) => {
             event.stopPropagation();
-            onToggleSelect();
+            onToggleSelect(item.recordId);
           }}
         >
           <IconCheck size={12} strokeWidth={2.4} />
@@ -2450,14 +2504,14 @@ function PropertyMatchCard({
         <div className={`match-card__plan${selected ? "" : " match-card__plan--ghost"}`}>
           <span className="match-card__plan-text">
             <IconUserCheck size={12} />
-            {plan ? (
+            {planAgentName ? (
               <>
-                Agent <strong>{plan.agentName}</strong> selected
+                Agent <strong>{planAgentName}</strong> selected
                 <span className="faint">
                   {" "}
                   ·{" "}
-                  {plan.scheduledAt
-                    ? formatVisitTime(plan.scheduledAt)
+                  {planScheduledAt
+                    ? formatVisitTime(planScheduledAt)
                     : "no time yet"}
                 </span>
               </>
@@ -2470,10 +2524,10 @@ function PropertyMatchCard({
             className="match-card__plan-btn"
             onClick={(event) => {
               event.stopPropagation();
-              onPlan();
+              onPlan(item.recordId);
             }}
           >
-            {plan ? "Change" : "Choose agent"}
+            {planAgentName ? "Change" : "Choose agent"}
           </button>
         </div>
       )}
@@ -2490,7 +2544,7 @@ function PropertyMatchCard({
       </div>
     </div>
   );
-}
+});
 
 /** One visit on the Assigned tab — the same card shape as Main's, orange
  *  throughout, with who is taking it and when. The time is the card's one
@@ -2864,8 +2918,13 @@ export function PropertyMatchDetailDialog({
       className="modal-scrim"
       onMouseDown={(event) => event.target === event.currentTarget && onClose()}
     >
+      {/* --solid: an opaque body and no backdrop filter, and a 170ms
+          entrance instead of 520ms — see .detail-modal--solid in app.css.
+          This is the dialog a click on a property card opens, and blurring
+          a full window's worth of backdrop while it flew in was most of
+          why that click felt like it landed late. */}
       <div
-        className="detail-modal anim-rise"
+        className="detail-modal detail-modal--solid anim-rise"
         role="dialog"
         aria-modal="true"
         aria-label="Property details"

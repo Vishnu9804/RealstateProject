@@ -112,14 +112,10 @@ class Settings(BaseSettings):
     # without any manual per-machine .env edits. Set explicitly only to
     # override that detection (e.g. a real deployed frontend origin).
     frontend_lan_origin: str = ""
-    # The number a prospective buyer is told to CALL to book an offline site
-    # visit — currently used by the Instagram DM sequence (see
-    # Service/InstagramInquiryHandlingService/instagram_message_templates.py).
-    # Write it exactly as it should be read out on a phone screen, e.g.
-    # "+91 98765 43210". Left blank by default and NEVER auto-filled: a
-    # placeholder or a guessed number in a message telling someone to ring it
-    # is worse than no number at all, so the message falls back to a wording
-    # with no number in it whenever this is unset.
+    # Not used by any message right now — the Instagram DM sequence used to
+    # tell people to call this number for a site visit, and no longer does
+    # (it is now the property details plus the requirements-form link). Kept
+    # so an existing BUSINESS_CONTACT_PHONE line in .env still loads.
     business_contact_phone: str = ""
 
     # --- Instagram (Meta's OFFICIAL Instagram Platform API) --------------
@@ -261,6 +257,16 @@ class Settings(BaseSettings):
     # (Controller/WhatsAppDataFetchingController/area_filter_controller.py),
     # not only hidden in the UI. Read once at startup — restart after changing.
     allow_area_change: bool = False
+
+    # Whether a property's photos are sent to a client as ONE WhatsApp album
+    # (PROPERTY_PHOTOS_AS_ALBUM in .env), with the property details as its
+    # caption. False by default: the album relies on WhatsApp accepting a
+    # linked-device album, which can only be confirmed against a live
+    # WhatsApp account, and a shortlist that does not show up is far worse
+    # than one where each photo arrives as its own message (what false does).
+    # Turn it on, send yourself a shortlist, and leave it on only if the
+    # photos and details arrive. Read once at startup — restart after changing.
+    property_photos_as_album: bool = False
 
     # Shared access key for the Dashboard's usage endpoints (LLM Cost, Neon
     # DB, Backend, Message to Model) — see Middleware/dashboard_access.py.

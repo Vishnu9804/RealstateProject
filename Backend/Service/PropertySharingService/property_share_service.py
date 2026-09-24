@@ -37,6 +37,7 @@ import base64
 import binascii
 from typing import List, Optional, Sequence, Tuple
 
+from Config.settings import get_settings
 from Middleware import step_logger
 from Model.PropertySharingModel.share_result import PropertyBatchShareResult, ShareResult, ShareTarget
 from Service.BrokerRequirementService import requirement_store
@@ -135,8 +136,10 @@ def send_properties_to_client(
 
       1. `intro` (skipped when blank);
       2. per (record_id, details) — its photos, with `details` as the caption
-         of the last photo so the details and the photos read as one message;
-         just `details` as text when the property has no photos;
+         of the last photo (or of a single album of them when
+         PROPERTY_PHOTOS_AS_ALBUM is on) so the details and the photos read
+         as one message; just `details` as text when the property has no
+         photos;
       3. `closing` (skipped when blank).
 
     Text is passed through verbatim, same reasoning as send_for_client. None
@@ -182,6 +185,23 @@ def _send_one_property(phone: str, record_id: str, details: str, connection_id: 
         return outbound_messenger.send_text(phone, details, connection_id=connection_id), 0
 
     caption_fits = len(details) <= _MAX_CAPTION_LENGTH
+
+    # With PROPERTY_PHOTOS_AS_ALBUM on, two or more photos go as ONE album with
+    # the details under it — a single bubble, like sending several photos at
+    # once from the phone. Off (the default), photos go one by one below.
+    if len(photos) > 1 and get_settings().property_photos_as_album:
+        album_sent, caption_sent = outbound_messenger.send_album(
+            phone, photos, details if caption_fits else None, connection_id=connection_id
+        )
+        if album_sent:
+            if caption_sent:
+                return True, album_sent
+            # Details too long for a caption, or the captioned photo did not
+            # go out — they must still arrive, right after the photos.
+            return outbound_messenger.send_text(phone, details, connection_id=connection_id), album_sent
+        # The album could not be sent at all: fall back to plain photos so
+        # the shortlist still goes out exactly as it did before albums.
+
     photos_sent = 0
     for index, photo in enumerate(photos):
         is_last = index == len(photos) - 1

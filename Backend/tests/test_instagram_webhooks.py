@@ -180,16 +180,21 @@ class CommentRules(InstagramWebhookTestCase):
         self.assertEqual(len(self.public_replies), 1)
         self.assertEqual(self.public_replies[0][1], templates.COMMENT_REPLY_TEXT)
 
-    def test_the_single_dm_carries_the_whole_three_message_sequence(self):
+    def test_the_single_dm_carries_the_whole_two_message_sequence(self):
         events._handle_comment_event(comment_event("c1"))
         text = self.private_replies[0][1]
-        # Meta allows exactly one private reply per comment, so all three
+        # Meta allows exactly one private reply per comment, so both
         # messages have to travel in this one.
         self.assertIn("Vesu", text)
         self.assertIn("1.25 cr", text)
-        self.assertIn("site visit", text)
-        self.assertIn("more options", text)
+        self.assertIn("Tell us your requirement by clicking on this link:", text)
+        header, _, link = text[text.index("Tell us your requirement") :].partition("\n")
+        self.assertEqual(header, "Tell us your requirement by clicking on this link:")
+        self.assertTrue(link.strip() and " " not in link.strip())  # the link is right there, in this message
         self.assertLessEqual(messenger.byte_length(text), messenger.MAX_MESSAGE_BYTES)
+        # The retired call-us / site-visit / more-options wording is gone.
+        self.assertNotIn("site visit", text)
+        self.assertNotIn("more options", text)
 
     def test_our_own_comment_never_triggers_a_reply(self):
         # Our public reply comes back as another comments notification; if
@@ -255,7 +260,7 @@ class CommentRules(InstagramWebhookTestCase):
 
 
 class SharedReelRules(InstagramWebhookTestCase):
-    def test_a_shared_reel_gets_the_full_three_message_sequence(self):
+    def test_a_shared_reel_gets_the_two_message_sequence(self):
         events._handle_message_event(
             message_event(
                 "m1",
@@ -268,22 +273,27 @@ class SharedReelRules(InstagramWebhookTestCase):
             )
         )
         # Sharing opens a 24-hour messaging window, so unlike the comment
-        # path these are three separate messages, exactly as before.
-        self.assertEqual(len(self.sent_dms), 3)
+        # path these are two separate messages: the details, then the link.
+        self.assertEqual(len(self.sent_dms), 2)
         self.assertIn("Vesu", self.sent_dms[0][1])
-        self.assertIn("site visit", self.sent_dms[1][1])
-        self.assertIn("more options", self.sent_dms[2][1])
+        header, _, link = self.sent_dms[1][1].partition("\n")
+        self.assertEqual(header, "Tell us your requirement by clicking on this link:")
+        # The link is in this same message -- one non-empty token, not a
+        # third message and not blank.
+        self.assertTrue(link.strip())
+        self.assertNotIn(" ", link)
+        self.assertNotIn(link, self.sent_dms[0][1])
 
     def test_a_share_carrying_the_permalink_needs_no_api_lookup(self):
         events._handle_message_event(
             message_event("m1", attachments=[{"type": "ig_reel", "payload": {"url": REEL_URL}}])
         )
-        self.assertEqual(len(self.sent_dms), 3)
+        self.assertEqual(len(self.sent_dms), 2)
         self.assertEqual(self.permalink_lookups, [])
 
     def test_a_reel_link_pasted_as_text_is_matched_too(self):
         events._handle_message_event(message_event("m1", text=f"is this available? {REEL_URL}"))
-        self.assertEqual(len(self.sent_dms), 3)
+        self.assertEqual(len(self.sent_dms), 2)
 
     def test_an_ordinary_text_message_is_ignored(self):
         events._handle_message_event(message_event("m1", text="hello there"))
@@ -305,7 +315,7 @@ class SharedReelRules(InstagramWebhookTestCase):
         event = message_event("m1", attachments=[{"type": "ig_reel", "payload": {"url": REEL_URL}}])
         events._handle_message_event(event)
         events._handle_message_event(event)
-        self.assertEqual(len(self.sent_dms), 3)
+        self.assertEqual(len(self.sent_dms), 2)
 
     def test_sharing_again_after_a_comment_still_gets_answered(self):
         # Sharing is its own deliberate action: it must not be swallowed by
@@ -314,7 +324,7 @@ class SharedReelRules(InstagramWebhookTestCase):
         events._handle_message_event(
             message_event("m1", sender_id="5555555555", attachments=[{"type": "ig_reel", "payload": {"url": REEL_URL}}])
         )
-        self.assertEqual(len(self.sent_dms), 3)
+        self.assertEqual(len(self.sent_dms), 2)
 
     def test_a_share_is_not_marked_handled_when_sending_failed(self):
         event = message_event("m1", attachments=[{"type": "ig_reel", "payload": {"url": REEL_URL}}])
@@ -350,7 +360,7 @@ class PayloadFanOut(InstagramWebhookTestCase):
             }
         )
         self.assertEqual(len(self.private_replies), 1)
-        self.assertEqual(len(self.sent_dms), 3)
+        self.assertEqual(len(self.sent_dms), 2)
 
     def test_a_field_value_pair_on_the_entry_itself_is_handled(self):
         # Meta has delivered comment notifications both as entry.changes[]
@@ -391,7 +401,7 @@ class PayloadFanOut(InstagramWebhookTestCase):
                 ],
             }
         )
-        self.assertEqual(len(self.sent_dms), 3)
+        self.assertEqual(len(self.sent_dms), 2)
 
     def test_a_messages_field_change_with_no_attachment_is_matched_or_ignored_without_crashing(self):
         # The literal sample the dashboard's test tool sends: plain text,
@@ -441,11 +451,17 @@ class MessageLengthRules(unittest.TestCase):
             self.assertLessEqual(messenger.byte_length(piece), messenger.MAX_MESSAGE_BYTES)
             piece.encode("utf-8").decode("utf-8")  # raises if a surrogate was split
 
-    def test_an_oversized_combined_reply_drops_the_site_visit_line(self):
-        combined = events._combine_for_single_message(["a" * 600, "the site visit line", "b" * 600])
-        self.assertNotIn("the site visit line", combined)
-        self.assertIn("a" * 600, combined)
-        self.assertIn("b" * 600, combined)
+    def test_an_oversized_combined_reply_shortens_the_details_and_keeps_the_link(self):
+        details = "Hi!\n\n" + "\n".join(f"line {i} " + "a" * 60 for i in range(30))
+        link_message = "Tell us your requirement by clicking on this link:\nhttps://forms.example/enquire/tok"
+        combined = events._combine_for_single_message([details, link_message])
+        self.assertLessEqual(messenger.byte_length(combined), messenger.MAX_MESSAGE_BYTES)
+        self.assertTrue(combined.endswith(link_message))
+        self.assertTrue(combined.startswith("Hi!"))
+
+    def test_a_combined_reply_that_fits_is_left_untouched(self):
+        combined = events._combine_for_single_message(["details", "link message"])
+        self.assertEqual(combined, "details\n\nlink message")
 
 
 class WebhookReceiptSummary(unittest.TestCase):

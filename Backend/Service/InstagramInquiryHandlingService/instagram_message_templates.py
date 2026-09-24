@@ -13,7 +13,6 @@ to find and contact the owner directly.
 
 from __future__ import annotations
 
-from Config.settings import get_settings
 from Model.WhatsAppDataFetchingModel.structured_property import StructuredProperty
 
 COMMENT_REPLY_TEXT = "Plzz check your DM! 📩"
@@ -26,7 +25,7 @@ COMMENT_REPLY_ON_WHATSAPP_TEXT = (
     "Thanks for reaching out! 🙌 Our team will get in touch with you on WhatsApp."
 )
 
-# Sent instead of repeating the whole three-message sequence when someone
+# Sent instead of repeating the whole two-message sequence when someone
 # comments AGAIN on a property they've already been DMed about. It exists so
 # that "Plzz check your DM!" is always backed by a real, new DM landing in
 # their inbox — a repeat commenter used to get the reply and nothing else.
@@ -35,32 +34,10 @@ DM_REPEAT_NUDGE_TEXT = (
     "Let us know if you'd like to know anything more 🙂"
 )
 
-# The SECOND message of the sequence -- what someone who likes this exact
-# property should do next. It used to be a bare "does this match what
-# you're looking for?", which asked a question nobody at this stage can
-# answer usefully and gave them nothing to act on. A site visit is the real
-# next step in this business, and a phone call is the fastest way to book
-# one, so the message now names both.
-#
-# The number comes from Config/settings.py's business_contact_phone and is
-# never invented: with nothing configured there the no-number variant goes
-# out instead, which still offers the visit but points them back at this
-# chat rather than at a number that does not exist.
-DM_SITE_VISIT_TEMPLATE = (
-    "If you're interested in this property, call us on {phone} and we'll book an offline site visit for "
-    "you right away \u2014 come and see it in person at a time that suits you."
-)
-
-DM_SITE_VISIT_NO_NUMBER_TEXT = (
-    "If you're interested in this property, just reply here and we'll book an offline site visit for you "
-    "right away \u2014 come and see it in person at a time that suits you."
-)
-
-DM_MORE_OPTIONS_TEMPLATE = (
-    "And if you'd like to see more options, just tell us what you're looking for \u2014 click the link "
-    "below, fill in your requirements in a minute, and we'll send you the properties that actually "
-    "match:\n{link}"
-)
+# The SECOND (and last) message of the sequence: one line asking for their
+# requirement, with the personal requirements-form link in that same message.
+# The sequence is exactly two messages -- the property details, then this.
+DM_REQUIREMENT_LINK_TEMPLATE = "Tell us your requirement by clicking on this link:\n{link}"
 
 # Sent once the requirements form is submitted — mirrors Service/
 # WhatsAppInquiryHandlingService/inquiry_form_service.py's _CONFIRMATION_TEXT
@@ -150,17 +127,8 @@ def build_property_info_message(prop: StructuredProperty) -> str:
     return f"Hi! Thanks for your interest 😊 Here are the details of this property:\n\n{details}"
 
 
-def build_site_visit_message() -> str:
-    """Second message of the DM sequence -- see DM_SITE_VISIT_TEMPLATE.
-
-    Reads the number at call time rather than caching it at import, and
-    degrades to the no-number wording when it is blank, so a missing
-    setting can never produce a message telling someone to ring nothing."""
-    phone = get_settings().business_contact_phone.strip()
-    if not phone:
-        return DM_SITE_VISIT_NO_NUMBER_TEXT
-    return DM_SITE_VISIT_TEMPLATE.format(phone=phone)
-
-
-def build_more_options_message(form_link: str) -> str:
-    return DM_MORE_OPTIONS_TEMPLATE.format(link=form_link)
+def build_requirement_link_message(form_link: str) -> str:
+    """Second and last message of the DM sequence -- see
+    DM_REQUIREMENT_LINK_TEMPLATE. The link is inside this one message, never
+    a message of its own."""
+    return DM_REQUIREMENT_LINK_TEMPLATE.format(link=form_link)

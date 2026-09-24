@@ -141,6 +141,20 @@
      need enough body of their own to stay legible over the aurora. */
   --surface: rgba(19, 22, 40, 0.72);
   --surface-strong: rgba(23, 26, 46, 0.9);
+
+  /* An OPAQUE modal body, for the dialogs that cover most of the viewport.
+
+     Those used to be translucent glass over a `backdrop-filter: blur(32px)
+     saturate(180%)`. A backdrop filter re-samples and re-blurs everything
+     behind the element whenever that backdrop changes — and the aurora
+     behind it never stops moving — so a near-fullscreen dialog meant the
+     GPU re-blurred ~1.4 MPx every single frame, for as long as the dialog
+     was open. That is what made hovering, ticking, opening a card and
+     scrolling inside the matches dialog all feel a frame or two behind the
+     mouse. This colour is what that stack actually resolved to (scrim over
+     the aurora, blurred, with --plane-2 on top), so the dialog looks the
+     same and costs nothing to draw. */
+  --modal-solid: #16182e;
 }
 
 /* ============================== LIGHT ================================== */
@@ -180,6 +194,10 @@
 
   --surface: rgba(255, 255, 255, 0.8);
   --surface-strong: rgba(255, 255, 255, 0.95);
+
+  /* See the dark theme's own note — the same colour that scrim + blur +
+     --plane-2 already resolved to here. */
+  --modal-solid: #fbfcfe;
 }
 
 /* ---- elevation planes -------------------------------------------------
